@@ -31,6 +31,9 @@ impl DltMessage {
             lifecycle: 0,
         }
     }
+    pub fn interims_lifecycle_id(&self) -> u32 {
+        self.lifecycle
+    }
 }
 
 #[cfg(test)]

@@ -24,9 +24,18 @@ pub struct Lifecycle {
     /// unique id
     id: LifecycleId,
     ecu: DltChar4,
+    /// contains the number of messages belonging to this lifecycle. `0` indicates that this lifecycle is not valid anymore, e.g. was merged into different one.
     pub nr_msgs: u32,
-    pub start_time: u64,     // start time in us.
-    pub max_time_stamp: u64, // max. timestamp of the messages assigned to this lifecycle. Used to determine end_time()
+    /// contains the start time of this lifecycle. See [Self::end_time()] as well. During processing this start_time is adjusted.
+    /// # Note:
+    /// This is not the reception time of the first message but the calculated start time of that lifecycle.
+    ///
+    /// It's determined by MIN(reception time - timestamp) of all messages.
+    ///
+    /// The real start time will be slightly earlier as there is a minimal buffering time that is not considered / unknown.
+    ///
+    pub start_time: u64, // start time in us.
+    max_time_stamp: u64, // max. timestamp of the messages assigned to this lifecycle. Used to determine end_time()
 }
 
 impl evmap::ShallowCopy for Lifecycle {
@@ -51,12 +60,26 @@ impl Hash for Lifecycle {
 static NEXT_LC_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
 impl Lifecycle {
-    pub fn get_id(&self) -> u32 {
+    /// returns the unique id of this lifecycle.
+    /// # Note:
+    /// `0` is never used. And is / can be used as "no lifecycle".
+    ///
+    /// Take care: lifecycle ids are unique above the overall process run time. So don't rely on the first one being 1.
+    pub fn id(&self) -> u32 {
         self.id
     }
-    pub fn get_end_time(&self) -> u64 {
+
+    /// returns the end time of this lifecycle.
+    /// The end_time is the start_time plus the maximum timestamp of the messages belonging to this lifecycle.
+    /// # Note:
+    /// This can be either:
+    /// * the time of the last log message of this lifecycle or
+    /// * the time until the logs have been recorded but the lifecycle might be continued.
+    pub fn end_time(&self) -> u64 {
         return self.start_time + self.max_time_stamp;
     }
+
+    /// create a new lifecycle with the first msg passed as parameter
     pub fn new(msg: &mut DltMessage) -> Lifecycle {
         // println!("new lifecycle created by {:?}", msg);
         let alc = Lifecycle {
@@ -70,10 +93,10 @@ impl Lifecycle {
         alc
     }
 
-    /// merge another lifecycle into this one
-    /// the other lifecycle afterwards indicates that it was
-    /// merged with get_was_merged() and point with
-    /// get_final_lc() to this lifecycle
+    /// merge another lifecycle into this one.
+    ///
+    /// The other lifecycle afterwards indicates that it was merged with [Self::was_merged()] and points with
+    /// [Self::final_lc()] to this lifecycle
     pub fn merge(&mut self, lc_to_merge: &mut Lifecycle) {
         assert_ne!(lc_to_merge.nr_msgs, 0);
         self.nr_msgs += lc_to_merge.nr_msgs;
@@ -89,15 +112,11 @@ impl Lifecycle {
         lc_to_merge.start_time = u64::MAX;
     }
 
-    pub fn get_was_merged(&self) -> Option<u32> {
-        if self.nr_msgs == 0 {
-            Some(self.max_time_stamp as u32)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_final_lc<'a>(
+    /// returns the final lifecycle struct for this lifecycle.
+    /// If this lifecycle wasn't merged self is returned.
+    ///
+    /// If this lifecycle was merged recursively the last merged-into lifecycle is returned.
+    pub fn final_lc<'a>(
         &'a self,
         interims_lcs: &'a std::collections::HashMap<LifecycleId, &Lifecycle>,
     ) -> &'a Lifecycle {
@@ -105,23 +124,38 @@ impl Lifecycle {
             interims_lcs
                 .get(&(self.max_time_stamp as u32))
                 .unwrap()
-                .get_final_lc(interims_lcs)
+                .final_lc(interims_lcs)
         } else {
             self
         }
     }
 
+    /// returns whether this lifecycled was merged (so is not valid any longer) into a different lifecycle.
+    /// Returns None if not merged otherwise the interims lifecycle id of the lifecycle it was merged into.
+    /// # Note:
+    /// Take care the returned lifecycle id is interims as well and could be or will be merged as well into another lifecycle!
+    /// See [Self::final_lc()] if you want to get the final lifecycle (aka a non merged one)
+    ///
+    pub fn was_merged(&self) -> Option<u32> {
+        if self.nr_msgs == 0 {
+            Some(self.max_time_stamp as u32)
+        } else {
+            None
+        }
+    }
+
     /// update the Lifecycle. If this msg doesn't seem to belong to the current one
     /// a new lifecycle is created and returned.
-    /// TODOs:
+    /// # TODOs:
     /// * ignore/handle control messages
+    /// * if the lifecycle is longer than time x (e.g. a few mins) stop adjusting starttime to reduce impact of different clock speed/skews between recorder and ecu
     ///
     pub fn update(&mut self, msg: &mut DltMessage) -> Option<Lifecycle> {
         // check whether this msg belongs to the lifecycle:
         // 1) the calc start time needs to be no later than the current end time
         // println!("update: lifecycle triggered to LC:{:?}", &self);
         let msg_lc_start = msg.received_time - msg.time_stamp;
-        let cur_end_time = self.get_end_time();
+        let cur_end_time = self.end_time();
         if msg_lc_start <= cur_end_time {
             // ok belongs to this lifecycle
 
@@ -239,7 +273,7 @@ where
                     // now we have to check whether it overlaps with the prev. one and needs to be merged:
                     if ecu_lcs_len > 1 {
                         let prev_lc = rest_lcs.last_mut().unwrap(); // : &mut Lifecycle = &mut last_lcs[ecu_lcs_len - 2];
-                        if lc2.start_time <= prev_lc.get_end_time() {
+                        if lc2.start_time <= prev_lc.end_time() {
                             println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
                             // we merge into the prev. one (so use the prev.one only)
                             prev_lc.merge(lc2);
@@ -333,11 +367,10 @@ where
 /// if let Some(lcr) = lcs_r.read() {
 ///     let interims_lcs = adlt::lifecycle::get_interims_lifecycles_as_hashmap(&lcr);
 ///     let mapped_lcs = adlt::lifecycle::get_mapped_lifecycles_as_hashmap(&interims_lcs);
-///     let msgs: DltMessage[] = []; // init with some msgs for a real loop...
+///     let msgs: std::vec::Vec<adlt::DltMessage> = std::vec::Vec::new();
+///     // ... init with some msgs for a real loop...
 ///     for m in msgs {
-///         if m.lifecycle != 0 {
-///             let lc = mapped_lcs.get(&m.lifecycle);
-///         }
+///         let lc = mapped_lcs.get(&m.interims_lifecycle_id());
 ///     }
 /// };
 /// ````
@@ -346,7 +379,7 @@ pub fn get_mapped_lifecycles_as_hashmap<'a>(
 ) -> std::collections::HashMap<LifecycleId, &'a Lifecycle> {
     interims_lcs
         .iter()
-        .map(|(id, l)| (*id, l.get_final_lc(interims_lcs)))
+        .map(|(id, l)| (*id, l.final_lc(interims_lcs)))
         .collect()
 }
 
@@ -524,7 +557,7 @@ mod tests {
             // view on final lifecycles:
             let mut final_lcs: std::vec::Vec<&Lifecycle> = a
                 .iter()
-                .filter(|(_id, b)| b.get_one().unwrap().get_was_merged().is_none())
+                .filter(|(_id, b)| b.get_one().unwrap().was_merged().is_none())
                 .map(|(_id, b)| b.get_one().unwrap())
                 .collect();
             println!("have {} final lifecycles", final_lcs.len());
@@ -536,7 +569,7 @@ mod tests {
                         assert_eq!(lc.start_time, LC_START_TIMES[0]);
                         assert_eq!(lc.nr_msgs as usize, NUMBER_PER_MSG_CAT * MSG_DELAYS.len());
                         assert_eq!(
-                            lc.get_end_time(),
+                            lc.end_time(),
                             LC_START_TIMES[0]
                                 + ((NUMBER_PER_MSG_CAT as u64 - 1) * 1_000)
                                 + MSG_DELAYS[1].1
@@ -546,7 +579,7 @@ mod tests {
                         assert_eq!(lc.start_time, LC_START_TIMES[1]);
                         assert_eq!(lc.nr_msgs as usize, NUMBER_PER_MSG_CAT * MSG_DELAYS.len());
                         assert_eq!(
-                            lc.get_end_time(),
+                            lc.end_time(),
                             LC_START_TIMES[1]
                                 + ((NUMBER_PER_MSG_CAT as u64 - 1) * 1_000)
                                 + MSG_DELAYS[1].1
@@ -579,11 +612,7 @@ mod tests {
                 let m = rm.unwrap();
                 assert!(m.lifecycle != 0);
                 assert!(mapped_lcs.get(&m.lifecycle).is_some());
-                assert!(mapped_lcs
-                    .get(&m.lifecycle)
-                    .unwrap()
-                    .get_was_merged()
-                    .is_none());
+                assert!(mapped_lcs.get(&m.lifecycle).unwrap().was_merged().is_none());
                 //println!("got msg:{:?}", rm.unwrap());
             }
             assert_eq!(rx2.recv().is_err(), true);
