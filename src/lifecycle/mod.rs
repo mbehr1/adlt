@@ -1,5 +1,5 @@
 // todos:
-// use https://lib.rs/crates/loom for concurrency testing
+// use https://lib.rs/crates/loom for concurrency testing (atomics,...)
 // use https://lib.rs/crates/lasso for string interner or
 // https://lib.rs/crates/arccstr or https://lib.rs/crates/arcstr
 // once_cell for one time inits.
@@ -102,7 +102,10 @@ impl Lifecycle {
         interims_lcs: &'a std::collections::HashMap<LifecycleId, &Lifecycle>,
     ) -> &'a Lifecycle {
         if self.nr_msgs == 0 {
-            interims_lcs.get(&(self.max_time_stamp as u32)).unwrap()
+            interims_lcs
+                .get(&(self.max_time_stamp as u32))
+                .unwrap()
+                .get_final_lc(interims_lcs)
         } else {
             self
         }
