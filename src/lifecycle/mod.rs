@@ -113,6 +113,9 @@ impl Lifecycle {
 
     /// update the Lifecycle. If this msg doesn't seem to belong to the current one
     /// a new lifecycle is created and returned.
+    /// TODOs:
+    /// * ignore/handle control messages
+    ///
     pub fn update(&mut self, msg: &mut DltMessage) -> Option<Lifecycle> {
         // check whether this msg belongs to the lifecycle:
         // 1) the calc start time needs to be no later than the current end time
@@ -299,6 +302,52 @@ where
         }
     }
     lcs_w
+}
+
+/// Get hashmap/view with "interims lifecycles"
+/// This is a hash LifecycleId -> &Lifecycle where the "interims" aka merged into others
+/// lifecycles are included as well.
+/// This is basically an easier to use interface for the lcs_r MapReadRef returned from
+/// [parse_lifecycles_from_stream()].
+/// # Example
+/// see [get_mapped_lifecycles_as_hashmap]
+pub fn get_interims_lifecycles_as_hashmap<'a, M, S>(
+    lcr: &'a evmap::MapReadRef<LifecycleId, LifecycleItem, M, S>,
+) -> std::collections::HashMap<LifecycleId, &'a Lifecycle>
+where
+    S: std::hash::BuildHasher + Clone,
+    M: 'static + Clone,
+{
+    lcr.iter()
+        .map(|(id, b)| (*id, b.get_one().unwrap()))
+        .collect()
+}
+
+/// Get hashmap/view with "mapped lifecycles"
+/// This is a hash LifecycleId -> &Lifecycle where as id the interims ids from messages
+/// can be used but the result is the final lifecycle.
+/// So messages pointing to interims (aka merged into others) lifecycles can be used as index
+/// # Example
+/// ````
+/// let (lcs_r, _lcs_w) = evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
+/// if let Some(lcr) = lcs_r.read() {
+///     let interims_lcs = adlt::lifecycle::get_interims_lifecycles_as_hashmap(&lcr);
+///     let mapped_lcs = adlt::lifecycle::get_mapped_lifecycles_as_hashmap(&interims_lcs);
+///     let msgs: DltMessage[] = []; // init with some msgs for a real loop...
+///     for m in msgs {
+///         if m.lifecycle != 0 {
+///             let lc = mapped_lcs.get(&m.lifecycle);
+///         }
+///     }
+/// };
+/// ````
+pub fn get_mapped_lifecycles_as_hashmap<'a>(
+    interims_lcs: &'a std::collections::HashMap<LifecycleId, &'a Lifecycle>,
+) -> std::collections::HashMap<LifecycleId, &'a Lifecycle> {
+    interims_lcs
+        .iter()
+        .map(|(id, l)| (*id, l.get_final_lc(interims_lcs)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -510,17 +559,12 @@ mod tests {
             }
 
             // create a lifecycle view mapping the interims to the final lifecycles:
-            let interims_lcs: std::collections::HashMap<LifecycleId, &Lifecycle> = a
-                .iter()
-                .map(|(id, b)| (*id, b.get_one().unwrap()))
-                .collect();
-            println!("have {} mapped lifecycles", interims_lcs.len());
+            let interims_lcs = get_interims_lifecycles_as_hashmap(&a);
 
-            let mapped_lcs: std::collections::HashMap<LifecycleId, &Lifecycle> = a
-                .iter()
-                .map(|(id, b)| (*id, b.get_one().unwrap()))
-                .map(|(id, l)| (id, l.get_final_lc(&interims_lcs)))
-                .collect();
+            println!("have {} interims lifecycles", interims_lcs.len());
+
+            let mapped_lcs = get_mapped_lifecycles_as_hashmap(&interims_lcs);
+
             println!("have mapped lifecycles: {:?}", mapped_lcs);
             // now check whether each message has a valid lifecycle in mapped_lcs:
             // the msg has only an interims lifecycle id which might point to a
