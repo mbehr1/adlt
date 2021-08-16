@@ -1,4 +1,5 @@
 pub mod lifecycle;
+pub mod utils;
 
 pub fn name() -> &'static str {
     "adlt"
@@ -20,11 +21,14 @@ pub struct DltMessage {
     lifecycle: u32, // 0 = none, otherwise the id of an interims(!) lifecycle
 }
 
+static NEXT_TEST_TIMESTAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl DltMessage {
     pub fn for_test() -> DltMessage {
+        let time_stamp = NEXT_TEST_TIMESTAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         DltMessage {
-            time_stamp: 1,
-            received_time: 100_000,
+            time_stamp,
+            received_time: 100_000 + time_stamp,
             ecu: DltChar4 {
                 char4: [0x41, 0x42, 0x43, 0x44],
             },
