@@ -369,7 +369,7 @@ pub fn parse_dlt_with_storage_header(
                         Ok((to_consume, msg))
                     } else {
                         Err(Error::new(ErrorKind::NotEnoughData(
-                            MIN_DLT_MSG_SIZE - remaining,
+                            stdh.len as usize - remaining,
                         )))
                     }
                 } else {

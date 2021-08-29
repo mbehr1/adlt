@@ -10,6 +10,9 @@ name = "adlt"
 path = "src/lib.rs"
 
 [dependencies]
+slog = "2.7.0"
+slog-term = "2.8.0"
+slog-async = "2.7.0"
 clap = "2.33"
 rayon = "1.5"
 serde = "1.0"
