@@ -2,14 +2,13 @@
 mod convert;
 
 use clap::{App, Arg, SubCommand};
-use rayon::prelude::*;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek};
-use std::sync::mpsc::channel;
-use std::time::Instant;
+// todo use rayon::prelude::*;
+use std::io::{self};
+// use std::sync::mpsc::channel;
+// use std::time::Instant;
 // extern crate slog;
 //extern crate slog_term;
-use slog::{info, debug, trace, o, Drain};
+use slog::{o, Drain};
 
 fn main() -> io::Result<()> {
     let matches = App::new("automotive dlt tool")
@@ -66,8 +65,14 @@ fn main() -> io::Result<()> {
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::CompactFormat::new(decorator).build().fuse();
     // todo think whether async is useful as it makes the match from log and output more difficult
-    let drain = slog_async::Async::new(drain).build().filter_level(min_log_level).fuse();
-    let log = slog::Logger::root(drain, o!("version"=>clap::crate_version!(), "log_level"=>format!("{}",min_log_level)));
+    let drain = slog_async::Async::new(drain)
+        .build()
+        .filter_level(min_log_level)
+        .fuse();
+    let log = slog::Logger::root(
+        drain,
+        o!("version"=>clap::crate_version!(), "log_level"=>format!("{}",min_log_level)),
+    );
 
     return match matches.subcommand() {
         ("convert", Some(sub_m)) => convert::convert(log, sub_m),
@@ -77,9 +82,9 @@ fn main() -> io::Result<()> {
                 "unknown subcommand",
             ));
         }
-    }
+    };
     // return Ok(());
-/*
+    /*
     let input_file_name = matches.value_of("file").unwrap();
 
     let f = File::open(input_file_name)?;
