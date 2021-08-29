@@ -3,7 +3,7 @@
 // use https://lib.rs/crates/lasso for string interner or
 // https://lib.rs/crates/arccstr or https://lib.rs/crates/arcstr
 // once_cell for one time inits.
-use crate::{DltChar4, DltMessage};
+use crate::dlt::{DltChar4, DltMessage};
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -35,7 +35,7 @@ pub struct Lifecycle {
     /// The real start time will be slightly earlier as there is a minimal buffering time that is not considered / unknown.
     ///
     pub start_time: u64, // start time in us.
-    max_time_stamp: u64, // max. timestamp of the messages assigned to this lifecycle. Used to determine end_time()
+    max_timestamp_us: u64, // max. timestamp of the messages assigned to this lifecycle. Used to determine end_time()
 }
 
 impl evmap::ShallowCopy for Lifecycle {
@@ -76,7 +76,7 @@ impl Lifecycle {
     /// * the time of the last log message of this lifecycle or
     /// * the time until the logs have been recorded but the lifecycle might be continued.
     pub fn end_time(&self) -> u64 {
-        return self.start_time + self.max_time_stamp;
+        return self.start_time + self.max_timestamp_us;
     }
 
     /// create a new lifecycle with the first msg passed as parameter
@@ -86,8 +86,8 @@ impl Lifecycle {
             id: NEXT_LC_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ecu: msg.ecu.clone(),
             nr_msgs: 1,
-            start_time: msg.received_time - msg.time_stamp,
-            max_time_stamp: msg.time_stamp,
+            start_time: msg.reception_time_us - msg.timestamp_us(),
+            max_timestamp_us: msg.timestamp_us(),
         };
         msg.lifecycle = alc.id;
         alc
@@ -101,14 +101,14 @@ impl Lifecycle {
         assert_ne!(lc_to_merge.nr_msgs, 0);
         self.nr_msgs += lc_to_merge.nr_msgs;
         lc_to_merge.nr_msgs = 0; // this indicates a merged lc
-        if lc_to_merge.max_time_stamp > self.max_time_stamp {
-            self.max_time_stamp = lc_to_merge.max_time_stamp;
+        if lc_to_merge.max_timestamp_us > self.max_timestamp_us {
+            self.max_timestamp_us = lc_to_merge.max_timestamp_us;
         }
         if lc_to_merge.start_time < self.start_time {
             self.start_time = lc_to_merge.start_time;
         }
-        // we mark this in the merged lc as max_time_stamp <- id
-        lc_to_merge.max_time_stamp = self.id as u64;
+        // we mark this in the merged lc as max_timestamp_dms <- id
+        lc_to_merge.max_timestamp_us = self.id as u64;
         lc_to_merge.start_time = u64::MAX;
     }
 
@@ -122,7 +122,7 @@ impl Lifecycle {
     ) -> &'a Lifecycle {
         if self.nr_msgs == 0 {
             interims_lcs
-                .get(&(self.max_time_stamp as u32))
+                .get(&(self.max_timestamp_us as u32))
                 .unwrap()
                 .final_lc(interims_lcs)
         } else {
@@ -138,7 +138,7 @@ impl Lifecycle {
     ///
     pub fn was_merged(&self) -> Option<u32> {
         if self.nr_msgs == 0 {
-            Some(self.max_time_stamp as u32)
+            Some(self.max_timestamp_us as u32)
         } else {
             None
         }
@@ -154,13 +154,14 @@ impl Lifecycle {
         // check whether this msg belongs to the lifecycle:
         // 1) the calc start time needs to be no later than the current end time
         // println!("update: lifecycle triggered to LC:{:?}", &self);
-        let msg_lc_start = msg.received_time - msg.time_stamp;
+        let msg_timestamp_us = msg.timestamp_us();
+        let msg_lc_start = msg.reception_time_us - msg_timestamp_us;
         let cur_end_time = self.end_time();
         if msg_lc_start <= cur_end_time {
             // ok belongs to this lifecycle
 
-            if self.max_time_stamp < msg.time_stamp {
-                self.max_time_stamp = msg.time_stamp;
+            if self.max_timestamp_us < msg_timestamp_us {
+                self.max_timestamp_us = msg_timestamp_us;
             }
 
             // does it move the start to earlier? (e.g. has a smaller buffering delay)
@@ -491,7 +492,7 @@ where
                         if is_buffered {
                             // lets calc the earliest possible lc start time assuming the current message has max buffering delays:
                             let min_lc_start_time =
-                                (msg.received_time - msg.time_stamp) - max_buffering_delay;
+                                (msg.reception_time_us - msg.timestamp_us()) - max_buffering_delay;
                             // if this is not earlier than the prev_lc start-time we can conclude its a new lifecycle
                             if min_lc_start_time > prev_lc.start_time {
                                 println!("confirmed buffered lc {} as min_lc_start_time {} > prev_lc.start_time {}, lc={:?}", lc2.id, min_lc_start_time, prev_lc.start_time, lc2);
@@ -515,7 +516,7 @@ where
                     // once the lifecycle start even including a max buffering delay can not fit into the prev one any longer:
                     if buffered_lcs.len() > 0 {
                         // we compare all lcs vs. the current msg received time (as we do assume that messages are sorted by received time even across ecus)
-                        let _rcvd_time = msg.received_time;
+                        // todo let _rcvd_time = msg.reception_time_us;
                         // todo impl this as well to close e.g. lifecycles with very few messages from ecus earlier
                     }
 
@@ -647,10 +648,10 @@ where
 /// if let Some(lcr) = lcs_r.read() {
 ///     let interims_lcs = adlt::lifecycle::get_interims_lifecycles_as_hashmap(&lcr);
 ///     let mapped_lcs = adlt::lifecycle::get_mapped_lifecycles_as_hashmap(&interims_lcs);
-///     let msgs: std::vec::Vec<adlt::DltMessage> = std::vec::Vec::new();
+///     let msgs: std::vec::Vec<adlt::dlt::DltMessage> = std::vec::Vec::new();
 ///     // ... init with some msgs for a real loop...
 ///     for m in msgs {
-///         let lc = mapped_lcs.get(&m.interims_lifecycle_id());
+///         let lc = mapped_lcs.get(&m.lifecycle);
 ///     }
 /// };
 /// ````
@@ -676,7 +677,7 @@ mod tests {
         const NUMBER_ITERATIONS: usize = 2_000_000;
         let start = Instant::now();
         for _ in 0..NUMBER_ITERATIONS {
-            tx.send(crate::DltMessage::for_test()).unwrap();
+            tx.send(crate::dlt::DltMessage::for_test()).unwrap();
         }
         let duration = start.elapsed();
         println!(
@@ -767,30 +768,44 @@ mod tests {
     struct MessageGenerator {
         msgs: std::vec::Vec<DltMessage>,
     }
+    struct MessageGeneratorOptions {
+        frequency: u64,
+        ecu: DltChar4,
+    }
+    impl Default for MessageGeneratorOptions {
+        fn default() -> Self {
+            MessageGeneratorOptions {
+                frequency: 1_000,
+                ecu: DltChar4::from_buf(&[0x41, 0x42, 0x43, 0x45]),
+            }
+        }
+    }
 
     impl MessageGenerator {
         fn new(
             lc_start_time: u64,
             initial_delays: &[(u64, u64)],
             nr_msgs: usize,
+            options: MessageGeneratorOptions,
         ) -> MessageGenerator {
             let mut msgs: std::vec::Vec<DltMessage> = std::vec::Vec::new();
             for (buf_delay, start_delay) in initial_delays {
                 for i in 0..nr_msgs {
-                    let time_stamp = start_delay + ((i as u64) * 1_000); // frequency
-                    let min_send_time = std::cmp::max(buf_delay + (i as u64), time_stamp);
+                    let timestamp_us = start_delay + ((i as u64) * options.frequency); // frequency
+                    let min_send_time = std::cmp::max(buf_delay + (i as u64), timestamp_us);
                     msgs.push(DltMessage {
-                        received_time: lc_start_time + min_send_time,
-                        time_stamp,
+                        reception_time_us: lc_start_time + min_send_time,
+                        timestamp_dms: (timestamp_us/100)as u32,
                         lifecycle: 0,
-                        ecu: DltChar4 {
-                            char4: [0x41, 0x42, 0x43, 0x45],
-                        },
+                        ecu: options.ecu,
+                        standard_header: crate::dlt::DltStandardHeader{htyp: 1, len: 0, mcnt:0},
+                        extended_header:None,
+                        payload: [].to_vec(),
                     });
                 }
             }
-            // sort msgs by received time
-            msgs.sort_by(|a, b| a.received_time.cmp(&b.received_time));
+            // sort msgs by reception time
+            msgs.sort_by(|a, b| a.reception_time_us.cmp(&b.reception_time_us));
             MessageGenerator { msgs }
         }
     }
@@ -816,11 +831,21 @@ mod tests {
         const MSG_DELAYS: [(u64, u64); 2] = [(45_000, 0), (30_000, 10_000)];
         const LC_START_TIMES: [u64; 2] = [1_000_000, 1_060_000];
         const NUMBER_MSGS: usize = LC_START_TIMES.len() * NUMBER_PER_MSG_CAT * MSG_DELAYS.len();
-        let gen_lc1 = MessageGenerator::new(LC_START_TIMES[0], &MSG_DELAYS, NUMBER_PER_MSG_CAT);
+        let gen_lc1 = MessageGenerator::new(
+            LC_START_TIMES[0],
+            &MSG_DELAYS,
+            NUMBER_PER_MSG_CAT,
+            Default::default(),
+        );
         for m in gen_lc1 {
             tx.send(m).unwrap();
         }
-        let gen_lc2 = MessageGenerator::new(LC_START_TIMES[1], &MSG_DELAYS, NUMBER_PER_MSG_CAT);
+        let gen_lc2 = MessageGenerator::new(
+            LC_START_TIMES[1],
+            &MSG_DELAYS,
+            NUMBER_PER_MSG_CAT,
+            Default::default(),
+        );
         for m in gen_lc2 {
             tx.send(m).unwrap();
         }
@@ -904,6 +929,139 @@ mod tests {
             assert_eq!(true, false);
         };
     }
+    #[test]
+    fn gen_two_lcs_two_ecus() {
+        let (tx, rx1) = channel();
+        let (tx1, rx) = channel();
+        let (tx2, rx2) = channel();
+        const NUMBER_PER_MSG_CAT: usize = 50;
+        const MSG_DELAYS: [(u64, u64); 2] = [(45_000, 0), (30_000, 10_000)];
+        const LC_START_TIMES: [u64; 2] = [1_000_000, 1_060_000];
+        const NUMBER_MSGS: usize = LC_START_TIMES.len() * NUMBER_PER_MSG_CAT * MSG_DELAYS.len();
+        for ecu in 0x45..0x47 {
+            let gen_lc1 = MessageGenerator::new(
+                LC_START_TIMES[0],
+                &MSG_DELAYS,
+                NUMBER_PER_MSG_CAT,
+                MessageGeneratorOptions {
+                    ecu: DltChar4::from_buf(&[0x41, 0x42, 0x43, ecu]),
+                    ..Default::default()
+                },
+            );
+            for m in gen_lc1 {
+                tx.send(m).unwrap();
+            }
+            let gen_lc2 = MessageGenerator::new(
+                LC_START_TIMES[1],
+                &MSG_DELAYS,
+                NUMBER_PER_MSG_CAT,
+                MessageGeneratorOptions {
+                    ecu: DltChar4::from_buf(&[0x41, 0x42, 0x43, ecu]),
+                    ..Default::default()
+                },
+            );
+            for m in gen_lc2 {
+                tx.send(m).unwrap();
+            }
+        }
+        drop(tx);
+        // need to sort again: (buffer_sort_elements is somewhat unuseable...)
+        let mut sort_buffer: std::vec::Vec<DltMessage> =
+            std::vec::Vec::with_capacity(2 * NUMBER_MSGS);
+        for m in rx1 {
+            sort_buffer.push(m);
+        }
+        sort_buffer.sort_by(|a, b| a.reception_time_us.cmp(&b.reception_time_us));
+        for m in sort_buffer.into_iter() {
+            tx1.send(m).unwrap();
+        }
+        drop(tx1);
+
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2);
+        // now check the lifecycles:
+        println!("have {} interims lifecycles", lcs_r.len());
+        if let Some(a) = lcs_r.read() {
+            println!("have interims lifecycles");
+            for (id, b) in a.iter() {
+                println!("lcs_r content id={:?} lc={:?}", id, b);
+            }
+            // view on final lifecycles:
+            let mut final_lcs: std::vec::Vec<&Lifecycle> = a
+                .iter()
+                .filter(|(_id, b)| b.get_one().unwrap().was_merged().is_none())
+                .map(|(_id, b)| b.get_one().unwrap())
+                .collect();
+            println!("have {} final lifecycles", final_lcs.len());
+            final_lcs.sort_by(|a, b| {
+                if a.start_time == b.start_time {
+                    a.id.cmp(&b.id)
+                } else {
+                    a.start_time.cmp(&b.start_time)
+                }
+            });
+            for (i, lc) in final_lcs.iter().enumerate() {
+                println!("lc={:?}", lc);
+                match i {
+                    0 | 1 => {
+                        assert_eq!(lc.start_time, LC_START_TIMES[0]);
+                        assert_eq!(lc.nr_msgs as usize, NUMBER_PER_MSG_CAT * MSG_DELAYS.len());
+                        assert_eq!(
+                            lc.end_time(),
+                            LC_START_TIMES[0]
+                                + ((NUMBER_PER_MSG_CAT as u64 - 1) * 1_000)
+                                + MSG_DELAYS[1].1
+                        );
+                    }
+                    2 | 3 => {
+                        assert_eq!(lc.start_time, LC_START_TIMES[1]);
+                        assert_eq!(lc.nr_msgs as usize, NUMBER_PER_MSG_CAT * MSG_DELAYS.len());
+                        assert_eq!(
+                            lc.end_time(),
+                            LC_START_TIMES[1]
+                                + ((NUMBER_PER_MSG_CAT as u64 - 1) * 1_000)
+                                + MSG_DELAYS[1].1
+                        );
+                    }
+                    _ => {
+                        assert_eq!(true, false, "too many lifecycles detected {}", i)
+                    }
+                }
+            }
+
+            // create a lifecycle view mapping the interims to the final lifecycles:
+            let interims_lcs = get_interims_lifecycles_as_hashmap(&a);
+
+            println!("have {} interims lifecycles", interims_lcs.len());
+
+            let mapped_lcs = get_mapped_lifecycles_as_hashmap(&interims_lcs);
+
+            println!("have mapped lifecycles: {:?}", mapped_lcs);
+            // now check whether each message has a valid lifecycle in mapped_lcs:
+            // the msg has only an interims lifecycle id which might point to a
+            // lifecycle that has been merged into a different one later on
+            // or will be merged later on.
+            // We could modify the msg as well to point to the final lc.id but
+            // for streaming that doesn't really work as the ids might change later
+            // so using the mapped lifecycles gives the current view
+            for _i in 0..2 * NUMBER_MSGS {
+                let rm = rx2.recv();
+                assert_eq!(rm.is_err(), false);
+                let m = rm.unwrap();
+                assert!(m.lifecycle != 0);
+                assert!(
+                    mapped_lcs.get(&m.lifecycle).is_some(),
+                    "no mapped_lcs for lc id {}",
+                    &m.lifecycle
+                );
+                assert!(mapped_lcs.get(&m.lifecycle).unwrap().was_merged().is_none());
+                //println!("got msg:{:?}", rm.unwrap());
+            }
+            assert_eq!(rx2.recv().is_err(), true);
+        } else {
+            assert_eq!(true, false);
+        };
+    }
 
     struct SortedDltMessage {
         m: DltMessage,
@@ -911,16 +1069,16 @@ mod tests {
     }
     impl std::cmp::PartialEq for SortedDltMessage {
         fn eq(&self, other: &Self) -> bool {
-            self.lc_start_time + self.m.time_stamp == other.lc_start_time + other.m.time_stamp
+            self.lc_start_time + self.m.timestamp_us() == other.lc_start_time + other.m.timestamp_us()
         }
     }
     impl std::cmp::Ord for SortedDltMessage {
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
             if self.m.lifecycle == other.m.lifecycle {
-                self.m.time_stamp.cmp(&other.m.time_stamp)
+                self.m.timestamp_dms.cmp(&other.m.timestamp_dms)
             } else {
-                let t1 = self.lc_start_time + self.m.time_stamp;
-                let t2 = other.lc_start_time + other.m.time_stamp;
+                let t1 = self.lc_start_time + self.m.timestamp_us();
+                let t2 = other.lc_start_time + other.m.timestamp_us();
                 t1.cmp(&t2)
             }
         }
@@ -942,14 +1100,24 @@ mod tests {
         const NUMBER_PER_MSG_CAT: usize = 50;
         const MSG_DELAYS: [(u64, u64); 2] = [(45_000, 0), (30_000, 10_000)];
         const LC_START_TIMES: [u64; 2] = [1_000_000, 1_060_000];
-        const NUMBER_MSGS: usize = LC_START_TIMES.len() * NUMBER_PER_MSG_CAT * MSG_DELAYS.len();
+        // const NUMBER_MSGS: usize = LC_START_TIMES.len() * NUMBER_PER_MSG_CAT * MSG_DELAYS.len();
         let t1 = std::thread::spawn(move || {
-            let gen_lc1 = MessageGenerator::new(LC_START_TIMES[0], &MSG_DELAYS, NUMBER_PER_MSG_CAT);
+            let gen_lc1 = MessageGenerator::new(
+                LC_START_TIMES[0],
+                &MSG_DELAYS,
+                NUMBER_PER_MSG_CAT,
+                Default::default(),
+            );
             for m in gen_lc1 {
                 tx.send(m).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            let gen_lc2 = MessageGenerator::new(LC_START_TIMES[1], &MSG_DELAYS, NUMBER_PER_MSG_CAT);
+            let gen_lc2 = MessageGenerator::new(
+                LC_START_TIMES[1],
+                &MSG_DELAYS,
+                NUMBER_PER_MSG_CAT,
+                Default::default(),
+            );
             for m in gen_lc2 {
                 tx.send(m).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -991,7 +1159,7 @@ mod tests {
                 if buffer.len() == buffer.capacity() {
                     let s_m2 = buffer.pop_front().unwrap();
                     // todo verify
-                    let s_m2_time = s_m2.lc_start_time + s_m2.m.time_stamp;
+                    let s_m2_time = s_m2.lc_start_time + s_m2.m.timestamp_us();
                     println!(
                         "received msg with lc_start_time {} {:?}",
                         s_m2.lc_start_time, s_m2.m
@@ -1011,7 +1179,7 @@ mod tests {
             while buffer.len() > 0 {
                 let s_m2 = buffer.pop_front().unwrap();
                 // todo verify
-                let s_m2_time = s_m2.lc_start_time + s_m2.m.time_stamp;
+                let s_m2_time = s_m2.lc_start_time + s_m2.m.timestamp_us();
                 assert!(
                     last_time <= s_m2_time,
                     "last_time={} vs {}",
