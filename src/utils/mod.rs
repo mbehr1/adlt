@@ -1,4 +1,3 @@
-use crate::{lifecycle::Lifecycle, DltMessage};
 use std::sync::mpsc::{Receiver, Sender};
 
 pub enum BufferElementsAmount {
@@ -70,13 +69,14 @@ pub fn buffer_sort_elements<T>(
 mod tests {
     use crate::utils::*;
     use std::sync::mpsc::channel;
+    use crate::{dlt::DltMessage};
     //    use std::time::Instant;
     #[test]
     fn buffer_messages() {
         let (tx, rx) = channel();
         const NUMBER_MSGS: usize = 1_000;
         for _ in 0..NUMBER_MSGS {
-            tx.send(crate::DltMessage::for_test()).unwrap();
+            tx.send(DltMessage::for_test()).unwrap();
         }
         let (tx2, rx2) = channel();
         let t = std::thread::spawn(move || {
@@ -94,7 +94,7 @@ mod tests {
             .is_err());
         // now send another batch of messages:
         for _ in 0..NUMBER_MSGS {
-            tx.send(crate::DltMessage::for_test()).unwrap();
+            tx.send(DltMessage::for_test()).unwrap();
         }
         // now the first messages should arrive:
         let mut last_time_stamp = 0;
@@ -103,13 +103,13 @@ mod tests {
             assert!(mr.is_ok(), "failed to get msg#{}", i);
             let m = mr.unwrap();
             assert!(
-                m.time_stamp > last_time_stamp,
+                m.timestamp_dms > last_time_stamp,
                 "msg#{} has wrong order/time_stamp! {} vs. exp. > {}",
                 i,
-                m.time_stamp,
+                m.timestamp_dms,
                 last_time_stamp
             );
-            last_time_stamp = m.time_stamp;
+            last_time_stamp = m.timestamp_dms;
         }
         // till now there must be no further message in tx:
         assert!(rx2
@@ -124,13 +124,13 @@ mod tests {
             assert!(mr.is_ok(), "failed to get last msg#{}", i);
             let m = mr.unwrap();
             assert!(
-                m.time_stamp > last_time_stamp,
+                m.timestamp_dms > last_time_stamp,
                 "msg#{} has wrong order/time_stamp! {} vs. exp. > {}",
                 NUMBER_MSGS + i,
-                m.time_stamp,
+                m.timestamp_dms,
                 last_time_stamp
             );
-            last_time_stamp = m.time_stamp;
+            last_time_stamp = m.timestamp_dms;
         }
         assert!(rx2
             .recv_timeout(std::time::Duration::from_millis(50))
@@ -140,17 +140,17 @@ mod tests {
     struct SortedMsg(DltMessage);
     impl std::cmp::Ord for SortedMsg {
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.0.time_stamp.cmp(&other.0.time_stamp)
+            self.0.timestamp_dms.cmp(&other.0.timestamp_dms)
         }
     }
     impl std::cmp::PartialOrd for SortedMsg {
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.0.time_stamp.cmp(&other.0.time_stamp))
+            Some(self.0.timestamp_dms.cmp(&other.0.timestamp_dms))
         }
     }
     impl PartialEq for SortedMsg {
         fn eq(&self, other: &Self) -> bool {
-            self.0.time_stamp == other.0.time_stamp
+            self.0.timestamp_dms == other.0.timestamp_dms
         }
     }
     impl Eq for SortedMsg {}
@@ -166,18 +166,18 @@ mod tests {
         const NUMBER_MSGS: usize = 1_000;
         let mut msgs: std::vec::Vec<SortedMsg> = std::vec::Vec::with_capacity(NUMBER_MSGS);
         for _ in 0..NUMBER_MSGS {
-            msgs.push(SortedMsg::from(crate::DltMessage::for_test()));
+            msgs.push(SortedMsg::from(crate::dlt::DltMessage::for_test()));
         }
         msgs.reverse();
-        let mut last_time_stamp = u64::MAX;
+        let mut last_time_stamp = u32::MAX;
         for m in msgs {
             assert!(
-                m.0.time_stamp <= last_time_stamp,
+                m.0.timestamp_dms <= last_time_stamp,
                 "msg has wrong order/time_stamp! {} vs. exp. > {}",
-                m.0.time_stamp,
+                m.0.timestamp_dms,
                 last_time_stamp
             );
-            last_time_stamp = m.0.time_stamp;
+            last_time_stamp = m.0.timestamp_dms;
             tx.send(m).unwrap();
         }
 
@@ -204,13 +204,13 @@ mod tests {
             assert!(mr.is_ok(), "failed to get msg#{}", i);
             let m = mr.unwrap().0;
             assert!(
-                m.time_stamp > last_time_stamp,
+                m.timestamp_dms > last_time_stamp,
                 "msg#{} has wrong order/time_stamp! {} vs. exp. > {}",
                 i,
-                m.time_stamp,
+                m.timestamp_dms,
                 last_time_stamp
             );
-            last_time_stamp = m.time_stamp;
+            last_time_stamp = m.timestamp_dms;
         }
         // till now there must be no further message in tx:
         assert!(rx2
