@@ -33,10 +33,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                     break;
                 }
                 Some(input_file_name) => {
-                    let mut fi = File::open(input_file_name)?;
-                    // seems to reuse existing fds!!!??? on using the same filename twice!
-                    // so better seek to start.
-//                    &fi.seek(std::io::SeekFrom::Start(0))?;
+                    let fi = File::open(input_file_name)?;
                     info!(log, "opened file {} {:?}", &input_file_name, &fi);
                     const BUFREADER_CAPACITY: usize = 0x10000 * 50;
                     f = Some(BufReader::with_capacity(BUFREADER_CAPACITY, fi));
