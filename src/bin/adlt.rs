@@ -1,33 +1,94 @@
 // todos:
 
-use clap::{App, Arg};
+use clap::{App, Arg, SubCommand};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek};
-use std::time::Instant;
 use std::sync::mpsc::channel;
+use std::time::Instant;
+// extern crate slog;
+//extern crate slog_term;
+use slog::{info, debug, trace, o, Drain};
 
 fn main() -> io::Result<()> {
     let matches = App::new("automotive dlt tool")
         .version(clap::crate_version!())
         .author("Matthias Behr <mbehr+adlt@mcbehr.de>")
         .about("Tool to handle automotive diagnostic log- and trace- (DLT) files.")
+        .subcommand(
+            SubCommand::with_name("convert")
+                .arg(
+                    Arg::with_name("hex")
+                        .short("x")
+                        .group("style")
+                        .display_order(2)
+                        .help("print payload as hex"),
+                )
+                .arg(
+                    Arg::with_name("ascii")
+                        .short("a")
+                        .group("style")
+                        .display_order(1)
+                        .help("print payload as ASCII"),
+                )
+                .arg(
+                    Arg::with_name("file")
+                        .required(true)
+                        .multiple(true)
+                        .min_values(1)
+                        .help("input DLT files to process"),
+                ),
+        )
         .arg(
-            Arg::with_name("file")
-                .short("f")
-                .long("file")
-                .takes_value(true)
-                .required(true)
-                .help("input dlt file to process"),
+            Arg::with_name("verbose")
+                .global(true)
+                .short("v")
+                .multiple(true)
+                .help("verbosity level"),
         )
         .get_matches();
+
+    // initialize logging
+    // all log levels are
+    // Critical, Error, Warning
+    // Info, Debug, Trace
+    // by default we do output: Critical, Error, Warning
+    // -v +Info -vv +Debug -vvv +Trace
+    // Debug is removed at build time in Release builds by default!
+    // Trace is removed at build time in Debug builds by default
+    let min_log_level = match matches.occurrences_of("verbose") {
+        0 => slog::Level::Warning,
+        1 => slog::Level::Info,
+        2 => slog::Level::Debug,
+        3 | _ => slog::Level::Trace,
+    };
+    let decorator = slog_term::TermDecorator::new().build();
+    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
+    // todo think whether async is useful as it makes the match from log and output more difficult
+    let drain = slog_async::Async::new(drain).build().filter_level(min_log_level).fuse();
+    let log = slog::Logger::root(drain, o!("version"=>clap::crate_version!(), "log_level"=>format!("{}",min_log_level)));
+
+    match matches.subcommand() {
+        ("convert", Some(sub_m)) => {
+            let input_file_names: Vec<&str> = sub_m.values_of("file").unwrap().collect();
+            info!(log, "convert have {} input files", input_file_names.len(); "verbose"=> format!("{}",&min_log_level));
+            debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names));
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "unknown subcommand",
+            ));
+        }
+    }
+    return Ok(());
 
     let input_file_name = matches.value_of("file").unwrap();
 
     let f = File::open(input_file_name)?;
     const BUFREADER_CAPACITY: usize = 0x10000 * 50;
     let mut f = BufReader::with_capacity(BUFREADER_CAPACITY, f); // BufReader::new(f);
-    // f.fill_buf().expect("fill_buf failed!");
+                                                                 // f.fill_buf().expect("fill_buf failed!");
     let mut bytes_processed: u64 = 0;
     let mut done = false;
 
@@ -49,10 +110,10 @@ fn main() -> io::Result<()> {
 
     let (tx2, rx2) = channel();
 
-    let filter_stage1_thread = std::thread::spawn(move|| {
+    let filter_stage1_thread = std::thread::spawn(move || {
         let mut f1 = adlt::filter::Filter::new(adlt::filter::FilterKind::Positive);
         f1.apid = Some(adlt::dlt::DltChar4::from_buf(b"LSMF"));
-        adlt::filter::functions::filter_as_streams(&[f1], &rx,&tx2)
+        adlt::filter::functions::filter_as_streams(&[f1], &rx, &tx2)
     });
 
     let mut last_data = false;
@@ -93,8 +154,9 @@ fn main() -> io::Result<()> {
     println!(
         "edlt processed={}bytes got {} (passed={} filtered={}) msgs in {}ms",
         bytes_processed,
-        passed+filtered,
-        passed, filtered,
+        passed + filtered,
+        passed,
+        filtered,
         now.elapsed().as_millis()
     );
     rx2.iter().for_each(|m| msgs.push(m));
@@ -150,7 +212,13 @@ fn main() -> io::Result<()> {
     println!("msg={:?}", &lsmf_msgs3[0]);
 
     let now = Instant::now();
-    lsmf_msgs.par_sort_by(|a,b| -> std::cmp::Ordering { if a.timestamp_dms < b.timestamp_dms { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater } });
+    lsmf_msgs.par_sort_by(|a, b| -> std::cmp::Ordering {
+        if a.timestamp_dms < b.timestamp_dms {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    });
     println!(
         "par sorted msgs={} after {}ms",
         lsmf_msgs.len(),
@@ -159,7 +227,13 @@ fn main() -> io::Result<()> {
     println!("msg={:?}", &lsmf_msgs[0]);
 
     let now = Instant::now();
-    lsmf_msgs2.sort_by(|a,b| -> std::cmp::Ordering { if a.timestamp_dms < b.timestamp_dms { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater } });
+    lsmf_msgs2.sort_by(|a, b| -> std::cmp::Ordering {
+        if a.timestamp_dms < b.timestamp_dms {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    });
     println!(
         "sorted msgs={} after {}ms",
         lsmf_msgs2.len(),
