@@ -5,7 +5,7 @@ edition = "2018"
 authors = ["Matthias Behr"]
 license = "CC-BY-NC-SA-4.0"
 repository = "https://github.com/mbehr1/adlt/"
-description = "Library and tools to handle automotive DLT (diagnostic log- and trace) files."
+description = "Library and tools to handle automotive DLT- (diagnostic log and trace) files."
 keywords = ["dlt", "automotive", "log", "trace", "analysis"]
 categories = ["command-line-utilities", "development-tools", "encoding", "parsing"]
 
