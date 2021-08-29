@@ -1,4 +1,5 @@
 // todos:
+mod convert;
 
 use clap::{App, Arg, SubCommand};
 use rayon::prelude::*;
@@ -68,12 +69,8 @@ fn main() -> io::Result<()> {
     let drain = slog_async::Async::new(drain).build().filter_level(min_log_level).fuse();
     let log = slog::Logger::root(drain, o!("version"=>clap::crate_version!(), "log_level"=>format!("{}",min_log_level)));
 
-    match matches.subcommand() {
-        ("convert", Some(sub_m)) => {
-            let input_file_names: Vec<&str> = sub_m.values_of("file").unwrap().collect();
-            info!(log, "convert have {} input files", input_file_names.len(); "verbose"=> format!("{}",&min_log_level));
-            debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names));
-        }
+    return match matches.subcommand() {
+        ("convert", Some(sub_m)) => convert::convert(log, sub_m),
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -81,8 +78,8 @@ fn main() -> io::Result<()> {
             ));
         }
     }
-    return Ok(());
-
+    // return Ok(());
+/*
     let input_file_name = matches.value_of("file").unwrap();
 
     let f = File::open(input_file_name)?;
@@ -241,5 +238,5 @@ fn main() -> io::Result<()> {
     );
     println!("msg={:?}", &lsmf_msgs2[0]);
 
-    Ok(())
+    Ok(()) */
 }
