@@ -794,6 +794,7 @@ mod tests {
                     let timestamp_us = start_delay + ((i as u64) * options.frequency); // frequency
                     let min_send_time = std::cmp::max(buf_delay + (i as u64), timestamp_us);
                     msgs.push(DltMessage {
+                        index: i as u64,
                         reception_time_us: lc_start_time + min_send_time,
                         timestamp_dms: (timestamp_us/100)as u32,
                         lifecycle: 0,

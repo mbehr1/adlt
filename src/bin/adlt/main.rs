@@ -37,6 +37,16 @@ fn main() -> io::Result<()> {
                         .multiple(true)
                         .min_values(1)
                         .help("input DLT files to process"),
+                ).arg(
+                    Arg::with_name("index_first")
+                    .short("b")
+                    .takes_value(true)
+                    .help("first message (index) to be handled")
+                ).arg(
+                    Arg::with_name("index_last")
+                    .short("e")
+                    .takes_value(true)
+                    .help("last message (index) to be handled")
                 ),
         )
         .arg(
