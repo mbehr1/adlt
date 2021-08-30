@@ -214,9 +214,13 @@ impl DltExtendedHeader {
     }
 }
 
+/// Index type for DltMessage. 32bit seem somewhat limited. but we save 4bytes in ram per msg. which alone make 16gb saved for a huge dlt file with 4mrd msgs...
+/// anyhow prepare a type so that it can be easily changed later.
+pub type DltMessageIndexType = u32;
+
 #[derive(Debug)]
 pub struct DltMessage {
-    // index: u64 todo
+    pub index: DltMessageIndexType, 
     pub(super) reception_time_us: u64, // from storage header, ms would be sufficent but needs same 64 bit
     pub(super) ecu: DltChar4,
     // sessionId: u32 todo
@@ -227,6 +231,7 @@ pub struct DltMessage {
     pub lifecycle: u32, // 0 = none, otherwise the id of an lifecycle
 }
 
+#[cfg(test)]
 static NEXT_TEST_TIMESTAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl DltMessage {
@@ -235,6 +240,7 @@ impl DltMessage {
     }
 
     fn from(
+        index: DltMessageIndexType,
         storage_header: DltStorageHeader,
         standard_header: DltStandardHeader,
         add_header_buf: &[u8],
@@ -249,6 +255,7 @@ impl DltMessage {
         let extended_header = if standard_header.has_ext_hdr() { DltExtendedHeader::from_buf(&add_header_buf[add_header_buf.len()-DLT_EXT_HEADER_SIZE..]) } else { None };
 
         DltMessage {
+            index,
             reception_time_us: storage_header.reception_time_us(),
             ecu: ecu,
             timestamp_dms,
@@ -259,9 +266,11 @@ impl DltMessage {
         }
     }
 
+    #[cfg(test)]
     pub fn for_test() -> DltMessage {
         let timestamp_us = 100*NEXT_TEST_TIMESTAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         DltMessage {
+            index: 0,
             reception_time_us: 100_000 + timestamp_us,
             ecu: DltChar4::from_buf(b"TEST"),
             timestamp_dms: (timestamp_us/100) as u32,
@@ -330,6 +339,7 @@ pub enum ErrorKind {
 }
 
 pub fn parse_dlt_with_storage_header(
+    index: DltMessageIndexType,
     data: &mut impl BufRead,
 ) -> Result<(usize, DltMessage), Error> {
     let peek_buf = data.fill_buf().unwrap(); // todo err handling
@@ -359,6 +369,7 @@ pub fn parse_dlt_with_storage_header(
                             &peek_buf[payload_offset..payload_offset + payload_size as usize],
                         );
                         let msg = DltMessage::from(
+                            index,
                             sh,
                             stdh,
                             &peek_buf
