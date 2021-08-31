@@ -1,6 +1,6 @@
+use serde::ser::{Serialize, Serializer};
 use std::fmt;
-use std::io::BufRead;
-use serde::ser::{Serialize, Serializer}; // SerializeStruct
+use std::io::BufRead; // SerializeStruct
 
 #[derive(Clone, PartialEq, Eq, Copy, Hash)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
@@ -16,16 +16,16 @@ impl DltChar4 {
     pub fn from_str(astr: &str) -> Option<DltChar4> {
         // we do only support ascii strings
         // add some defaults? or return None
-        if !astr.is_ascii() { return None; }
+        if !astr.is_ascii() {
+            return None;
+        }
         let bytes = astr.as_bytes();
-        let mut chars:[u8; 4] = [0,0,0,0];
+        let mut chars: [u8; 4] = [0, 0, 0, 0];
         for n in 0..std::cmp::min(bytes.len(), 4) {
             chars[n] = bytes[n];
         }
 
-        Some(DltChar4 {
-            char4: chars,
-        })
+        Some(DltChar4 { char4: chars })
     }
 }
 
@@ -46,26 +46,27 @@ impl fmt::Debug for DltChar4 {
 
 impl fmt::Display for DltChar4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let a_str:&str = if self.char4[0] > 0 {
+        let a_str: &str = if self.char4[0] > 0 {
             if self.char4[1] > 0 {
                 if self.char4[2] > 0 {
                     if self.char4[3] > 0 {
                         std::str::from_utf8(&self.char4).unwrap()
-                    }else {
+                    } else {
                         std::str::from_utf8(&self.char4[0..3]).unwrap()
                     }
                 } else {
-                    std::str::from_utf8(&self.char4[0..2]).unwrap()    
+                    std::str::from_utf8(&self.char4[0..2]).unwrap()
                 }
             } else {
                 std::str::from_utf8(&self.char4[0..1]).unwrap()
             }
-        } else { "" };
+        } else {
+            ""
+        };
 
-        write!(f, "{}", a_str)
+        f.pad(a_str) // handles width, fill/align and precision
     }
 }
-
 
 #[derive(Debug)]
 pub struct DltStorageHeader {
@@ -184,8 +185,15 @@ impl DltStandardHeader {
     fn timestamp_dms(&self, add_header_buf: &[u8]) -> u32 {
         if self.has_timestamp() {
             let mut offset = if self.has_ecu_id() { 4 } else { 0 };
-            if self.has_session_id() { offset += 4; }
-            u32::from_be_bytes([add_header_buf[offset], add_header_buf[offset+1], add_header_buf[offset+2], add_header_buf[offset+3]])
+            if self.has_session_id() {
+                offset += 4;
+            }
+            u32::from_be_bytes([
+                add_header_buf[offset],
+                add_header_buf[offset + 1],
+                add_header_buf[offset + 2],
+                add_header_buf[offset + 3],
+            ])
         } else {
             0
         }
@@ -194,7 +202,7 @@ impl DltStandardHeader {
 
 #[derive(Debug)]
 pub struct DltExtendedHeader {
-    pub(super) verb_mstp_mtin : u8,
+    pub(super) verb_mstp_mtin: u8,
     pub(super) noar: u8,
     pub(super) apid: DltChar4,
     pub(super) ctid: DltChar4,
@@ -220,9 +228,9 @@ pub type DltMessageIndexType = u32;
 
 #[derive(Debug)]
 pub struct DltMessage {
-    pub index: DltMessageIndexType, 
+    pub index: DltMessageIndexType,
     pub(super) reception_time_us: u64, // from storage header, ms would be sufficent but needs same 64 bit
-    pub(super) ecu: DltChar4,
+    pub ecu: DltChar4,
     // sessionId: u32 todo
     pub timestamp_dms: u32, // orig in 0.1ms (deci-ms)
     pub(super) standard_header: DltStandardHeader,
@@ -239,6 +247,18 @@ impl DltMessage {
         return self.timestamp_dms as u64 * 100;
     }
 
+    pub fn reception_time(&self) -> chrono::NaiveDateTime {
+        chrono::NaiveDateTime::from_timestamp_opt(
+            (self.reception_time_us / 1_000_000) as i64,
+            1000u32 * (self.reception_time_us % 1_000_000) as u32,
+        )
+        .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp(0, 0))
+    }
+
+    pub fn mcnt(&self) -> u8 {
+        self.standard_header.mcnt
+    }
+
     fn from(
         index: DltMessageIndexType,
         storage_header: DltStorageHeader,
@@ -252,7 +272,13 @@ impl DltMessage {
 
         let timestamp_dms = standard_header.timestamp_dms(add_header_buf);
 
-        let extended_header = if standard_header.has_ext_hdr() { DltExtendedHeader::from_buf(&add_header_buf[add_header_buf.len()-DLT_EXT_HEADER_SIZE..]) } else { None };
+        let extended_header = if standard_header.has_ext_hdr() {
+            DltExtendedHeader::from_buf(
+                &add_header_buf[add_header_buf.len() - DLT_EXT_HEADER_SIZE..],
+            )
+        } else {
+            None
+        };
 
         DltMessage {
             index,
@@ -268,14 +294,19 @@ impl DltMessage {
 
     #[cfg(test)]
     pub fn for_test() -> DltMessage {
-        let timestamp_us = 100*NEXT_TEST_TIMESTAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let timestamp_us =
+            100 * NEXT_TEST_TIMESTAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         DltMessage {
             index: 0,
             reception_time_us: 100_000 + timestamp_us,
             ecu: DltChar4::from_buf(b"TEST"),
-            timestamp_dms: (timestamp_us/100) as u32,
-            standard_header: DltStandardHeader{htyp: 1, len: 0, mcnt:0},
-            extended_header:None,
+            timestamp_dms: (timestamp_us / 100) as u32,
+            standard_header: DltStandardHeader {
+                htyp: 1,
+                len: 0,
+                mcnt: 0,
+            },
+            extended_header: None,
             payload: [].to_vec(),
             lifecycle: 0,
         }
@@ -287,17 +318,17 @@ impl DltMessage {
 
     pub fn apid(&self) -> Option<&DltChar4> {
         match &self.extended_header {
-            None=> None,
-            Some(e) => Some(&e.apid)
-        }
-    }
-    pub fn ctid(&self) -> Option<&DltChar4> {
-        match &self.extended_header {
-            None=> None,
-            Some(e) => Some(&e.ctid)
+            None => None,
+            Some(e) => Some(&e.apid),
         }
     }
 
+    pub fn ctid(&self) -> Option<&DltChar4> {
+        match &self.extended_header {
+            None => None,
+            Some(e) => Some(&e.ctid),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -335,7 +366,7 @@ impl fmt::Display for Error {
 pub enum ErrorKind {
     InvalidData(String),
     NotEnoughData(usize),
-    OtherFatal(String)
+    OtherFatal(String),
 }
 
 pub fn parse_dlt_with_storage_header(
@@ -385,12 +416,12 @@ pub fn parse_dlt_with_storage_header(
                     }
                 } else {
                     Err(Error::new(ErrorKind::InvalidData(String::from(
-                        "stdh.len too small"
+                        "stdh.len too small",
                     ))))
                 }
             }
             None => Err(Error::new(ErrorKind::InvalidData(String::from(
-                "no storageheader"
+                "no storageheader",
             )))),
         }
     } else {
@@ -435,6 +466,26 @@ mod tests {
                 shdr.reception_time_ms() as u64 * 1000,
                 shdr.reception_time_us()
             );
+        }
+
+        #[test]
+        fn dltchar4_format() {
+            assert_eq!(format!("{}", DltChar4::from_str("----").unwrap()), "----");
+            // just 3 bytes
+            assert_eq!(format!("{}", DltChar4::from_str("ECU").unwrap()), "ECU");
+            // just 2 bytes
+            assert_eq!(format!("{}", DltChar4::from_str("EC").unwrap()), "EC");
+            // just 1 byte
+            assert_eq!(format!("{}", DltChar4::from_str("E").unwrap()), "E");
+
+            // just 1 byte but width 4
+            assert_eq!(format!("{:4}", DltChar4::from_str("E").unwrap()), "E   ");
+
+            // just 1 byte but pad left bound with - with interims to_string
+            assert_eq!(format!("{:-<4}", DltChar4::from_str("E").unwrap().to_string()), "E---");
+
+            // just 1 byte but pad left bound with - without to_string
+            assert_eq!(format!("{:-<4}", DltChar4::from_str("E").unwrap()), "E---");
         }
     }
 }

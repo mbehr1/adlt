@@ -1,6 +1,7 @@
 use slog::{crit, debug, info, warn};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek};
+use chrono::{TimeZone, Local};
 
 /// same as genivi dlt dlt-convert binary
 /// log the files to console
@@ -45,6 +46,8 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     let mut number_messages: adlt::dlt::DltMessageIndexType = 0;
     let mut input_file_names_iter = input_file_names.iter();
     let mut last_data = false;
+
+    let default_apid_ctid = adlt::dlt::DltChar4::from_str("----").unwrap();
     loop {
         if f.is_none() {
             // load next file
@@ -68,9 +71,18 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 bytes_per_file += res as u64;
                 number_messages += 1;
 
-                // start with a simple dump of the msgs
+                // start with a simple dump of the msgs similar to dlt_message_header
                 if msg.index >= index_first && msg.index <= index_last {
-                    println!("{index} {reception_date_time}", index=msg.index, reception_date_time = 0);
+                    println!(
+                        "{index} {reception_time} {timestamp_dms:10} {mcnt:03} {ecu} {apid:-<4} {ctid:-<4}",
+                        index = msg.index,
+                        reception_time = Local.from_utc_datetime(&msg.reception_time()).format("%Y/%m/%d %H:%M:%S%.6f"),
+                        timestamp_dms= msg.timestamp_dms,
+                        mcnt = msg.mcnt(),
+                        ecu = msg.ecu,
+                        apid=msg.apid().unwrap_or(&default_apid_ctid).to_string(),
+                        ctid=msg.ctid().unwrap_or(&default_apid_ctid).to_string(),
+                    );
                 }
 
                 // get more data from BufReader:
