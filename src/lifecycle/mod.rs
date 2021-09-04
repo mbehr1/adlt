@@ -23,7 +23,7 @@ fn new_lifecycle_item(lc: Lifecycle) -> LifecycleItem {
 pub struct Lifecycle {
     /// unique id
     id: LifecycleId,
-    ecu: DltChar4,
+    pub ecu: DltChar4,
     /// contains the number of messages belonging to this lifecycle. `0` indicates that this lifecycle is not valid anymore, e.g. was merged into different one.
     pub nr_msgs: u32,
     /// contains the start time of this lifecycle. See [Self::end_time()] as well. During processing this start_time is adjusted.
@@ -152,6 +152,18 @@ impl Lifecycle {
     ///
     pub fn update(&mut self, msg: &mut DltMessage) -> Option<Lifecycle> {
         // check whether this msg belongs to the lifecycle:
+        // 0) ignore any CTRL REQUEST msgs:
+        if let Some(e) = &msg.extended_header {
+            if (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
+            (e.verb_mstp_mtin>>4 & 0x0f) == 1 { // mtin == MTIN_CTRL.CONTROL_REQUEST
+                // we dont check any params but
+                // simply add to this one
+                msg.lifecycle = self.id;
+                self.nr_msgs += 1;    
+                return None;
+            }
+        }
+
         // 1) the calc start time needs to be no later than the current end time
         // println!("update: lifecycle triggered to LC:{:?}", &self);
         let msg_timestamp_us = msg.timestamp_us();
@@ -167,10 +179,10 @@ impl Lifecycle {
             // does it move the start to earlier? (e.g. has a smaller buffering delay)
             if msg_lc_start < self.start_time {
                 self.start_time = msg_lc_start;
-                println!(
-                    "update: lc {} moving lc start_time to {}",
-                    self.id, self.start_time
-                );
+                // todo slog... println!(
+//                    "update: lc {} moving lc start_time to {}",
+//                    self.id, self.start_time
+//                );
             }
             msg.lifecycle = self.id;
             self.nr_msgs += 1;
@@ -576,7 +588,7 @@ where
         if buffered_lcs.len() > 0 {
             buffered_msgs.push(msg);
         } else {
-            println!("sending non-buffered_msg {:?}", msg);
+            // todo slog... println!("sending non-buffered_msg {:?}", msg);
             outflow.send(msg).unwrap(); // todo how handle errors?
         }
     }
@@ -662,6 +674,21 @@ pub fn get_mapped_lifecycles_as_hashmap<'a>(
         .iter()
         .map(|(id, l)| (*id, l.final_lc(interims_lcs)))
         .collect()
+}
+
+/// return a vector of lifecycles sorted by start_time
+/// asserts if an interims lifecycle is contained!
+/// todo add example
+pub fn get_sorted_lifecycles_as_vec<'a, M, S>(
+    lcr: &'a evmap::MapReadRef<LifecycleId, LifecycleItem, M, S>,
+) -> std::vec::Vec<&'a Lifecycle>
+where
+    S: std::hash::BuildHasher + Clone,
+    M: 'static + Clone,
+{
+    let mut sorted_lcs:std::vec::Vec<&'a Lifecycle> = lcr.iter().map(|(id,b)| { let lc = b.get_one().unwrap(); assert_eq!(&lc.id, id); lc }).collect();
+    sorted_lcs.sort_by(|a,b| a.start_time.cmp(&b.start_time));
+    sorted_lcs
 }
 
 #[cfg(test)]
