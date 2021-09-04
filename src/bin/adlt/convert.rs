@@ -1,7 +1,8 @@
+use chrono::{Local, TimeZone};
 use slog::{crit, debug, info, warn};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek};
-use chrono::{TimeZone, Local};
+use std::sync::mpsc::{channel};
 
 /// same as genivi dlt dlt-convert binary
 /// log the files to console
@@ -27,9 +28,15 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
             }
         },
     };
-    // }.unwrap_or(u64::MAX);
+
+    let filter_lc_ids: std::collections::BTreeSet<u32> = match sub_m.values_of("filter_lc_ids"){
+        None => std::collections::BTreeSet::new(),
+        Some(s) => s.map(|s| s.parse::<u32>()).filter(|a|!a.is_err()).map(|s|s.unwrap()).collect(),
+    };
+//todo    output_file
+
     info!(log, "convert have {} input files", input_file_names.len(); "index_first"=>index_first, "index_last"=>index_last);
-    debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names));
+    debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids));
 
     // if we have multiple files we do need to sort them first by the first log reception_time!
     if input_file_names.len() > 1 {
@@ -48,6 +55,45 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     let mut last_data = false;
 
     let default_apid_ctid = adlt::dlt::DltChar4::from_str("----").unwrap();
+
+    // setup (thread) filter chain:
+    let (tx, rx) = channel(); // msg -> parse_lifecycles
+    let (tx2, rx2) = channel(); // parse_lifecycles -> buffer_elements
+    let (tx3, rx3) = channel(); // buffer_elements -> print
+
+    let (lcs_r, lcs_w) =
+        evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
+    let t2 = std::thread::spawn(move || {
+        adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2)
+    });
+    let t3 = std::thread::spawn(move || {
+        adlt::utils::buffer_elements(
+            rx2,
+            tx3,
+            adlt::utils::BufferElementsOptions {
+                amount: adlt::utils::BufferElementsAmount::NumberElements(1000), // todo how to determine constant...
+            },
+        )
+    });
+    let t4 = std::thread::spawn(move || {
+        for msg in rx3 {
+            // lifecycle filtered?
+            if filter_lc_ids.len() > 0 && !filter_lc_ids.contains(&msg.lifecycle) { continue; }
+            // start with a simple dump of the msgs similar to dlt_message_header
+            if msg.index >= index_first && msg.index <= index_last {
+                println!("{index} {reception_time} {timestamp_dms:10} {mcnt:03} {ecu} {apid:-<4} {ctid:-<4}",
+                    index = msg.index,
+                    reception_time = Local.from_utc_datetime(&msg.reception_time()).format("%Y/%m/%d %H:%M:%S%.6f"),
+                    timestamp_dms= msg.timestamp_dms,
+                    mcnt = msg.mcnt(),
+                    ecu = msg.ecu,
+                    apid=msg.apid().unwrap_or(&default_apid_ctid).to_string(),
+                    ctid=msg.ctid().unwrap_or(&default_apid_ctid).to_string(),
+                );
+            }
+        }
+    });
+
     loop {
         if f.is_none() {
             // load next file
@@ -71,6 +117,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 bytes_per_file += res as u64;
                 number_messages += 1;
 
+                /*
                 // start with a simple dump of the msgs similar to dlt_message_header
                 if msg.index >= index_first && msg.index <= index_last {
                     println!(
@@ -83,7 +130,8 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                         apid=msg.apid().unwrap_or(&default_apid_ctid).to_string(),
                         ctid=msg.ctid().unwrap_or(&default_apid_ctid).to_string(),
                     );
-                }
+                }*/
+                tx.send(msg).unwrap(); // todo handle error?
 
                 // get more data from BufReader:
                 if !last_data && (reader.buffer().len() < 0x10000) {
@@ -112,7 +160,34 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
             },
         }
     }
+    drop(tx);
+    let _lcs_w = t2.join().unwrap();
+    t3.join().unwrap();
+    t4.join().unwrap();
+
     info!(log, "finished processing"; "bytes_processed"=>bytes_processed, "number_messages"=>number_messages);
+
+    // print lifecycles:
+    if let Some(a) = lcs_r.read() {
+        let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
+        info!(
+            log,
+            "have {} lifecycles:",
+            sorted_lcs.len(),
+        );
+        // output lifecycles
+        for lc in sorted_lcs {
+            info!(
+                log,
+                "LC#{:3}: {:4} {} - {} #{:8}",
+                lc.id(),
+                lc.ecu,
+                Local.from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time)).format("%Y/%m/%d %H:%M:%S%.6f"),
+                Local.from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time())).format("%H:%M:%S"),
+                lc.nr_msgs
+            );
+        }
+    }
 
     Ok(())
 }

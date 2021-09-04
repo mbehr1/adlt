@@ -41,12 +41,24 @@ fn main() -> io::Result<()> {
                     Arg::with_name("index_first")
                     .short("b")
                     .takes_value(true)
-                    .help("first message (index) to be handled")
+                    .help("first message (index) to be handled. Index is from the original file before any filters are applied.")
                 ).arg(
                     Arg::with_name("index_last")
                     .short("e")
                     .takes_value(true)
                     .help("last message (index) to be handled")
+                ).arg(
+                    Arg::with_name("filter_lc_ids")
+                    .short("l")
+                    .long("lcs")
+                    .multiple(true)
+                    .min_values(1)
+                    .help("filter for the specified lifecycle ids.")
+                ).arg(
+                    Arg::with_name("output_file")
+                    .short("o")
+                    .takes_value(true)
+                    .help("output messages in new DLT file")
                 ),
         )
         .arg(
