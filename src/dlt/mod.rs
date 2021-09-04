@@ -1,6 +1,6 @@
 use serde::ser::{Serialize, Serializer};
 use std::fmt;
-use std::io::BufRead; // SerializeStruct
+use std::io::{BufRead, Write}; // SerializeStruct
 
 #[derive(Clone, PartialEq, Eq, Copy, Hash)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
@@ -100,6 +100,31 @@ impl DltStorageHeader {
         Some(sh)
     }
 
+    fn from_msg(msg: &DltMessage) -> DltStorageHeader {
+        DltStorageHeader {
+            secs: (msg.reception_time_us / crate::utils::US_PER_SEC) as u32,
+            micros: (msg.reception_time_us % crate::utils::US_PER_SEC) as u32,
+            ecu: msg.ecu,
+        }
+    }
+
+    /// serialize to a writer in DLT byte format
+    fn to_write(&self, writer: &mut impl std::io::Write) -> Result<usize, std::io::Error> {
+        let pat = DLT_STORAGE_HEADER_PATTERN;
+
+        let b1 = &u32::to_le_bytes(pat);
+        let b2 = &u32::to_le_bytes(self.secs);
+        let b3 = &u32::to_le_bytes(self.micros);
+
+        let bufs = &mut [
+            std::io::IoSlice::new(b1),
+            std::io::IoSlice::new(b2),
+            std::io::IoSlice::new(b3),
+            std::io::IoSlice::new(&self.ecu.char4),
+        ];
+        writer.write_vectored(bufs)
+    }
+
     fn reception_time_us(&self) -> u64 {
         (self.secs as u64 * 1000_000) + self.micros as u64
     }
@@ -139,6 +164,68 @@ impl DltStandardHeader {
         }
         Some(sh)
     }
+
+    /// write a full DLT message starting with a standard header
+    /// todo example
+    fn to_write(
+        writer: &mut impl std::io::Write,
+        mcnt: u8,
+        ext_hdr: &Option<DltExtendedHeader>,
+        big_endian: bool,
+        ecu: Option<DltChar4>,
+        session_id: Option<u32>,
+        timestamp: Option<u32>,
+        payload: &Vec<u8>,
+    ) -> Result<(), std::io::Error> {
+
+        let mut htyp: u8 = if big_endian {
+            DLT_STD_HDR_BIG_ENDIAN
+        } else {
+            0
+        };
+        let mut len: u16 = DLT_MIN_STD_HEADER_SIZE as u16;
+        if ecu.is_some() {
+            htyp |= DLT_STD_HDR_HAS_ECU_ID;
+            len += 4;
+        }
+        if session_id.is_some() {
+            htyp |= DLT_STD_HDR_HAS_SESSION_ID;
+            len += 4;
+        }
+        if timestamp.is_some() {
+            htyp |= DLT_STD_HDR_HAS_TIMESTAMP;
+            len += 4;
+        }
+        if ext_hdr.is_some() {
+            htyp |= DLT_STD_HDR_HAS_EXT_HDR;
+            len += DLT_EXT_HEADER_SIZE as u16;
+        }
+        len += payload.len() as u16; // todo check for max len...
+
+        let b1 = &[htyp, mcnt];
+        let b2 = &u16::to_be_bytes(len);
+
+        let bufs = &mut [std::io::IoSlice::new(b1), std::io::IoSlice::new(b2)];
+        writer.write_vectored(bufs)?;
+        if let Some(e) = ecu {
+            writer.write(&e.char4)?;
+        }
+        if let Some(s) = session_id {
+            writer.write(&u32::to_be_bytes(s))?;
+        }
+        if let Some(t) = timestamp {
+            writer.write(&u32::to_be_bytes(t))?;
+        }
+        if let Some(e) = ext_hdr {
+            e.to_write(writer)?;
+        }
+        if payload.len() > 0 {
+            writer.write(payload)?;
+        }
+
+        Ok(())
+    }
+
     fn std_ext_header_size(&self) -> u16 {
         let mut length = DLT_MIN_STD_HEADER_SIZE as u16;
         if self.has_ecu_id() {
@@ -220,6 +307,20 @@ impl DltExtendedHeader {
         };
         Some(eh)
     }
+
+    /// serialize to a writer in DLT byte format
+    fn to_write(&self, writer: &mut impl std::io::Write) -> Result<usize, std::io::Error> {
+
+        let b1 = &[self.verb_mstp_mtin, self.noar];
+
+        let bufs = &mut [
+            std::io::IoSlice::new(b1),
+            std::io::IoSlice::new(&self.apid.char4),
+            std::io::IoSlice::new(&self.ctid.char4),
+        ];
+        writer.write_vectored(bufs)
+    }
+    
 }
 
 /// Index type for DltMessage. 32bit seem somewhat limited. but we save 4bytes in ram per msg. which alone make 16gb saved for a huge dlt file with 4mrd msgs...
@@ -286,6 +387,28 @@ impl DltMessage {
             payload,
             lifecycle: 0,
         }
+    }
+
+    /// write the msg to a writer as a DLT file byte stream
+    /// - storage header
+    /// - standard header
+    /// - extended header
+    /// - payload
+    /// Doesn't try to do "atomic" writes, might fail on io errors with partial writes.
+    /// session_id not supported yet.
+    /// Payload endian format is taken from the msg.
+    pub fn to_write(&self, writer: &mut impl std::io::Write) -> Result<(), std::io::Error> {
+        let storage_header = DltStorageHeader::from_msg(self);
+        storage_header.to_write(writer)?;
+        DltStandardHeader::to_write(writer, 
+            self.standard_header.mcnt, 
+            &self.extended_header,
+            self.standard_header.is_big_endian(), //  if cfg!(target_endian = "big") { true } else { false },
+            None, // ecu already in storageheader
+            None, // session_id = None, todo
+            Some(self.timestamp_dms), 
+            &self.payload)?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -478,7 +601,10 @@ mod tests {
             assert_eq!(format!("{:4}", DltChar4::from_str("E").unwrap()), "E   ");
 
             // just 1 byte but pad left bound with - with interims to_string
-            assert_eq!(format!("{:-<4}", DltChar4::from_str("E").unwrap().to_string()), "E---");
+            assert_eq!(
+                format!("{:-<4}", DltChar4::from_str("E").unwrap().to_string()),
+                "E---"
+            );
 
             // just 1 byte but pad left bound with - without to_string
             assert_eq!(format!("{:-<4}", DltChar4::from_str("E").unwrap()), "E---");

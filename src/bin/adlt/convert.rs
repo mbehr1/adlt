@@ -33,7 +33,11 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
         None => std::collections::BTreeSet::new(),
         Some(s) => s.map(|s| s.parse::<u32>()).filter(|a|!a.is_err()).map(|s|s.unwrap()).collect(),
     };
-//todo    output_file
+
+    let output_file = match sub_m.value_of("output_file") {
+        Some(s) => Some(s.to_string()),
+        None => None
+    };
 
     info!(log, "convert have {} input files", input_file_names.len(); "index_first"=>index_first, "index_last"=>index_last);
     debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids));
@@ -76,11 +80,19 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
         )
     });
     let t4 = std::thread::spawn(move || {
+
+        let mut output_file = if let Some(s) = output_file {
+            std::fs::File::create(s)
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::Other, "no output_file param"))
+        };
+
         for msg in rx3 {
             // lifecycle filtered?
             if filter_lc_ids.len() > 0 && !filter_lc_ids.contains(&msg.lifecycle) { continue; }
             // start with a simple dump of the msgs similar to dlt_message_header
             if msg.index >= index_first && msg.index <= index_last {
+                // if print header, ascii, hex or mixed: todo
                 println!("{index} {reception_time} {timestamp_dms:10} {mcnt:03} {ecu} {apid:-<4} {ctid:-<4}",
                     index = msg.index,
                     reception_time = Local.from_utc_datetime(&msg.reception_time()).format("%Y/%m/%d %H:%M:%S%.6f"),
@@ -90,7 +102,14 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                     apid=msg.apid().unwrap_or(&default_apid_ctid).to_string(),
                     ctid=msg.ctid().unwrap_or(&default_apid_ctid).to_string(),
                 );
+                // if output to file: todo
+                if let Ok(ref mut file) = output_file {
+                    msg.to_write(file).unwrap(); // todo err handling
+                }
             }
+        }
+        if output_file.is_ok() {
+            drop(output_file.unwrap()); // close
         }
     });
 
@@ -117,20 +136,6 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 bytes_per_file += res as u64;
                 number_messages += 1;
 
-                /*
-                // start with a simple dump of the msgs similar to dlt_message_header
-                if msg.index >= index_first && msg.index <= index_last {
-                    println!(
-                        "{index} {reception_time} {timestamp_dms:10} {mcnt:03} {ecu} {apid:-<4} {ctid:-<4}",
-                        index = msg.index,
-                        reception_time = Local.from_utc_datetime(&msg.reception_time()).format("%Y/%m/%d %H:%M:%S%.6f"),
-                        timestamp_dms= msg.timestamp_dms,
-                        mcnt = msg.mcnt(),
-                        ecu = msg.ecu,
-                        apid=msg.apid().unwrap_or(&default_apid_ctid).to_string(),
-                        ctid=msg.ctid().unwrap_or(&default_apid_ctid).to_string(),
-                    );
-                }*/
                 tx.send(msg).unwrap(); // todo handle error?
 
                 // get more data from BufReader:
