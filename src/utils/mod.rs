@@ -1,7 +1,9 @@
 use std::sync::mpsc::{Receiver, Sender};
 
 // const MS_PER_SEC:u32 = 1_000;
-const US_PER_SEC:u64 = 1_000_000;
+
+/// const for micro-secs (us) per second
+pub const US_PER_SEC:u64 = 1_000_000;
 
 pub fn utc_time_from_us(time_us: u64) -> chrono::NaiveDateTime {
     chrono::NaiveDateTime::from_timestamp_opt( // todo get rid of all those mult/%... 
