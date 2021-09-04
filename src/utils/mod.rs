@@ -1,5 +1,16 @@
 use std::sync::mpsc::{Receiver, Sender};
 
+// const MS_PER_SEC:u32 = 1_000;
+const US_PER_SEC:u64 = 1_000_000;
+
+pub fn utc_time_from_us(time_us: u64) -> chrono::NaiveDateTime {
+    chrono::NaiveDateTime::from_timestamp_opt( // todo get rid of all those mult/%... 
+        (time_us / US_PER_SEC) as i64,
+        1_000u32 * (time_us % 1_000_000) as u32,
+    )
+    .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp(0, 0))
+}
+
 pub enum BufferElementsAmount {
     NumberElements(usize),
 }

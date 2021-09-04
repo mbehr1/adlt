@@ -248,11 +248,7 @@ impl DltMessage {
     }
 
     pub fn reception_time(&self) -> chrono::NaiveDateTime {
-        chrono::NaiveDateTime::from_timestamp_opt( // todo get rid of all those mult/%... 
-            (self.reception_time_us / 1_000_000) as i64,
-            1000u32 * (self.reception_time_us % 1_000_000) as u32,
-        )
-        .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp(0, 0))
+        crate::utils::utc_time_from_us(self.reception_time_us)
     }
 
     pub fn mcnt(&self) -> u8 {
