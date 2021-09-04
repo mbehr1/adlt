@@ -2,12 +2,39 @@ use chrono::{Local, TimeZone};
 use slog::{crit, debug, info, warn};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek};
-use std::sync::mpsc::{channel};
+use std::sync::mpsc::channel;
+
+enum OutputStyle {
+    Hex,
+    Ascii,
+    Mixed,
+    HeaderOnly,
+    None,
+}
 
 /// same as genivi dlt dlt-convert binary
 /// log the files to console
 pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<()> {
     let input_file_names: Vec<&str> = sub_m.values_of("file").unwrap().collect();
+
+    let outputStyle: OutputStyle = if sub_m.is_present("hex") {
+        OutputStyle::Hex
+    } else {
+        if sub_m.is_present("ascii") {
+            OutputStyle::Ascii
+        } else {
+            if sub_m.is_present("mixed") {
+                OutputStyle::Mixed
+            } else {
+                if sub_m.is_present("headers") {
+                    OutputStyle::HeaderOnly
+                } else {
+                    OutputStyle::None
+                }
+            }
+        }
+    };
+
     let index_first: adlt::dlt::DltMessageIndexType = match sub_m.value_of("index_first") {
         None => 0,
         Some(s) => match s.parse::<adlt::dlt::DltMessageIndexType>() {
@@ -29,14 +56,18 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
         },
     };
 
-    let filter_lc_ids: std::collections::BTreeSet<u32> = match sub_m.values_of("filter_lc_ids"){
+    let filter_lc_ids: std::collections::BTreeSet<u32> = match sub_m.values_of("filter_lc_ids") {
         None => std::collections::BTreeSet::new(),
-        Some(s) => s.map(|s| s.parse::<u32>()).filter(|a|!a.is_err()).map(|s|s.unwrap()).collect(),
+        Some(s) => s
+            .map(|s| s.parse::<u32>())
+            .filter(|a| !a.is_err())
+            .map(|s| s.unwrap())
+            .collect(),
     };
 
     let output_file = match sub_m.value_of("output_file") {
         Some(s) => Some(s.to_string()),
-        None => None
+        None => None,
     };
 
     info!(log, "convert have {} input files", input_file_names.len(); "index_first"=>index_first, "index_last"=>index_last);
@@ -80,28 +111,39 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
         )
     });
     let t4 = std::thread::spawn(move || {
-
         let mut output_file = if let Some(s) = output_file {
             std::fs::File::create(s)
         } else {
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "no output_file param"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "no output_file param",
+            ))
         };
 
         for msg in rx3 {
             // lifecycle filtered?
-            if filter_lc_ids.len() > 0 && !filter_lc_ids.contains(&msg.lifecycle) { continue; }
+            if filter_lc_ids.len() > 0 && !filter_lc_ids.contains(&msg.lifecycle) {
+                continue;
+            }
             // start with a simple dump of the msgs similar to dlt_message_header
             if msg.index >= index_first && msg.index <= index_last {
                 // if print header, ascii, hex or mixed: todo
-                println!("{index} {reception_time} {timestamp_dms:10} {mcnt:03} {ecu} {apid:-<4} {ctid:-<4}",
-                    index = msg.index,
-                    reception_time = Local.from_utc_datetime(&msg.reception_time()).format("%Y/%m/%d %H:%M:%S%.6f"),
-                    timestamp_dms= msg.timestamp_dms,
-                    mcnt = msg.mcnt(),
-                    ecu = msg.ecu,
-                    apid=msg.apid().unwrap_or(&default_apid_ctid).to_string(),
-                    ctid=msg.ctid().unwrap_or(&default_apid_ctid).to_string(),
-                );
+                match outputStyle {
+                    OutputStyle::HeaderOnly => {
+                        println!("{index} {reception_time} {timestamp_dms:10} {mcnt:03} {ecu} {apid:-<4} {ctid:-<4}",
+                            index = msg.index,
+                            reception_time = Local.from_utc_datetime(&msg.reception_time()).format("%Y/%m/%d %H:%M:%S%.6f"),
+                            timestamp_dms= msg.timestamp_dms,
+                            mcnt = msg.mcnt(),
+                            ecu = msg.ecu,
+                            apid=msg.apid().unwrap_or(&default_apid_ctid).to_string(),
+                            ctid=msg.ctid().unwrap_or(&default_apid_ctid).to_string(),
+                        );
+                    },
+                    _ => {
+                        // todo...
+                    }
+                }
                 // if output to file: todo
                 if let Ok(ref mut file) = output_file {
                     msg.to_write(file).unwrap(); // todo err handling
@@ -175,11 +217,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     // print lifecycles:
     if let Some(a) = lcs_r.read() {
         let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
-        info!(
-            log,
-            "have {} lifecycles:",
-            sorted_lcs.len(),
-        );
+        info!(log, "have {} lifecycles:", sorted_lcs.len(),);
         // output lifecycles
         for lc in sorted_lcs {
             info!(
@@ -187,8 +225,12 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 "LC#{:3}: {:4} {} - {} #{:8}",
                 lc.id(),
                 lc.ecu,
-                Local.from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time)).format("%Y/%m/%d %H:%M:%S%.6f"),
-                Local.from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time())).format("%H:%M:%S"),
+                Local
+                    .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
+                    .format("%Y/%m/%d %H:%M:%S%.6f"),
+                Local
+                    .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time()))
+                    .format("%H:%M:%S"),
                 lc.nr_msgs
             );
         }
