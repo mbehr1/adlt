@@ -22,14 +22,28 @@ fn main() -> io::Result<()> {
                         .short("x")
                         .group("style")
                         .display_order(2)
-                        .help("print payload as hex"),
+                        .help("print DLT file; payload as hex"),
                 )
                 .arg(
                     Arg::with_name("ascii")
                         .short("a")
                         .group("style")
                         .display_order(1)
-                        .help("print payload as ASCII"),
+                        .help("print DLT file; payload as ASCII"),
+                )
+                .arg(
+                    Arg::with_name("mixed")
+                        .short("m")
+                        .group("style")
+                        .display_order(1)
+                        .help("print DLT file; payload as ASCII and hex"),
+                )
+                .arg(
+                    Arg::with_name("headers")
+                        .short("s")
+                        .group("style")
+                        .display_order(1)
+                        .help("print DLT file; only headers"),
                 )
                 .arg(
                     Arg::with_name("file")

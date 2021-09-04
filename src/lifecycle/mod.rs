@@ -189,10 +189,10 @@ impl Lifecycle {
             // println!("update: lifecycle updated by {:?} to LC:{:?}", msg, &self);
             None
         } else {
-            println!(
+            /*println!(
                 "update: new lifecycle created by {:?} as msg_lc_start {} > {} LC:{:?}",
                 msg, msg_lc_start, cur_end_time, &self
-            );
+            );*/
             // new lifecycle:
             Some(Lifecycle::new(msg))
         }
@@ -318,11 +318,11 @@ where
 
                     // have to refresh here as a new lc was created to ensure that lcs always contains all lcs referenced by the msgs
                     lcs_w.refresh();
-                    for a in lcs_w.read().iter() {
+                    /* for a in lcs_w.read().iter() {
                         for (id, b) in a {
                             println!("lcs_w content id={:?} lc={:?}", id, b);
                         }
-                    }
+                    }*/
                 }
             }
             if remove_last_lc {
@@ -341,6 +341,7 @@ where
         outflow.send(msg).unwrap(); // todo how handle errors?
     }
     lcs_w.refresh();
+    /*
     println!(
         "After processing stream: Have ecu_map.len={}",
         ecu_map.len()
@@ -354,7 +355,7 @@ where
         for (id, b) in a {
             println!("lcs_w content id={:?} lc={:?}", id, b);
         }
-    }
+    }*/
     lcs_w
 }
 
@@ -419,10 +420,11 @@ where
         }
     }
 
+    /*
     println!("Have ecu_map.len={}", ecu_map.len());
     for (k, v) in &ecu_map {
         println!("Have for ecu {:?} {:?}", &k, &v);
-    }
+    }*/
 
     let mut buffered_msgs: std::vec::Vec<DltMessage> = std::vec::Vec::new();
     let mut buffered_lcs: std::collections::HashSet<LifecycleId> = std::collections::HashSet::new();
@@ -481,7 +483,7 @@ where
                                     while buffered_msgs.len() > 0 {
                                         // todo really inefficient!!!! use drain???
                                         let msg = buffered_msgs.remove(0);
-                                        println!("sending early buffered_msg {:?}", msg);
+                                        // println!("sending early buffered_msg {:?}", msg);
                                         outflow.send(msg).unwrap();
                                     }
                                     assert_eq!(buffered_msgs.len(), 0);
@@ -507,7 +509,7 @@ where
                                 (msg.reception_time_us - msg.timestamp_us()) - max_buffering_delay;
                             // if this is not earlier than the prev_lc start-time we can conclude its a new lifecycle
                             if min_lc_start_time > prev_lc.start_time {
-                                println!("confirmed buffered lc {} as min_lc_start_time {} > prev_lc.start_time {}, lc={:?}", lc2.id, min_lc_start_time, prev_lc.start_time, lc2);
+                                // println!("confirmed buffered lc {} as min_lc_start_time {} > prev_lc.start_time {}, lc={:?}", lc2.id, min_lc_start_time, prev_lc.start_time, lc2);
                                 buffered_lcs.remove(&lc2.id);
                                 lcs_w.insert(lc2.id, new_lifecycle_item(*lc2));
                                 lcs_w.refresh();
@@ -516,7 +518,7 @@ where
                                     while buffered_msgs.len() > 0 {
                                         // todo really inefficient!!!! use drain???
                                         let msg = buffered_msgs.remove(0);
-                                        println!("sending early buffered_msg {:?}", msg);
+                                        // println!("sending early buffered_msg {:?}", msg);
                                         outflow.send(msg).unwrap();
                                     }
                                     assert_eq!(buffered_msgs.len(), 0);
@@ -551,7 +553,7 @@ where
                     // possible criteria:
                     // 1. once the new lifecycle overlaps the prev. one -> and needs a merge (see above)
                     // 2. once the new lifecycle contains messages with timestamp > x (max buffering at (start plus at runtime) buffer)
-                    println!("added lc id {} to buffered_lcs", lc3.id);
+                    // println!("added lc id {} to buffered_lcs", lc3.id);
                     buffered_lcs.insert(lc3.id);
                     ecu_lcs.push(lc3); // we (sadly?) have copy trait for lifecycle
                                        /*
@@ -594,13 +596,13 @@ where
     }
 
     // if we have still buffered lcs we have to make them valid now:
-    println!("adding {} buffered_lcs to lcs_w at end", buffered_lcs.len());
+    //println!("adding {} buffered_lcs to lcs_w at end", buffered_lcs.len());
     for lc_id in buffered_lcs {
         'outer: for vs in ecu_map.values() {
             for v in vs {
                 if v.id == lc_id {
                     lcs_w.insert(lc_id, new_lifecycle_item(*v));
-                    println!("lcs_w content added at end id={:?} lc={:?}", lc_id, *v);
+                    // println!("lcs_w content added at end id={:?} lc={:?}", lc_id, *v);
                     break 'outer;
                 }
             }
@@ -610,10 +612,11 @@ where
 
     // if we have buffered msgs we have to output them now:
     for m in buffered_msgs.into_iter() {
-        println!("sending buffered_msg {:?}", m);
+        // println!("sending buffered_msg {:?}", m);
         outflow.send(m).unwrap();
     }
 
+    /*
     println!(
         "After processing stream: Have ecu_map.len={}",
         ecu_map.len()
@@ -627,7 +630,7 @@ where
         for (id, b) in a {
             println!("lcs_w content id={:?} lc={:?}", id, b);
         }
-    }
+    }*/
     lcs_w
 }
 
