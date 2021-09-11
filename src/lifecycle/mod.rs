@@ -26,6 +26,9 @@ pub struct Lifecycle {
     pub ecu: DltChar4,
     /// contains the number of messages belonging to this lifecycle. `0` indicates that this lifecycle is not valid anymore, e.g. was merged into different one.
     pub nr_msgs: u32,
+    /// number of control request messages. They are counted additionaly to identify lifecycles that consists of only control request messages. See [Self::only_control_requests()].
+    /// # Note: control request messages are treated differently as their timestamp is from a different clock domain (usually the logging device)
+    pub nr_control_req_msgs: u32,
     /// contains the start time of this lifecycle. See [Self::end_time()] as well. During processing this start_time is adjusted.
     /// # Note:
     /// This is not the reception time of the first message but the calculated start time of that lifecycle.
@@ -35,6 +38,7 @@ pub struct Lifecycle {
     /// The real start time will be slightly earlier as there is a minimal buffering time that is not considered / unknown.
     ///
     pub start_time: u64, // start time in us.
+    initial_start_time: u64,
     max_timestamp_us: u64, // max. timestamp of the messages assigned to this lifecycle. Used to determine end_time()
 }
 
@@ -79,15 +83,30 @@ impl Lifecycle {
         return self.start_time + self.max_timestamp_us;
     }
 
+    /// returns whether this lifecycle contains only control request messages.
+    /// ### Note: the info is wrong on merged lifecycles (we want to get rid of them anyhow)
+    pub fn only_control_requests(&self) -> bool {
+        self.nr_control_req_msgs >= self.nr_msgs
+    }
+
     /// create a new lifecycle with the first msg passed as parameter
     pub fn new(msg: &mut DltMessage) -> Lifecycle {
         // println!("new lifecycle created by {:?}", msg);
+        let is_ctrl_request = msg.is_ctrl_request();
+        let timestamp_us = if is_ctrl_request {
+            0
+        } else {
+            msg.timestamp_us()
+        };
+
         let alc = Lifecycle {
             id: NEXT_LC_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ecu: msg.ecu.clone(),
             nr_msgs: 1,
-            start_time: msg.reception_time_us - msg.timestamp_us(),
-            max_timestamp_us: msg.timestamp_us(),
+            nr_control_req_msgs: if is_ctrl_request { 1 } else { 0 },
+            start_time: msg.reception_time_us - timestamp_us,
+            initial_start_time: msg.reception_time_us - timestamp_us,
+            max_timestamp_us: timestamp_us,
         };
         msg.lifecycle = alc.id;
         alc
@@ -100,12 +119,14 @@ impl Lifecycle {
     pub fn merge(&mut self, lc_to_merge: &mut Lifecycle) {
         assert_ne!(lc_to_merge.nr_msgs, 0);
         self.nr_msgs += lc_to_merge.nr_msgs;
+        self.nr_control_req_msgs += lc_to_merge.nr_control_req_msgs;
         lc_to_merge.nr_msgs = 0; // this indicates a merged lc
         if lc_to_merge.max_timestamp_us > self.max_timestamp_us {
             self.max_timestamp_us = lc_to_merge.max_timestamp_us;
         }
         if lc_to_merge.start_time < self.start_time {
             self.start_time = lc_to_merge.start_time;
+            self.initial_start_time = lc_to_merge.initial_start_time;
         }
         // we mark this in the merged lc as max_timestamp_dms <- id
         lc_to_merge.max_timestamp_us = self.id as u64;
@@ -153,15 +174,13 @@ impl Lifecycle {
     pub fn update(&mut self, msg: &mut DltMessage) -> Option<Lifecycle> {
         // check whether this msg belongs to the lifecycle:
         // 0) ignore any CTRL REQUEST msgs:
-        if let Some(e) = &msg.extended_header {
-            if (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
-            (e.verb_mstp_mtin>>4 & 0x0f) == 1 { // mtin == MTIN_CTRL.CONTROL_REQUEST
-                // we dont check any params but
-                // simply add to this one
-                msg.lifecycle = self.id;
-                self.nr_msgs += 1;    
-                return None;
-            }
+        if msg.is_ctrl_request() {
+            // we dont check any params but
+            // simply add to this one
+            msg.lifecycle = self.id;
+            self.nr_msgs += 1;
+            self.nr_control_req_msgs += 1;
+            return None;
         }
 
         // 1) the calc start time needs to be no later than the current end time
@@ -177,12 +196,14 @@ impl Lifecycle {
             }
 
             // does it move the start to earlier? (e.g. has a smaller buffering delay)
+            // todo this can as well be caused by clock drift. Need to add clock_drift detection/compensation.
+            // the clock drift is relative to the recording devices time clock.
             if msg_lc_start < self.start_time {
+                /*println!(
+                    "update: lc {} #{} moving lc start_time by {}us to {} initial diff {}us",
+                    self.id, self.nr_msgs, self.start_time - msg_lc_start, msg_lc_start, self.initial_start_time - msg_lc_start
+                );*/
                 self.start_time = msg_lc_start;
-                // todo slog... println!(
-//                    "update: lc {} moving lc start_time to {}",
-//                    self.id, self.start_time
-//                );
             }
             msg.lifecycle = self.id;
             self.nr_msgs += 1;
@@ -689,8 +710,15 @@ where
     S: std::hash::BuildHasher + Clone,
     M: 'static + Clone,
 {
-    let mut sorted_lcs:std::vec::Vec<&'a Lifecycle> = lcr.iter().map(|(id,b)| { let lc = b.get_one().unwrap(); assert_eq!(&lc.id, id); lc }).collect();
-    sorted_lcs.sort_by(|a,b| a.start_time.cmp(&b.start_time));
+    let mut sorted_lcs: std::vec::Vec<&'a Lifecycle> = lcr
+        .iter()
+        .map(|(id, b)| {
+            let lc = b.get_one().unwrap();
+            assert_eq!(&lc.id, id);
+            lc
+        })
+        .collect();
+    sorted_lcs.sort_by(|a, b| a.start_time.cmp(&b.start_time));
     sorted_lcs
 }
 
@@ -826,11 +854,15 @@ mod tests {
                     msgs.push(DltMessage {
                         index: i as crate::dlt::DltMessageIndexType,
                         reception_time_us: lc_start_time + min_send_time,
-                        timestamp_dms: (timestamp_us/100)as u32,
+                        timestamp_dms: (timestamp_us / 100) as u32,
                         lifecycle: 0,
                         ecu: options.ecu,
-                        standard_header: crate::dlt::DltStandardHeader{htyp: 1, len: 0, mcnt:0},
-                        extended_header:None,
+                        standard_header: crate::dlt::DltStandardHeader {
+                            htyp: 1,
+                            len: 0,
+                            mcnt: 0,
+                        },
+                        extended_header: None,
                         payload: [].to_vec(),
                     });
                 }
@@ -1100,7 +1132,8 @@ mod tests {
     }
     impl std::cmp::PartialEq for SortedDltMessage {
         fn eq(&self, other: &Self) -> bool {
-            self.lc_start_time + self.m.timestamp_us() == other.lc_start_time + other.m.timestamp_us()
+            self.lc_start_time + self.m.timestamp_us()
+                == other.lc_start_time + other.m.timestamp_us()
         }
     }
     impl std::cmp::Ord for SortedDltMessage {
