@@ -1,6 +1,6 @@
 use serde::ser::{Serialize, Serializer};
 use std::fmt;
-use std::io::{BufRead, Write}; // SerializeStruct
+use std::io::{BufRead}; // SerializeStruct
 
 #[derive(Clone, PartialEq, Eq, Copy, Hash)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
@@ -177,7 +177,6 @@ impl DltStandardHeader {
         timestamp: Option<u32>,
         payload: &Vec<u8>,
     ) -> Result<(), std::io::Error> {
-
         let mut htyp: u8 = if big_endian {
             DLT_STD_HDR_BIG_ENDIAN
         } else {
@@ -310,7 +309,6 @@ impl DltExtendedHeader {
 
     /// serialize to a writer in DLT byte format
     fn to_write(&self, writer: &mut impl std::io::Write) -> Result<usize, std::io::Error> {
-
         let b1 = &[self.verb_mstp_mtin, self.noar];
 
         let bufs = &mut [
@@ -320,7 +318,6 @@ impl DltExtendedHeader {
         ];
         writer.write_vectored(bufs)
     }
-    
 }
 
 /// Index type for DltMessage. 32bit seem somewhat limited. but we save 4bytes in ram per msg. which alone make 16gb saved for a huge dlt file with 4mrd msgs...
@@ -337,7 +334,7 @@ pub struct DltMessage {
     pub(super) standard_header: DltStandardHeader,
     pub(super) extended_header: Option<DltExtendedHeader>, // todo optimize ecu, apid, ctid into one map<u32>
     pub(super) payload: Vec<u8>,
-    pub lifecycle: u32, // 0 = none, otherwise the id of an lifecycle
+    pub lifecycle: crate::lifecycle::LifecycleId, // 0 = none, otherwise the id of an lifecycle
 }
 
 #[cfg(test)]
@@ -354,6 +351,21 @@ impl DltMessage {
 
     pub fn mcnt(&self) -> u8 {
         self.standard_header.mcnt
+    }
+
+    pub fn is_ctrl_request(&self) -> bool {
+        match &self.extended_header {
+            Some(e) => {
+                if (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
+            (e.verb_mstp_mtin>>4 & 0x0f) == 1 // mtin == MTIN_CTRL.CONTROL_REQUEST
+                {
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
     }
 
     fn from(
@@ -400,14 +412,16 @@ impl DltMessage {
     pub fn to_write(&self, writer: &mut impl std::io::Write) -> Result<(), std::io::Error> {
         let storage_header = DltStorageHeader::from_msg(self);
         storage_header.to_write(writer)?;
-        DltStandardHeader::to_write(writer, 
-            self.standard_header.mcnt, 
+        DltStandardHeader::to_write(
+            writer,
+            self.standard_header.mcnt,
             &self.extended_header,
             self.standard_header.is_big_endian(), //  if cfg!(target_endian = "big") { true } else { false },
-            None, // ecu already in storageheader
-            None, // session_id = None, todo
-            Some(self.timestamp_dms), 
-            &self.payload)?;
+            None,                                 // ecu already in storageheader
+            None,                                 // session_id = None, todo
+            Some(self.timestamp_dms),
+            &self.payload,
+        )?;
         Ok(())
     }
 

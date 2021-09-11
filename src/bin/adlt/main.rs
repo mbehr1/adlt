@@ -73,6 +73,11 @@ fn main() -> io::Result<()> {
                     .short("o")
                     .takes_value(true)
                     .help("output messages in new DLT file")
+                ).arg(
+                    Arg::with_name("sort")
+                    .long("sort")
+                    .takes_value(false)
+                    .help("sort by timestamp. Sorts by timestamp per lifecycle.")
                 ),
         )
         .arg(

@@ -84,11 +84,11 @@ pub fn buffer_sort_elements<T>(
 /// If the lifecycle is the same only the timestamp is used. If the lifecycle is different the lifecycle start times are considered as well.
 struct SortedDltMessage {
     m: crate::dlt::DltMessage,
-    calculated_time: u64, // lc.start_time + m.timestamp_us
+    calculated_time_us: u64, // lc.start_time + m.timestamp_us
 }
 impl std::cmp::PartialEq for SortedDltMessage {
     fn eq(&self, other: &Self) -> bool {
-        self.calculated_time == other.calculated_time // todo index as well?
+        self.calculated_time_us == other.calculated_time_us // todo index as well?
     }
 }
 impl std::cmp::Ord for SortedDltMessage {
@@ -100,10 +100,10 @@ impl std::cmp::Ord for SortedDltMessage {
                 self.m.timestamp_dms.cmp(&other.m.timestamp_dms)
             }
         } else {
-            if self.calculated_time == other.calculated_time {
+            if self.calculated_time_us == other.calculated_time_us {
                 self.m.index.cmp(&other.m.index) // keep the initial order on same timestamp
             } else {
-                self.calculated_time.cmp(&other.calculated_time)
+                self.calculated_time_us.cmp(&other.calculated_time_us)
             }
         }
     }
@@ -117,8 +117,14 @@ impl std::cmp::Eq for SortedDltMessage {}
 
 /// sort DltMessages by time
 ///
-/// The messages get buffered for the specified `buffered_time_us`.
-/// #### Note Make sure that the messages are not delayed/buffered longer than the timeframe. Otherwise the result will not be sorted correctly.
+/// This function tries to calculate an upper bound for the buffering delay and buffers the message within that time
+/// and sorts messages older than that delay.
+/// The buffering delay is calculated over a sliding window of `windows_size_secs` and a minimum time of
+/// `min_buffer_delay_us` is added.
+/// The algorithm assumes that the buffering delays get only shorter within a lifecycle or increase maximum by `min_buffer_delay_us` within the sliding window! Thus you should specify a reasonable `min_buffer_delay_us`.
+/// The algorithm defines for each lifecycle the max buffer delay within the last `windows_size_secs` seconds of recording time and
+/// buffers the messages for at least that timeframe.
+/// #### Note Make sure that the messages are not delayed/buffered longer than the `min_buffer_delay_us`. Otherwise the result will not be sorted correctly.
 /// #### Note The lifecycle start times are not changed during the processing but are cached with the first value. So if the times slightly change any messages from parallel lifecycles will be wrongly sorted.
 pub fn buffer_sort_messages<'a, M, S>(
     inflow: Receiver<crate::dlt::DltMessage>,
@@ -129,7 +135,8 @@ pub fn buffer_sort_messages<'a, M, S>(
         M,
         S,
     >,
-    buffer_time_us: u64,
+    windows_size_secs: u8,
+    min_buffer_delay_us: u64,
 ) -> Result<(), std::sync::mpsc::SendError<crate::dlt::DltMessage>>
 where
     S: std::hash::BuildHasher + Clone,
@@ -152,7 +159,7 @@ where
                             Some(l) => l.start_time,
                             None => 0,
                         }
-                    },
+                    }
                     None => 0,
                 };
                 lc_map.insert(*x, start_time);
@@ -162,27 +169,156 @@ where
         }
     };
 
+    // vector with buffering delays:
+    struct MaxBufferDelayEntry {
+        start_time: u64, // start reception time for this entry
+        max_buffering_delay: u64,
+    }
+
+    // we need to keep the vector with max buffering delays per ecu/lifecycle
+    // so we store a map with ecu as key and a tuple of (lifecycle_id, vector<MaxBufferDelayEntry>, max_buffering_delay) as value
+    let mut max_buffering_delays = std::collections::HashMap::<
+        crate::dlt::DltChar4,
+        (
+            crate::lifecycle::LifecycleId,
+            std::collections::VecDeque<MaxBufferDelayEntry>,
+            u64,
+        ),
+    >::new();
+    let mut max_buffer_time_us = min_buffer_delay_us;
+
+    let mut update_max_buffering_delays =
+        |max_buffer_time_us: u64,
+         ecu: &crate::dlt::DltChar4,
+         lifecycle_id: &crate::lifecycle::LifecycleId,
+         msg_reception_time_us: u64,
+         buffering_delay: u64| {
+            let mut entry = max_buffering_delays.entry(*ecu).or_insert_with(|| {
+                (
+                    *lifecycle_id,
+                    std::collections::VecDeque::with_capacity(windows_size_secs as usize),
+                    0,
+                )
+            });
+            // is it from an older lifecycle?
+            let mut recalc_max_buffer_time_us = false;
+
+            if entry.0 != *lifecycle_id {
+                entry.1.clear();
+                entry.0 = *lifecycle_id;
+                entry.2 = buffering_delay;
+                recalc_max_buffer_time_us = true;
+            }
+            let mut recalc_buffering_delay = false;
+            // from same lifecycle now
+            let insert_new = entry.1.len() == 0
+                || entry.1.back().unwrap().start_time + crate::utils::US_PER_SEC
+                    < msg_reception_time_us;
+            if insert_new {
+                // do we need to remove one first?
+                if entry.1.len() == windows_size_secs as usize {
+                    if entry.1.front().unwrap().max_buffering_delay == entry.2 {
+                        recalc_buffering_delay = true; // we removed the cur. max
+                    }
+                    entry.1.pop_front(); // remove oldest
+                }
+                // now insert new one
+                entry.1.push_back(MaxBufferDelayEntry {
+                    start_time: msg_reception_time_us,
+                    max_buffering_delay: buffering_delay,
+                });
+                if buffering_delay > entry.2 {
+                    recalc_buffering_delay = false;
+                    entry.2 = buffering_delay;
+                }
+                recalc_max_buffer_time_us = true; // could be optimized but we do need a recheck every sec anyhow
+            } else {
+                // update
+                let last = entry.1.back_mut().unwrap();
+                if last.max_buffering_delay < buffering_delay {
+                    last.max_buffering_delay = buffering_delay;
+                    if buffering_delay > entry.2 {
+                        recalc_buffering_delay = false;
+                        recalc_max_buffer_time_us = true;
+                        entry.2 = buffering_delay;
+                    }
+                }
+            }
+            if recalc_buffering_delay {
+                entry.2 = entry
+                    .1
+                    .iter()
+                    .max_by_key(|x| x.max_buffering_delay)
+                    .unwrap()
+                    .max_buffering_delay;
+                recalc_max_buffer_time_us = true;
+            }
+            if recalc_max_buffer_time_us {
+                let new_max_buffer_time_us = min_buffer_delay_us +  {
+                    let x = max_buffering_delays
+                        .iter()
+                        .max_by_key(|x| {
+                            if x.1 .1.front().unwrap().start_time + (windows_size_secs-1) as u64 * crate::utils::US_PER_SEC > msg_reception_time_us {
+                                1000 * crate::utils::US_PER_SEC
+                            } else {
+                                x.1 .2
+                            }
+                        })
+                        .unwrap();
+                    if x.1 .1.front().unwrap().start_time + (windows_size_secs-1) as u64 * crate::utils::US_PER_SEC > msg_reception_time_us {
+                        1000 * crate::utils::US_PER_SEC
+                    } else {
+                        x.1 .2
+                    }
+                };
+                if new_max_buffer_time_us != max_buffer_time_us && new_max_buffer_time_us > min_buffer_delay_us*2{
+                    println!("max_buffer_time_us={}", new_max_buffer_time_us);
+                }
+                new_max_buffer_time_us
+            } else {
+                max_buffer_time_us
+            }
+        };
+
     for m in inflow {
-        let last_reception_time_us = m.reception_time_us;
+        let msg_reception_time_us = m.reception_time_us;
         // add message sorted into buffer
-        let calculated_time: u64 = if m.is_ctrl_request() {
-            if m.index<100 {println!("m.is_ctrl_request!");}
+        let mut calculated_time_us: u64 = if m.is_ctrl_request() {
             m.reception_time_us
         } else {
             get_lc_start_time(m.lifecycle) + m.timestamp_us()
         };
-        let sm = SortedDltMessage { m, calculated_time };
-        let idx = buffer.binary_search(&sm).unwrap_or_else(|x| x); // this is not stable but shouldn't matter as we added index to cmp::Ord
-        if sm.m.index < 100 {
-            println!("adding calc_time={} lrt={} buf={} idx={} len={}", calculated_time, last_reception_time_us, last_reception_time_us-calculated_time, idx, buffer.len());
-        } 
+        // assert!(calculated_time_us <= msg_reception_time_us, "m failed {:?} is_ctrl_request()={} calctime={} lc_start_time={}", m, m.is_ctrl_request(), calculated_time_us, get_lc_start_time(m.lifecycle));
+        if calculated_time_us > msg_reception_time_us {
+            // this can happen in case of clock drift or due to lc_start_time not adjusted
+            //println!("calc>recp={}", calculated_time_us - msg_reception_time_us);
+            calculated_time_us = msg_reception_time_us;
+        }
+        let buffering_delay = msg_reception_time_us - calculated_time_us;
+        // update max_buffering_delays:
+        max_buffer_time_us = update_max_buffering_delays(
+            max_buffer_time_us,
+            &m.ecu,
+            &m.lifecycle,
+            msg_reception_time_us,
+            buffering_delay,
+        );
 
+        // println!("max_buffer_time_us={}", max_buffer_time_us);
+
+        let sm = SortedDltMessage {
+            m,
+            calculated_time_us,
+        };
+        let idx = buffer.binary_search(&sm).unwrap_or_else(|x| x); // this is not stable but shouldn't matter as we added index to cmp::Ord
         buffer.insert(idx, sm);
-        // remove all messages from buffer that have a time more than buffer_time_us earlier
+
+        // remove all messages from buffer that have a time more than max_buffer_time_us earlier
+
         loop {
             match buffer.front() {
                 Some(sm) => {
-                    if sm.calculated_time + buffer_time_us < last_reception_time_us {
+                    if sm.calculated_time_us + max_buffer_time_us < msg_reception_time_us {
                         let sm2 = buffer.pop_front().unwrap();
                         outflow.send(sm2.m)?;
                     } else {
