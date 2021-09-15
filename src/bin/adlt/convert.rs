@@ -1,7 +1,8 @@
 use chrono::{Local, TimeZone};
 use slog::{crit, debug, info, warn, error};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek};
+use std::io::prelude::*;
+use std::io::{BufRead, BufReader, Seek, BufWriter};
 use std::sync::mpsc::channel;
 
 enum OutputStyle {
@@ -124,7 +125,10 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     };
     let t4 = std::thread::spawn(move || {
         let mut output_file = if let Some(s) = output_file {
-            std::fs::File::create(s)
+            match std::fs::File::create(s) {
+                Ok(f) => Ok(BufWriter::new(f)),
+                Err(e) => Err(e),
+            }
         } else {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -164,7 +168,9 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
             }
         }
         if output_file.is_ok() {
-            drop(output_file.unwrap()); // close, happens anyhow autom...
+            let mut writer = output_file.unwrap();
+            writer.flush().unwrap();
+            drop(writer); // close, happens anyhow autom...
         }
     });
 
