@@ -14,6 +14,25 @@ pub fn utc_time_from_us(time_us: u64) -> chrono::NaiveDateTime {
     .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp(0, 0))
 }
 
+/// output a buffer as hex dump to a Writer.
+/// Each byte is output as two lower-case digits.
+/// A space is output between each byte.
+/// e.g. "0f 00"
+pub fn buf_as_hex_to_write(
+    writer: &mut impl std::fmt::Write,
+    buf: &[u8],
+) -> Result<(), std::fmt::Error> {
+    for i in 0..buf.len() {
+        if i > 0 {
+            write!(writer, " {:02x}", buf[i])?;
+        } else {
+            write!(writer, "{:02x}", buf[i])?;
+        }
+    }
+
+    Ok(())
+}
+
 pub enum BufferElementsAmount {
     NumberElements(usize),
 }
@@ -254,24 +273,32 @@ where
                 recalc_max_buffer_time_us = true;
             }
             if recalc_max_buffer_time_us {
-                let new_max_buffer_time_us = min_buffer_delay_us +  {
+                let new_max_buffer_time_us = min_buffer_delay_us + {
                     let x = max_buffering_delays
                         .iter()
                         .max_by_key(|x| {
-                            if x.1 .1.front().unwrap().start_time + (windows_size_secs-1) as u64 * crate::utils::US_PER_SEC > msg_reception_time_us {
+                            if x.1 .1.front().unwrap().start_time
+                                + (windows_size_secs - 1) as u64 * crate::utils::US_PER_SEC
+                                > msg_reception_time_us
+                            {
                                 1000 * crate::utils::US_PER_SEC
                             } else {
                                 x.1 .2
                             }
                         })
                         .unwrap();
-                    if x.1 .1.front().unwrap().start_time + (windows_size_secs-1) as u64 * crate::utils::US_PER_SEC > msg_reception_time_us {
+                    if x.1 .1.front().unwrap().start_time
+                        + (windows_size_secs - 1) as u64 * crate::utils::US_PER_SEC
+                        > msg_reception_time_us
+                    {
                         1000 * crate::utils::US_PER_SEC
                     } else {
                         x.1 .2
                     }
                 };
-                if new_max_buffer_time_us != max_buffer_time_us && new_max_buffer_time_us > min_buffer_delay_us*2{
+                if new_max_buffer_time_us != max_buffer_time_us
+                    && new_max_buffer_time_us > min_buffer_delay_us * 2
+                {
                     println!("max_buffer_time_us={}", new_max_buffer_time_us);
                 }
                 new_max_buffer_time_us
@@ -343,6 +370,21 @@ mod tests {
     use crate::utils::*;
     use std::sync::mpsc::channel;
     //    use std::time::Instant;
+
+    #[test]
+    fn buf_as_hex() {
+        let mut s = String::new();
+        buf_as_hex_to_write(&mut s, &[]).unwrap();
+        assert_eq!(s.len(), 0);
+
+        buf_as_hex_to_write(&mut s, &[0x0f as u8]).unwrap();
+        assert_eq!(s, "0f");
+
+        let mut s = String::new();
+        buf_as_hex_to_write(&mut s, &[0x0f as u8, 0x00 as u8, 0xff as u8]).unwrap();
+        assert_eq!(s, "0f 00 ff");
+    }
+
     #[test]
     fn buffer_messages() {
         let (tx, rx) = channel();
