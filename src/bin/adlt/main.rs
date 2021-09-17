@@ -17,13 +17,13 @@ fn main() -> io::Result<()> {
         .about("Tool to handle automotive diagnostic log- and trace- (DLT) files.")
         .subcommand(
             SubCommand::with_name("convert")
-                .arg(
+                /* .arg(
                     Arg::with_name("hex")
                         .short("x")
                         .group("style")
                         .display_order(2)
                         .help("print DLT file; payload as hex"),
-                )
+                )*/
                 .arg(
                     Arg::with_name("ascii")
                         .short("a")
@@ -31,13 +31,13 @@ fn main() -> io::Result<()> {
                         .display_order(1)
                         .help("print DLT file; payload as ASCII"),
                 )
-                .arg(
+                /* .arg(
                     Arg::with_name("mixed")
                         .short("m")
                         .group("style")
                         .display_order(1)
                         .help("print DLT file; payload as ASCII and hex"),
-                )
+                )*/
                 .arg(
                     Arg::with_name("headers")
                         .short("s")
