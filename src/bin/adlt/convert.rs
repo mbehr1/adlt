@@ -92,8 +92,6 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     let mut input_file_names_iter = input_file_names.iter();
     let mut last_data = false;
 
-    let default_apid_ctid = adlt::dlt::DltChar4::from_str("----").unwrap();
-
     // setup (thread) filter chain:
     let (tx, rx) = channel(); // msg -> parse_lifecycles (t2)
     let (tx2, rx2) = channel(); // parse_lifecycles -> buffer_sort_messages (t3)
@@ -136,6 +134,8 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
             ))
         };
 
+        let mut output_screen = std::io::stdout();
+
         for msg in t4_input {
             // lifecycle filtered?
             if filter_lc_ids.len() > 0 && !filter_lc_ids.contains(&msg.lifecycle) {
@@ -146,16 +146,14 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 // if print header, ascii, hex or mixed: todo
                 match output_style {
                     OutputStyle::HeaderOnly => {
-                        println!("{index} {reception_time} {timestamp_dms:10} {mcnt:03} {ecu} {apid:-<4} {ctid:-<4} {ctrlr}",
-                            index = msg.index,
-                            reception_time = Local.from_utc_datetime(&msg.reception_time()).format("%Y/%m/%d %H:%M:%S%.6f"),
-                            timestamp_dms= msg.timestamp_dms,
-                            mcnt = msg.mcnt(),
-                            ecu = msg.ecu,
-                            apid=msg.apid().unwrap_or(&default_apid_ctid).to_string(),
-                            ctid=msg.ctid().unwrap_or(&default_apid_ctid).to_string(),
-                            ctrlr=if msg.is_ctrl_request() {"CTRL_REQ"} else {""}
-                        );
+                        msg.header_as_text_to_write(&mut output_screen).unwrap(); // todo
+                        output_screen.write(&['\n' as u8]).unwrap();
+                    }
+                    OutputStyle::Ascii => {
+                        msg.header_as_text_to_write(&mut output_screen).unwrap(); // todo
+                        // output_screen.write(&[' ' as u8]).unwrap();
+                        writeln!(output_screen, " [{}]", msg.payload_as_text()); // todo change to write directly to Writer
+                        // output_screen.write(&['\n' as u8]).unwrap();
                     }
                     _ => {
                         // todo...
