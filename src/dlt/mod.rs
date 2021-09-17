@@ -1,6 +1,9 @@
+use chrono::{Local, TimeZone};
 use serde::ser::{Serialize, Serializer};
+use std::convert::TryInto;
 use std::fmt;
-use std::io::{BufRead}; // SerializeStruct
+use std::fmt::Write;
+use std::io::BufRead; // SerializeStruct
 
 #[derive(Clone, PartialEq, Eq, Copy, Hash)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
@@ -20,7 +23,7 @@ impl DltChar4 {
             return None;
         }
         let bytes = astr.as_bytes();
-        let mut chars: [u8; 4] = [0, 0, 0, 0];
+        let mut chars: [u8; 4] = [0, 0, 0, 0]; // [Dlt308]
         for n in 0..std::cmp::min(bytes.len(), 4) {
             chars[n] = bytes[n];
         }
@@ -141,6 +144,8 @@ const DLT_STD_HDR_HAS_ECU_ID: u8 = 1 << 2;
 const DLT_STD_HDR_HAS_SESSION_ID: u8 = 1 << 3;
 const DLT_STD_HDR_HAS_TIMESTAMP: u8 = 1 << 4;
 
+const DLT_STD_HDR_VERSION: u8 = 0x1 << 5; // 3 bits (5,6,7) max.  [Dlt299]
+
 #[derive(Debug)]
 pub struct DltStandardHeader {
     pub htyp: u8,
@@ -157,11 +162,18 @@ impl DltStandardHeader {
         let sh = DltStandardHeader {
             htyp,
             mcnt: buf[1],
-            len: u16::from_be_bytes([buf[2], buf[3]]), // all big endian
+            len: u16::from_be_bytes([buf[2], buf[3]]), // all big endian includes std.header, ext header and the payload
         };
-        if sh.is_big_endian() {
-            eprintln!("DltStandardHeader with big endian!");
+        // [Dlt104] check the version number. We expect 0x1 currently
+        let dlt_vers = (htyp >> 5) & 0x07;
+        match dlt_vers {
+            1 => (),
+            _ => {
+                eprintln!("DltStandardHeader with unsupported version {}!", dlt_vers);
+                // todo return None?
+            }
         }
+
         Some(sh)
     }
 
@@ -178,9 +190,9 @@ impl DltStandardHeader {
         payload: &Vec<u8>,
     ) -> Result<(), std::io::Error> {
         let mut htyp: u8 = if big_endian {
-            DLT_STD_HDR_BIG_ENDIAN
+            DLT_STD_HDR_VERSION | DLT_STD_HDR_BIG_ENDIAN
         } else {
-            0
+            DLT_STD_HDR_VERSION
         };
         let mut len: u16 = DLT_MIN_STD_HEADER_SIZE as u16;
         if ecu.is_some() {
@@ -286,6 +298,98 @@ impl DltStandardHeader {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum DltMessageLogType {
+    Fatal = 1,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Verbose,
+}
+
+impl DltMessageLogType {
+    fn from(mtin: u8) -> DltMessageLogType {
+        match mtin {
+            2 => DltMessageLogType::Error,
+            3 => DltMessageLogType::Warn,
+            4 => DltMessageLogType::Info,
+            5 => DltMessageLogType::Debug,
+            6 => DltMessageLogType::Verbose,
+            1 | _ => DltMessageLogType::Fatal,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum DltMessageTraceType {
+    Variable = 1,
+    FunctionIn,
+    FunctionOut,
+    State,
+    Vfb,
+}
+
+impl DltMessageTraceType {
+    fn from(mtin: u8) -> DltMessageTraceType {
+        match mtin {
+            2 => DltMessageTraceType::FunctionIn,
+            3 => DltMessageTraceType::FunctionOut,
+            4 => DltMessageTraceType::State,
+            5 => DltMessageTraceType::Vfb,
+            1 | _ => DltMessageTraceType::Variable,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum DltMessageNwType {
+    Ipc = 1,
+    Can,
+    Flexray,
+    Most,
+    Ethernet,
+    SomeIp,
+}
+
+impl DltMessageNwType {
+    fn from(mtin: u8) -> DltMessageNwType {
+        match mtin {
+            2 => DltMessageNwType::Can,
+            3 => DltMessageNwType::Flexray,
+            4 => DltMessageNwType::Most,
+            5 => DltMessageNwType::Ethernet,
+            6 => DltMessageNwType::SomeIp,
+            1 | _ => DltMessageNwType::Ipc,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum DltMessageControlType {
+    Request = 1,
+    Response,
+    Time,
+}
+
+impl DltMessageControlType {
+    fn from(mtin: u8) -> DltMessageControlType {
+        match mtin {
+            2 => DltMessageControlType::Response,
+            3 => DltMessageControlType::Time,
+            1 | _ => DltMessageControlType::Request,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum DltMessageType {
+    Log(DltMessageLogType),
+    AppTrace(DltMessageTraceType),
+    NwTrace(DltMessageNwType),
+    Control(DltMessageControlType),
+}
+
 #[derive(Debug)]
 pub struct DltExtendedHeader {
     pub(super) verb_mstp_mtin: u8,
@@ -305,6 +409,25 @@ impl DltExtendedHeader {
             ctid: DltChar4::from_buf(&buf[6..10]),
         };
         Some(eh)
+    }
+
+    /// is verbose message?
+    pub fn is_verbose(&self) -> bool {
+        self.verb_mstp_mtin & 0x01 == 0x01
+    }
+
+    /// return message type info
+    /// combined mstp/mtin info is returned
+    /// for now invalid values lead to Log()
+    pub fn mstp(&self) -> DltMessageType {
+        let mstp = (self.verb_mstp_mtin >> 1) & 0x7;
+        let mtin = (self.verb_mstp_mtin >> 4) & 0xf;
+        match mstp {
+            1 => DltMessageType::AppTrace(DltMessageTraceType::from(mtin)),
+            2 => DltMessageType::NwTrace(DltMessageNwType::from(mtin)),
+            3 => DltMessageType::Control(DltMessageControlType::from(mtin)),
+            0 | _ => DltMessageType::Log(DltMessageLogType::from(mtin)),
+        }
     }
 
     /// serialize to a writer in DLT byte format
@@ -340,6 +463,50 @@ pub struct DltMessage {
 #[cfg(test)]
 static NEXT_TEST_TIMESTAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+static DEFAULT_APID_CTID: DltChar4 = DltChar4 {
+    char4: ['-' as u8, '-' as u8, '-' as u8, '-' as u8],
+};
+
+static LOG_LEVEL_STRS: [&str; 7] = ["", "fatal", "error", "warn", "info", "debug", "verbose"];
+static TRACE_TYPE_STRS: [&str; 6] = ["", "variable", "func_in", "func_out", "state", "vfb"];
+static NW_TYPE_STRS: [&str; 7] = ["", "ipc", "can", "flexray", "most", "ethernet", "someip"];
+static CONTROL_TYPE_STRS: [&str; 4] = ["", "request", "response", "time"];
+static SERVICE_ID_NAMES: [&str; 21] = [
+    "",
+    "set_log_level",
+    "set_trace_status",
+    "get_log_info",
+    "get_default_log_level",
+    "store_config",
+    "reset_to_factory_default",
+    "set_com_interface_status",
+    "set_com_interface_max_bandwidth",
+    "set_verbose_mode",
+    "set_message_filtering",
+    "set_timing_packets",
+    "get_local_time",
+    "use_ecu_id",
+    "use_session_id",
+    "use_timestamp",
+    "use_extended_header",
+    "set_default_log_level",
+    "set_default_trace_status",
+    "get_software_version",
+    "message_buffer_overflow",
+];
+
+static CTRL_RESPONSE_STRS: [&str; 9] = [
+    "ok",
+    "not_supported",
+    "error",
+    "perm_denied",
+    "warning",
+    "",
+    "",
+    "",
+    "no_matching_context_id",
+];
+
 impl DltMessage {
     pub fn timestamp_us(&self) -> u64 {
         return self.timestamp_dms as u64 * 100;
@@ -353,11 +520,22 @@ impl DltMessage {
         self.standard_header.mcnt
     }
 
+    /// return the message type based on the extended header info.
+    /// If the message has no extended header Log/Fatal is used as default.
+    pub fn mstp(&self) -> DltMessageType {
+        match &self.extended_header {
+            Some(e) => e.mstp(),
+            None => DltMessageType::Log(DltMessageLogType::Fatal), // using this as default
+        }
+    }
+
     pub fn is_ctrl_request(&self) -> bool {
         match &self.extended_header {
             Some(e) => {
+                // could return e.mstp() == DltMessageType::Control(DltMessageControlType::Request)
                 if (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
-            (e.verb_mstp_mtin>>4 & 0x0f) == 1 // mtin == MTIN_CTRL.CONTROL_REQUEST
+            (e.verb_mstp_mtin>>4 & 0x0f) == 1
+                // mtin == MTIN_CTRL.CONTROL_REQUEST
                 {
                     true
                 } else {
@@ -365,6 +543,22 @@ impl DltMessage {
                 }
             }
             None => false,
+        }
+    }
+
+    /// return number of args from extended header. Returns 0 if no ext header is avail.
+    pub fn noar(&self) -> u8 {
+        match &self.extended_header {
+            Some(e) => e.noar,
+            None => 0,
+        }
+    }
+
+    /// return whether message has verbose mode (from ext header). false if no ext header.
+    pub fn is_verbose(&self) -> bool {
+        match &self.extended_header {
+            Some(e) => e.is_verbose(),
+            None => false, // [Dlt096]
         }
     }
 
@@ -425,6 +619,259 @@ impl DltMessage {
         Ok(())
     }
 
+    pub fn header_as_text_to_write(
+        &self,
+        writer: &mut impl std::io::Write,
+    ) -> Result<(), std::io::Error> {
+        write!(
+            writer,
+            "{index} {reception_time} {timestamp_dms:10} {mcnt:03} {ecu:-<4} {apid:-<4} {ctid:-<4} ",
+            index = self.index,
+            reception_time = Local
+                .from_utc_datetime(&self.reception_time())
+                .format("%Y/%m/%d %H:%M:%S%.6f"),
+            timestamp_dms = self.timestamp_dms,
+            mcnt = self.mcnt(),
+            ecu = self.ecu,
+            apid = self.apid().unwrap_or(&DEFAULT_APID_CTID).to_string(),
+            ctid = self.ctid().unwrap_or(&DEFAULT_APID_CTID).to_string(),
+        );
+        if self.extended_header.is_some() {
+            match self.mstp() {
+                DltMessageType::Control(ct) => {
+                    write!(writer, "control {type}", type = CONTROL_TYPE_STRS[ct as usize]);
+                    // todo
+                }
+                DltMessageType::AppTrace(tt) => {
+                    write!(writer, "app_trace {type}", type = TRACE_TYPE_STRS[tt as usize]);
+                    // todo
+                }
+                DltMessageType::NwTrace(nt) => {
+                    write!(writer, "nw_trace {type}", type = NW_TYPE_STRS[nt as usize]);
+                    // todo
+                }
+                DltMessageType::Log(lt) => {
+                    write!(writer, "log {level}", level = LOG_LEVEL_STRS[lt as usize]);
+                }
+            }
+            if self.is_verbose() {
+                writer.write(&[' ' as u8, 'V' as u8])?;
+            } else {
+                writer.write(&[' ' as u8, 'N' as u8])?;
+            }
+        } else {
+            write!(writer, "--- --- N -");
+        }
+
+        write!(writer, " {}", self.noar());
+
+        Ok(())
+    }
+
+    pub fn payload_as_text(&self) -> String {
+        let mut text = String::new(); // can we guess the capacity upfront? (e.g. payload len *3?)
+
+        let mut args = self.into_iter();
+        if self.is_verbose() {
+            let mut nr_arg = 0;
+            for arg in args {
+                if nr_arg > 0 {
+                    write!(text, " ");
+                }
+                nr_arg += 1;
+                let _tyle = arg.type_info & 0x0f;
+                let is_bool = arg.type_info & 0x10u32 > 0;
+                let is_sint = arg.type_info & 0x20u32 > 0;
+                let is_uint = arg.type_info & 0x40u32 > 0;
+                let is_floa = arg.type_info & 0x80u32 > 0;
+                let _is_aray = arg.type_info & 0x100u32 > 0;
+                let is_strg = arg.type_info & 0x200u32 > 0;
+                let is_rawd = arg.type_info & 0x400u32 > 0;
+
+                if is_bool {
+                    let val = arg.payload_raw[0];
+                    if val > 0 {
+                        write!(text, "true");
+                    } else {
+                        write!(text, "false");
+                    }
+                }
+                if is_uint {
+                    write!(
+                        text,
+                        "<uint {} {:?}>",
+                        arg.payload_raw.len(),
+                        arg.payload_raw
+                    );
+                    match arg.payload_raw.len() {
+                        1 => {
+                            let val: u8 = arg.payload_raw[0];
+                            write!(text, "{}", val);
+                        }
+                        2 => {
+                            let val: u16 = if arg.is_big_endian {
+                                u16::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                u16::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val);
+                        }
+                        4 => {
+                            let val: u32 = if arg.is_big_endian {
+                                u32::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                u32::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val);
+                        }
+                        8 => {
+                            let val: u64 = if arg.is_big_endian {
+                                u64::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                u64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val);
+                        }
+                        _ => (),
+                    };
+                }
+                if is_sint {
+                    match arg.payload_raw.len() {
+                        1 => {
+                            let val: i8 = arg.payload_raw[0] as i8;
+                            write!(text, "{}", val);
+                        }
+                        2 => {
+                            let val: i16 = if arg.is_big_endian {
+                                i16::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                i16::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val);
+                        }
+                        4 => {
+                            let val: i32 = if arg.is_big_endian {
+                                i32::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                i32::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val);
+                        }
+                        8 => {
+                            let val: i64 = if arg.is_big_endian {
+                                i64::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val);
+                        }
+                        _ => (),
+                    };
+                }
+                if is_floa {
+                    write!(text, "<floa>");
+                }
+                if is_rawd {
+                    write!(text, "<rawd>");
+                }
+                if is_strg {
+                    let scod = (arg.type_info >> 15) & 0x03; // 0 = ascii, 1 = utf
+
+                    match scod {
+                        0 | 1 => {
+                            // use utf8 for ascii as well. it's somewhat wrong but we'd need to findout the proper codepage first! todo!
+                            // they should be zero terminated
+                            if arg.payload_raw.len() > 1 {
+                                let s = String::from_utf8(
+                                    arg.payload_raw
+                                        .get(0..arg.payload_raw.len() - 1)
+                                        .unwrap()
+                                        .to_vec(),
+                                ); // todo optimize str sufficient! str::from_utf8
+                                match s {
+                                    Ok(s) => {
+                                        // need to replace the \n to a ' ' and remove other junk chars... todo use faster methods
+                                        let s = s.replace("\n", " ");
+                                        write!(text, "{}", s);
+                                    }
+                                    Err(e) => {
+                                        write!(text, "!utf8-conv error {:?}", e);
+                                    }
+                                };
+                            }
+                        }
+                        _ => {
+                            write!(text, "<scod unknown {}>", scod);
+                        }
+                    }
+                }
+            }
+        } else {
+            // non-verbose
+            let message_id_arg = args.next();
+            let message_id = match message_id_arg {
+                Some(a) => {
+                    if a.is_big_endian {
+                        u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
+                    } else {
+                        u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
+                    }
+                }
+                None => 0,
+            };
+            let payload_arg = args.next();
+            let payload = match payload_arg {
+                Some(a) => a.payload_raw,
+                None => &[],
+            };
+
+            match self.mstp() {
+                DltMessageType::Control(ct) => {
+                    if message_id > 0 && message_id < SERVICE_ID_NAMES.len() as u32 {
+                        write!(&mut text, "{}", SERVICE_ID_NAMES[message_id as usize]);
+                    } else if ct != DltMessageControlType::Time {
+                        write!(&mut text, "service({})", message_id);
+                    }
+
+                    if payload.len() > 0 {
+                        write!(&mut text, ", ");
+                    }
+
+                    match ct {
+                        DltMessageControlType::Response => {
+                            // todo dump first byte as response result
+                            if payload.len() > 0 {
+                                let retval = payload.get(0).unwrap();
+                                if *retval < 5u8 || *retval == 8u8 {
+                                    write!(&mut text, "{}", CTRL_RESPONSE_STRS[*retval as usize]);
+                                } else {
+                                    write!(&mut text, "{:02x}", *retval);
+                                }
+                                write!(&mut text, ", ");
+                                if payload.len() > 1 {
+                                    crate::utils::buf_as_hex_to_write(
+                                        &mut text,
+                                        payload.get(1..).unwrap(),
+                                    )
+                                    .unwrap(); // todo
+                                }
+                            }
+                        }
+                        _ => {
+                            crate::utils::buf_as_hex_to_write(&mut text, payload).unwrap();
+                            // todo
+                        }
+                    }
+                }
+                _ => {
+                    write!(&mut text, "{} {:x?}", message_id, &payload);
+                }
+            }
+        }
+
+        text
+    }
+
     #[cfg(test)]
     pub fn for_test() -> DltMessage {
         let timestamp_us =
@@ -464,6 +911,222 @@ impl DltMessage {
     }
 }
 
+pub struct DltMessageArgIterator<'a> {
+    msg: &'a DltMessage,
+    is_verbose: bool,
+    is_big_endian: bool,
+    index: usize,
+}
+
+#[derive(Debug)]
+pub struct DltArg<'a> {
+    type_info: u32,        // in host endianess already
+    is_big_endian: bool,   // for the payload raw
+    payload_raw: &'a [u8], // data within is
+}
+
+impl<'a> IntoIterator for &'a DltMessage {
+    type Item = DltArg<'a>; // &'a [u8];
+    type IntoIter = DltMessageArgIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DltMessageArgIterator {
+            msg: self,
+            is_verbose: self.is_verbose(),
+            is_big_endian: self.is_big_endian(),
+            index: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for DltMessageArgIterator<'a> {
+    type Item = DltArg<'a>; // &'a [u8];
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.is_verbose {
+            // we need at least the typeinfo (4 byte) [Dlt459]
+            // todo [Dlt421] only for MSTP Log or AppTrace!
+            if self.msg.payload.len() >= self.index + 4 {
+                let type_info = if self.is_big_endian {
+                    u32::from_be_bytes(
+                        self.msg
+                            .payload
+                            .get(self.index..self.index + 4)
+                            .unwrap()
+                            .try_into()
+                            .unwrap(),
+                    )
+                } else {
+                    u32::from_le_bytes(
+                        self.msg
+                            .payload
+                            .get(self.index..self.index + 4)
+                            .unwrap()
+                            .try_into()
+                            .unwrap(),
+                    )
+                };
+                self.index += 4;
+
+                // determine length
+                let tyle = type_info & 0x0f; // [Dlt354] 1 = 8, 2 = 16, 3 = 32, 4 = 64, 5 = 128bit
+                let mut len: usize = match tyle {
+                    1 => 1,
+                    2 => 2,
+                    3 => 4,
+                    4 => 8,
+                    5 => 16,
+                    _ => 0,
+                };
+
+                // vari info? (for STRG it's after the str len...)
+                if type_info & (0x1u32 << 11) != 0 {
+                    // todo e.g. [Dlt369] unsigned 16-bit int. following as first payload, then the name, then the bool!
+                    assert!(false, "type_info VARI not supported yet!");
+                }
+                // fixp set?
+                if type_info & (0x1u32 << 12) != 0 {
+                    // todo e.g. [Dlt386] 32-bit float, then tyle signed int as offset.
+                    assert!(false, "type_info FIXP not supported yet!");
+                }
+
+                if type_info & 0x10u32 != 0 {
+                    // bool
+                    if len != 1 {
+                        // todo investigate why some libs use bool with len 0 lsm,nsc...
+                        if len != 0 {
+                            println!(
+                                "type bool expects to have len 1 has len {} index={} msg={:?}",
+                                len, self.index, self.msg
+                            );
+                        }
+                        len = 1;
+                    }
+                } else if type_info & (0x60u32) != 0 {
+                    // SINT or UINT
+                    assert!(len > 0);
+                } else if type_info & (0x80u32) != 0 {
+                    // FLOA
+                    assert!(
+                        len == 4 || len == 8,
+                        "unexpected len={} for FLOA type_info=0x{:x} index={}, msg={:?}",
+                        len,
+                        type_info,
+                        self.index,
+                        self.msg
+                    );
+                } else if type_info & (0x03u32 << 9) != 0 {
+                    // STRG bit9, rawd bit10, aray bit8, floa bit7, uint bit6, sint bit5, bool bit4, trai bit 13, stru bit 14
+                    // bit 15-17 string coding (scod), 0 = ascii, 1 = utf-8, 2-7 reserved
+                    // 16 bit uint with length of string + term. char first
+                    // for VARI only here...
+                    // then the payload
+                    if self.msg.payload.len() < self.index + 2 {
+                        return None;
+                    }
+                    len = if self.is_big_endian {
+                        u16::from_be_bytes(
+                            self.msg
+                                .payload
+                                .get(self.index..self.index + 2)
+                                .unwrap()
+                                .try_into()
+                                .unwrap(),
+                        ) as usize
+                    } else {
+                        u16::from_le_bytes(
+                            self.msg
+                                .payload
+                                .get(self.index..self.index + 2)
+                                .unwrap()
+                                .try_into()
+                                .unwrap(),
+                        ) as usize
+                    };
+                    self.index += 2;
+
+                    // now the len
+                    let to_ret = if len > 0 && self.msg.payload.len() >= self.index + len {
+                        Some(DltArg {
+                            type_info,
+                            is_big_endian: self.is_big_endian,
+                            payload_raw: self
+                                .msg
+                                .payload
+                                .get(self.index..self.index + len)
+                                .unwrap(),
+                        })
+                    } else {
+                        assert!(
+                            false,
+                            "not enough payload for the string. expected len={} got={}",
+                            len,
+                            self.msg.payload.len() - self.index
+                        );
+                        None
+                    };
+                    self.index += len; // we incr. in any case
+                    return to_ret;
+                } else {
+                    assert!(
+                        false,
+                        "type_info=0x{:x} unhandled! is_big_endian={}, index={}, msg={:?}",
+                        type_info, self.is_big_endian, self.index, self.msg
+                    );
+                }
+                let to_ret = if len > 0 && self.msg.payload.len() >= self.index + len {
+                    Some(DltArg {
+                        type_info,
+                        is_big_endian: self.is_big_endian,
+                        payload_raw: self.msg.payload.get(self.index..self.index + len).unwrap(),
+                    })
+                } else {
+                    None
+                };
+                self.index += len; // we incr. in any case
+                return to_ret;
+            } else {
+                if self.msg.payload.len() > self.index {
+                    assert!(false, "have unhandled payload data");
+                }
+            }
+        } else {
+            // non-verbose:
+            // we return max 2 args if the payload is big enough
+            // a 4 byte message id and the non-static data [Dlt460]
+            return match self.index {
+                0 => {
+                    if self.msg.payload.len() >= 4 {
+                        self.index += 4;
+                        Some(DltArg {
+                            type_info: 0,
+                            is_big_endian: self.is_big_endian,
+                            payload_raw: self.msg.payload.get(0..4).unwrap(),
+                        })
+                        // Some(self.msg.payload.get(0..4).unwrap()) // todo end. convert here already?
+                    } else {
+                        None
+                    }
+                }
+                4 => {
+                    if self.msg.payload.len() > 4 {
+                        self.index = self.msg.payload.len();
+                        Some(DltArg {
+                            type_info: 0,
+                            is_big_endian: self.is_big_endian,
+                            payload_raw: self.msg.payload.get(4..).unwrap(),
+                        }) // todo we cannot end. convert that...
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+        }
+
+        None
+    }
+}
+
 #[derive(Debug)]
 pub struct Error {
     kind: ErrorKind,
@@ -483,7 +1146,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.kind {
             ErrorKind::NotEnoughData(amount) => {
-                write!(f, "not enough data - missing at least {}", amount)
+                write!(f, "not enough data - missing at least {} bytes", amount)
             }
             ErrorKind::InvalidData(ref desc) => {
                 write!(f, "invalid data - {}", desc)
@@ -622,6 +1285,140 @@ mod tests {
 
             // just 1 byte but pad left bound with - without to_string
             assert_eq!(format!("{:-<4}", DltChar4::from_str("E").unwrap()), "E---");
+        }
+    }
+
+    mod dlt_extended_header {
+        use super::*;
+        #[test]
+        fn verbose() {
+            let eh = DltExtendedHeader::from_buf(&[0, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.is_verbose(), false);
+            let eh = DltExtendedHeader::from_buf(&[1, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.is_verbose(), true);
+            let eh = DltExtendedHeader::from_buf(&[0xff, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.is_verbose(), true);
+            let eh = DltExtendedHeader::from_buf(&[0xfe, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.is_verbose(), false);
+        }
+        #[test]
+        fn mstp() {
+            let eh = DltExtendedHeader::from_buf(&[0, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Fatal)); // default used
+            let eh = DltExtendedHeader::from_buf(&[1u8 << 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Fatal)); // default still
+
+            let eh =
+                DltExtendedHeader::from_buf(&[(0 << 1) | (3 << 4) | 1, 0, 1, 2, 3, 4, 5, 6, 7, 8])
+                    .unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Warn));
+
+            let eh = DltExtendedHeader::from_buf(&[(1 << 1) | (1 << 4), 0, 1, 2, 3, 4, 5, 6, 7, 8])
+                .unwrap();
+            assert_eq!(
+                eh.mstp(),
+                DltMessageType::AppTrace(DltMessageTraceType::Variable)
+            );
+            let eh = DltExtendedHeader::from_buf(&[(3 << 1) | (2 << 4), 0, 1, 2, 3, 4, 5, 6, 7, 8])
+                .unwrap();
+            assert_eq!(
+                eh.mstp(),
+                DltMessageType::Control(DltMessageControlType::Response)
+            );
+        }
+    }
+
+    mod dlt_message {
+        use super::*;
+
+        #[test]
+        fn arg_iter() {
+            let m = DltMessage::for_test();
+            assert_eq!(m.is_verbose(), false);
+            let args_iter = m.into_iter();
+
+            assert_eq!(args_iter.count(), 0);
+
+            // now non-verbose, with enough payload:
+            let m = DltMessage {
+                index: 0,
+                reception_time_us: 0,
+                ecu: DltChar4::from_buf(b"ECU1"),
+                timestamp_dms: 0,
+                standard_header: DltStandardHeader {
+                    htyp: 1,
+                    len: 100,
+                    mcnt: 0,
+                },
+                extended_header: Some(DltExtendedHeader {
+                    verb_mstp_mtin: 0, // non-verbose
+                    noar: 2,
+                    apid: DltChar4::from_buf(b"APID"),
+                    ctid: DltChar4::from_buf(b"CTID"),
+                }),
+                lifecycle: 0,
+                payload: vec![1, 2, 3, 4, 5],
+            };
+            let args_iter = m.into_iter();
+            assert_eq!(args_iter.count(), 2);
+            // verify payload:
+            let mut args_iter = m.into_iter();
+            assert_eq!(args_iter.next().unwrap().payload_raw, vec!(1, 2, 3, 4));
+            assert_eq!(args_iter.next().unwrap().payload_raw, vec!(5));
+            assert_eq!(args_iter.next().is_none(), true);
+
+            // now non-verbose, with only the id as payload:
+            let m = DltMessage {
+                index: 0,
+                reception_time_us: 0,
+                ecu: DltChar4::from_buf(b"ECU1"),
+                timestamp_dms: 0,
+                standard_header: DltStandardHeader {
+                    htyp: 1,
+                    len: 100,
+                    mcnt: 0,
+                },
+                extended_header: Some(DltExtendedHeader {
+                    verb_mstp_mtin: 0, // non-verbose
+                    noar: 2,
+                    apid: DltChar4::from_buf(b"APID"),
+                    ctid: DltChar4::from_buf(b"CTID"),
+                }),
+                lifecycle: 0,
+                payload: vec![1, 2, 3, 4],
+            };
+            let args_iter = m.into_iter();
+            assert_eq!(args_iter.count(), 1);
+
+            // now verbose, with two booleans:
+            let m = DltMessage {
+                index: 0,
+                reception_time_us: 0,
+                ecu: DltChar4::from_buf(b"ECU1"),
+                timestamp_dms: 0,
+                standard_header: DltStandardHeader {
+                    htyp: 0, // little end.
+                    len: 100,
+                    mcnt: 0,
+                },
+                extended_header: Some(DltExtendedHeader {
+                    verb_mstp_mtin: 1, // verbose
+                    noar: 2,
+                    apid: DltChar4::from_buf(b"APID"),
+                    ctid: DltChar4::from_buf(b"CTID"),
+                }),
+                lifecycle: 0,
+                payload: vec![0x11, 0, 0, 0, 1, 0x11, 0, 0, 0, 0], // two bools
+            };
+            assert_eq!(u32::from_be_bytes([0, 0, 0, 0x10]), 0x10);
+            assert_eq!(u32::from_le_bytes([0x10, 0, 0, 0]), 0x10); // least sign. byte first
+
+            let args_iter = m.into_iter();
+            assert_eq!(args_iter.count(), 2);
+            // verify payload:
+            let mut args_iter = m.into_iter();
+            assert_eq!(args_iter.next().unwrap().payload_raw, vec!(1));
+            assert_eq!(args_iter.next().unwrap().payload_raw, vec!(0));
         }
     }
 }
