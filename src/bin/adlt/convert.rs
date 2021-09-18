@@ -121,7 +121,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     } else {
         (None, rx2)
     };
-    let t4 = std::thread::spawn(move || {
+    let t4 = std::thread::spawn(move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut output_file = if let Some(s) = output_file {
             match std::fs::File::create(s) {
                 Ok(f) => Ok(BufWriter::new(f)),
@@ -146,14 +146,14 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 // if print header, ascii, hex or mixed: todo
                 match output_style {
                     OutputStyle::HeaderOnly => {
-                        msg.header_as_text_to_write(&mut output_screen).unwrap(); // todo
-                        output_screen.write(&['\n' as u8]).unwrap();
+                        msg.header_as_text_to_write(&mut output_screen)?;
+                        output_screen.write(&['\n' as u8])?;
                     }
                     OutputStyle::Ascii => {
-                        msg.header_as_text_to_write(&mut output_screen).unwrap(); // todo
-                        // output_screen.write(&[' ' as u8]).unwrap();
-                        writeln!(output_screen, " [{}]", msg.payload_as_text()); // todo change to write directly to Writer
-                        // output_screen.write(&['\n' as u8]).unwrap();
+                        msg.header_as_text_to_write(&mut output_screen)?;
+                        // output_screen.write(&[' ' as u8])?;
+                        writeln!(output_screen, " [{}]", msg.payload_as_text()?)?; // todo change to write directly to Writer
+                        // output_screen.write(&['\n' as u8])?;
                     }
                     _ => {
                         // todo...
@@ -161,15 +161,17 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 }
                 // if output to file:
                 if let Ok(ref mut file) = output_file {
-                    msg.to_write(file).unwrap(); // todo err handling
+                    msg.to_write(file)?;
                 }
             }
         }
         if output_file.is_ok() {
             let mut writer = output_file.unwrap();
-            writer.flush().unwrap();
+            writer.flush()?;
             drop(writer); // close, happens anyhow autom...
         }
+
+        Ok(())
     });
 
     loop {
@@ -234,7 +236,10 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
         };
     }
 
-    t4.join().unwrap();
+    match t4.join() {
+        Err(s) =>error!(log, "t4 join got Error {:?}",s),
+        Ok(s) => debug!(log, "t2 join was Ok {:?}", s),
+    }
 
     info!(log, "finished processing"; "bytes_processed"=>bytes_processed, "number_messages"=>number_messages);
 
