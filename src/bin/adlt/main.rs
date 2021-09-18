@@ -1,5 +1,6 @@
 // todos:
 mod convert;
+mod remote;
 
 use clap::{App, Arg, SubCommand};
 // todo use rayon::prelude::*;
@@ -10,13 +11,15 @@ use std::io::{self};
 //extern crate slog_term;
 use slog::{o, Drain};
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> { // io::Result<()> {
     let matches = App::new("automotive dlt tool")
         .version(clap::crate_version!())
         .author("Matthias Behr <mbehr+adlt@mcbehr.de>")
         .about("Tool to handle automotive diagnostic log- and trace- (DLT) files.")
+        .subcommand(SubCommand::with_name("remote").about("Provide remote server functionalities")
+            .arg(Arg::with_name("port").short("p").takes_value(true).help("websocket port to use").default_value("6665")))
         .subcommand(
-            SubCommand::with_name("convert")
+            SubCommand::with_name("convert").about("Open DLT files and show on console or export to DLT file")
                 /* .arg(
                     Arg::with_name("hex")
                         .short("x")
@@ -116,12 +119,13 @@ fn main() -> io::Result<()> {
     );
 
     return match matches.subcommand() {
-        ("convert", Some(sub_m)) => convert::convert(log, sub_m),
+        ("convert", Some(sub_m)) => convert::convert(log, sub_m).map_err(|e| e.into()),
+        ("remote", Some(sub_m)) => remote::remote(log, sub_m),
         _ => {
-            return Err(io::Error::new(
+            return Err(Box::new(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "unknown subcommand",
-            ));
+            )));
         }
     };
     // return Ok(());
