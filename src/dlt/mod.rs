@@ -635,23 +635,23 @@ impl DltMessage {
             ecu = self.ecu,
             apid = self.apid().unwrap_or(&DEFAULT_APID_CTID).to_string(),
             ctid = self.ctid().unwrap_or(&DEFAULT_APID_CTID).to_string(),
-        );
+        )?;
         if self.extended_header.is_some() {
             match self.mstp() {
                 DltMessageType::Control(ct) => {
-                    write!(writer, "control {type}", type = CONTROL_TYPE_STRS[ct as usize]);
+                    write!(writer, "control {type}", type = CONTROL_TYPE_STRS[ct as usize])?;
                     // todo
                 }
                 DltMessageType::AppTrace(tt) => {
-                    write!(writer, "app_trace {type}", type = TRACE_TYPE_STRS[tt as usize]);
+                    write!(writer, "app_trace {type}", type = TRACE_TYPE_STRS[tt as usize])?;
                     // todo
                 }
                 DltMessageType::NwTrace(nt) => {
-                    write!(writer, "nw_trace {type}", type = NW_TYPE_STRS[nt as usize]);
+                    write!(writer, "nw_trace {type}", type = NW_TYPE_STRS[nt as usize])?;
                     // todo
                 }
                 DltMessageType::Log(lt) => {
-                    write!(writer, "log {level}", level = LOG_LEVEL_STRS[lt as usize]);
+                    write!(writer, "log {level}", level = LOG_LEVEL_STRS[lt as usize])?;
                 }
             }
             if self.is_verbose() {
@@ -660,15 +660,15 @@ impl DltMessage {
                 writer.write(&[' ' as u8, 'N' as u8])?;
             }
         } else {
-            write!(writer, "--- --- N -");
+            write!(writer, "--- --- N -")?;
         }
 
-        write!(writer, " {}", self.noar());
+        write!(writer, " {}", self.noar())?;
 
         Ok(())
     }
 
-    pub fn payload_as_text(&self) -> String {
+    pub fn payload_as_text(&self) -> Result<String, std::fmt::Error> {
         let mut text = String::new(); // can we guess the capacity upfront? (e.g. payload len *3?)
 
         let mut args = self.into_iter();
@@ -676,7 +676,7 @@ impl DltMessage {
             let mut nr_arg = 0;
             for arg in args {
                 if nr_arg > 0 {
-                    write!(text, " ");
+                    write!(text, " ")?;
                 }
                 nr_arg += 1;
                 let _tyle = arg.type_info & 0x0f;
@@ -691,9 +691,9 @@ impl DltMessage {
                 if is_bool {
                     let val = arg.payload_raw[0];
                     if val > 0 {
-                        write!(text, "true");
+                        write!(text, "true")?;
                     } else {
-                        write!(text, "false");
+                        write!(text, "false")?;
                     }
                 }
                 if is_uint {
@@ -702,11 +702,11 @@ impl DltMessage {
                         "<uint {} {:?}>",
                         arg.payload_raw.len(),
                         arg.payload_raw
-                    );
+                    )?;
                     match arg.payload_raw.len() {
                         1 => {
                             let val: u8 = arg.payload_raw[0];
-                            write!(text, "{}", val);
+                            write!(text, "{}", val)?;
                         }
                         2 => {
                             let val: u16 = if arg.is_big_endian {
@@ -714,7 +714,7 @@ impl DltMessage {
                             } else {
                                 u16::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val);
+                            write!(text, "{}", val)?;
                         }
                         4 => {
                             let val: u32 = if arg.is_big_endian {
@@ -722,7 +722,7 @@ impl DltMessage {
                             } else {
                                 u32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val);
+                            write!(text, "{}", val)?;
                         }
                         8 => {
                             let val: u64 = if arg.is_big_endian {
@@ -730,7 +730,7 @@ impl DltMessage {
                             } else {
                                 u64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val);
+                            write!(text, "{}", val)?;
                         }
                         _ => (),
                     };
@@ -739,7 +739,7 @@ impl DltMessage {
                     match arg.payload_raw.len() {
                         1 => {
                             let val: i8 = arg.payload_raw[0] as i8;
-                            write!(text, "{}", val);
+                            write!(text, "{}", val)?;
                         }
                         2 => {
                             let val: i16 = if arg.is_big_endian {
@@ -747,7 +747,7 @@ impl DltMessage {
                             } else {
                                 i16::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val);
+                            write!(text, "{}", val)?;
                         }
                         4 => {
                             let val: i32 = if arg.is_big_endian {
@@ -755,7 +755,7 @@ impl DltMessage {
                             } else {
                                 i32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val);
+                            write!(text, "{}", val)?;
                         }
                         8 => {
                             let val: i64 = if arg.is_big_endian {
@@ -763,16 +763,16 @@ impl DltMessage {
                             } else {
                                 i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val);
+                            write!(text, "{}", val)?;
                         }
                         _ => (),
                     };
                 }
                 if is_floa {
-                    write!(text, "<floa>");
+                    write!(text, "<floa>")?;
                 }
                 if is_rawd {
-                    write!(text, "<rawd>");
+                    write!(text, "<rawd>")?;
                 }
                 if is_strg {
                     let scod = (arg.type_info >> 15) & 0x03; // 0 = ascii, 1 = utf
@@ -792,16 +792,16 @@ impl DltMessage {
                                     Ok(s) => {
                                         // need to replace the \n to a ' ' and remove other junk chars... todo use faster methods
                                         let s = s.replace("\n", " ");
-                                        write!(text, "{}", s);
+                                        write!(text, "{}", s)?;
                                     }
                                     Err(e) => {
-                                        write!(text, "!utf8-conv error {:?}", e);
+                                        write!(text, "!utf8-conv error {:?}", e)?;
                                     }
                                 };
                             }
                         }
                         _ => {
-                            write!(text, "<scod unknown {}>", scod);
+                            write!(text, "<scod unknown {}>", scod)?;
                         }
                     }
                 }
@@ -828,13 +828,13 @@ impl DltMessage {
             match self.mstp() {
                 DltMessageType::Control(ct) => {
                     if message_id > 0 && message_id < SERVICE_ID_NAMES.len() as u32 {
-                        write!(&mut text, "{}", SERVICE_ID_NAMES[message_id as usize]);
+                        write!(&mut text, "{}", SERVICE_ID_NAMES[message_id as usize])?;
                     } else if ct != DltMessageControlType::Time {
-                        write!(&mut text, "service({})", message_id);
+                        write!(&mut text, "service({})", message_id)?;
                     }
 
                     if payload.len() > 0 {
-                        write!(&mut text, ", ");
+                        write!(&mut text, ", ")?;
                     }
 
                     match ct {
@@ -843,33 +843,32 @@ impl DltMessage {
                             if payload.len() > 0 {
                                 let retval = payload.get(0).unwrap();
                                 if *retval < 5u8 || *retval == 8u8 {
-                                    write!(&mut text, "{}", CTRL_RESPONSE_STRS[*retval as usize]);
+                                    write!(&mut text, "{}", CTRL_RESPONSE_STRS[*retval as usize])?;
                                 } else {
-                                    write!(&mut text, "{:02x}", *retval);
+                                    write!(&mut text, "{:02x}", *retval)?;
                                 }
-                                write!(&mut text, ", ");
+                                write!(&mut text, ", ")?;
                                 if payload.len() > 1 {
                                     crate::utils::buf_as_hex_to_write(
                                         &mut text,
                                         payload.get(1..).unwrap(),
-                                    )
-                                    .unwrap(); // todo
+                                    )?;
                                 }
                             }
                         }
                         _ => {
-                            crate::utils::buf_as_hex_to_write(&mut text, payload).unwrap();
+                            crate::utils::buf_as_hex_to_write(&mut text, payload)?;
                             // todo
                         }
                     }
                 }
                 _ => {
-                    write!(&mut text, "{} {:x?}", message_id, &payload);
+                    write!(&mut text, "{} {:x?}", message_id, &payload)?;
                 }
             }
         }
 
-        text
+        Ok(text)
     }
 
     #[cfg(test)]
