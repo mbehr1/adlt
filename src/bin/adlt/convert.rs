@@ -5,6 +5,7 @@ use std::io::prelude::*;
 use std::io::{BufRead, BufReader, Seek, BufWriter};
 use std::sync::mpsc::channel;
 
+#[derive(Clone, Copy)]
 enum OutputStyle {
     Hex,
     Ascii,
@@ -244,30 +245,34 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     info!(log, "finished processing"; "bytes_processed"=>bytes_processed, "number_messages"=>number_messages);
 
     // print lifecycles:
-    if let Some(a) = lcs_r.read() {
-        let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
-        info!(log, "have {} lifecycles:", sorted_lcs.len(),);
-        // output lifecycles
-        for lc in sorted_lcs {
-            info!(
-                log,
-                "LC#{:3}: {:4} {} - {} #{:8} {}",
-                lc.id(),
-                lc.ecu,
-                Local
-                    .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
-                    .format("%Y/%m/%d %H:%M:%S%.6f"),
-                Local
-                    .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time()))
-                    .format("%H:%M:%S"),
-                lc.nr_msgs,
-                if lc.only_control_requests() {
-                    "CTRL_REQUESTS_ONLY"
-                } else {
-                    ""
+    match output_style  {
+        OutputStyle::None => {
+            if let Some(a) = lcs_r.read() {
+                let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
+                println!("have {} lifecycles:", sorted_lcs.len(),);
+                // output lifecycles
+                for lc in sorted_lcs {
+                    println!(
+                        "LC#{:3}: {:4} {} - {} #{:8} {}",
+                        lc.id(),
+                        lc.ecu,
+                        Local
+                            .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
+                            .format("%Y/%m/%d %H:%M:%S%.6f"),
+                        Local
+                            .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time()))
+                            .format("%H:%M:%S"),
+                        lc.nr_msgs,
+                        if lc.only_control_requests() {
+                            "CTRL_REQUESTS_ONLY"
+                        } else {
+                            ""
+                        }
+                    );
                 }
-            );
+            }
         }
+        _ => {}
     }
 
     Ok(())

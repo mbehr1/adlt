@@ -451,6 +451,7 @@ where
     let mut buffered_lcs: std::collections::HashSet<LifecycleId> = std::collections::HashSet::new();
 
     // todo add check that msg.received times increase monotonically!
+    let mut merged_needed_id : LifecycleId = 0;
 
     for mut msg in inflow {
         // println!("last_last_lc_id {} got msg:{:?}", last_last_lc_id, msg);
@@ -472,6 +473,13 @@ where
                     if ecu_lcs_len > 1 {
                         let prev_lc = rest_lcs.last_mut().unwrap(); // : &mut Lifecycle = &mut last_lcs[ecu_lcs_len - 2];
                         if lc2.start_time <= prev_lc.end_time() {
+                            // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
+                            if merged_needed_id != lc2.id {
+                                println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
+                                merged_needed_id = lc2.id;
+                            }
+                        }
+                        if false && lc2.start_time <= prev_lc.end_time() {
                             // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
                             println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
                             // we merge into the prev. one (so use the prev.one only)
