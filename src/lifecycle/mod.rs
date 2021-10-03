@@ -3,6 +3,7 @@
 // use https://lib.rs/crates/lasso for string interner or
 // https://lib.rs/crates/arccstr or https://lib.rs/crates/arcstr
 // once_cell for one time inits.
+// use chrono::{Local, TimeZone};
 use crate::dlt::{DltChar4, DltMessage};
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender};
@@ -40,6 +41,7 @@ pub struct Lifecycle {
     pub start_time: u64, // start time in us.
     initial_start_time: u64,
     max_timestamp_us: u64, // max. timestamp of the messages assigned to this lifecycle. Used to determine end_time()
+    last_reception_time: u64, // last (should be max.) reception_time (i.e. from last message)
 }
 
 impl evmap::ShallowCopy for Lifecycle {
@@ -107,6 +109,7 @@ impl Lifecycle {
             start_time: msg.reception_time_us - timestamp_us,
             initial_start_time: msg.reception_time_us - timestamp_us,
             max_timestamp_us: timestamp_us,
+            last_reception_time: msg.reception_time_us,
         };
         msg.lifecycle = alc.id;
         alc
@@ -127,6 +130,9 @@ impl Lifecycle {
         if lc_to_merge.start_time < self.start_time {
             self.start_time = lc_to_merge.start_time;
             self.initial_start_time = lc_to_merge.initial_start_time;
+        }
+        if lc_to_merge.last_reception_time > self.last_reception_time {
+            self.last_reception_time = lc_to_merge.last_reception_time;
         }
         // we mark this in the merged lc as max_timestamp_dms <- id
         lc_to_merge.max_timestamp_us = self.id as u64;
@@ -184,16 +190,26 @@ impl Lifecycle {
         }
 
         // 1) the calc start time needs to be no later than the current end time
-        // println!("update: lifecycle triggered to LC:{:?}", &self);
+        // or
+        // 2) the reception_time - timestamp <= reception_time from last msg
+        // rationale for 2): there must be at least a gap of timestamp_us to last message if the message is from a new lifecycle
         let msg_timestamp_us = msg.timestamp_us();
         let msg_lc_start = msg.reception_time_us - msg_timestamp_us;
         let cur_end_time = self.end_time();
-        if msg_lc_start <= cur_end_time {
+        if msg_lc_start <= cur_end_time || 
+            msg_lc_start <= self.last_reception_time
+         {
             // ok belongs to this lifecycle
 
             if self.max_timestamp_us < msg_timestamp_us {
                 self.max_timestamp_us = msg_timestamp_us;
             }
+
+            if self.last_reception_time > msg.reception_time_us {
+                // seems like a bug in dltviewer... 
+                // println!("msg.update reception time going backwards! LC:{:?} {:?} {}", self.last_reception_time, msg.reception_time_us, msg.index);
+            }
+            self.last_reception_time = msg.reception_time_us;
 
             // does it move the start to earlier? (e.g. has a smaller buffering delay)
             // todo this can as well be caused by clock drift. Need to add clock_drift detection/compensation.
@@ -212,7 +228,11 @@ impl Lifecycle {
         } else {
             /*println!(
                 "update: new lifecycle created by {:?} as msg_lc_start {} > {} LC:{:?}",
-                msg, msg_lc_start, cur_end_time, &self
+                msg, chrono::Local
+                .from_utc_datetime(&crate::utils::utc_time_from_us(msg_lc_start))
+                .format("%Y/%m/%d %H:%M:%S%.6f"), chrono::Local
+                .from_utc_datetime(&crate::utils::utc_time_from_us(cur_end_time))
+                .format("%Y/%m/%d %H:%M:%S%.6f"), &self
             );*/
             // new lifecycle:
             Some(Lifecycle::new(msg))
