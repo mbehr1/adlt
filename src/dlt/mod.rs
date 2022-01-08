@@ -619,9 +619,9 @@ impl DltMessage {
         Ok(())
     }
 
-    pub fn header_as_text_to_write(
+    pub fn header_as_text_to_write<T: std::io::Write>(
         &self,
-        writer: &mut impl std::io::Write,
+        writer: &mut T,
     ) -> Result<(), std::io::Error> {
         write!(
             writer,
@@ -1140,6 +1140,8 @@ impl Error {
         return &self.kind;
     }
 }
+
+impl std::error::Error for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

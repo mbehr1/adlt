@@ -24,6 +24,33 @@ impl FilterKind {
     }*/
 }
 
+#[derive(Debug, Default)]
+pub struct FilterKindContainer<T: Default> {e:[T;4]}
+
+impl<T: Default> std::ops::Index<FilterKind> for FilterKindContainer<T> {
+    type Output = T;
+    fn index(&self, kind: FilterKind) -> &Self::Output {
+        match kind {
+            FilterKind::Positive => &self.e[0],
+            FilterKind::Negative => &self.e[1],
+            FilterKind::Marker => &self.e[2],
+            FilterKind::Event => &self.e[3],
+        }
+    }
+}
+
+impl<T: Default> std::ops::IndexMut<FilterKind> for FilterKindContainer<T> {
+    fn index_mut(&mut self, kind: FilterKind) -> &mut Self::Output {
+        match kind {
+            FilterKind::Positive => &mut self.e[0],
+            FilterKind::Negative => &mut self.e[1],
+            FilterKind::Marker => &mut self.e[2],
+            FilterKind::Event => &mut self.e[3],
+        }
+    }
+}
+
+
 #[derive(Debug)]
 pub struct Filter {
     pub kind: FilterKind,
