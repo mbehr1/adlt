@@ -11,9 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     name: check conventional commit compliance
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@main
         with:
           fetch-depth: 0
+
+      - name: fetch tags (see https://github.com/actions/checkout/issues/290)
+        run: echo not needed? git fetch --tags --force || exit 0
+      - name: show git details
+        run: git describe --abbrev=0 || exit 0
+      - name: show git details tags
+        run: git describe --abbrev=0 --tags || exit 0
+      - name: list git tags
+        run: git tag -ln || exit 0
 
       - name: Conventional commit check
         uses: cocogitto/cocogitto-action@v2
