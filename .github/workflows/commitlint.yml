@@ -10,8 +10,6 @@ jobs:
   cog_check_job:
     runs-on: ubuntu-latest
     name: check conventional commit compliance
-    with:
-      check-latest-tag-only: true
     steps:
       - uses: actions/checkout@v2
         with:
@@ -19,3 +17,5 @@ jobs:
 
       - name: Conventional commit check
         uses: oknozor/cocogitto-action@v1
+        with:
+          check-latest-tag-only: true
