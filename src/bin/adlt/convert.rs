@@ -1,8 +1,8 @@
 use chrono::{Local, TimeZone};
-use slog::{crit, debug, info, warn, error};
+use slog::{crit, debug, error, info, warn};
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::{BufRead, BufReader, Seek, BufWriter};
+use std::io::{BufRead, BufReader, BufWriter, Seek};
 use std::sync::mpsc::channel;
 
 #[derive(Clone, Copy)]
@@ -21,20 +21,14 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
 
     let output_style: OutputStyle = if sub_m.is_present("hex") {
         OutputStyle::Hex
+    } else if sub_m.is_present("ascii") {
+        OutputStyle::Ascii
+    } else if sub_m.is_present("mixed") {
+        OutputStyle::Mixed
+    } else if sub_m.is_present("headers") {
+        OutputStyle::HeaderOnly
     } else {
-        if sub_m.is_present("ascii") {
-            OutputStyle::Ascii
-        } else {
-            if sub_m.is_present("mixed") {
-                OutputStyle::Mixed
-            } else {
-                if sub_m.is_present("headers") {
-                    OutputStyle::HeaderOnly
-                } else {
-                    OutputStyle::None
-                }
-            }
-        }
+        OutputStyle::None
     };
 
     let sort_by_time = sub_m.is_present("sort");
@@ -69,11 +63,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
             .collect(),
     };
 
-    let output_file = match sub_m.value_of("output_file") {
-        Some(s) => Some(s.to_string()),
-        None => None,
-    };
-
+    let output_file = sub_m.value_of("output_file").map(|s| s.to_string());
     info!(log, "convert have {} input files", input_file_names.len(); "index_first"=>index_first, "index_last"=>index_last);
     debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids), "sort_by_time" => sort_by_time);
 
@@ -96,7 +86,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     // setup (thread) filter chain:
     let (tx, rx) = channel(); // msg -> parse_lifecycles (t2)
     let (tx2, rx2) = channel(); // parse_lifecycles -> buffer_sort_messages (t3)
-    // let (tx3, rx3) = channel(); // buffer_sort_messages -> print/output (t4)
+                                // let (tx3, rx3) = channel(); // buffer_sort_messages -> print/output (t4)
 
     let (lcs_r, lcs_w) =
         evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
@@ -106,74 +96,85 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     let t3_lcs_r = lcs_r.clone();
     let (t3, t4_input) = if sort_by_time {
         let (tx3, rx3) = channel();
-        (Some(std::thread::spawn(move || {
-            adlt::utils::buffer_sort_messages(rx2, tx3, &t3_lcs_r, 3, 2 * adlt::utils::US_PER_SEC)
-            /*
-            adlt::utils::buffer_elements( // todo we buffer here only to let the lifecycle start times become a bit more stable. need a better way...
-                // its only needed to have msgs from different lifecycles sorted as well. within one lifecycle they will be sorted fine
-                // the diff is usually just a few (<20) ms...
-                rx2,
-                tx3,
-                adlt::utils::BufferElementsOptions {
-                    amount: adlt::utils::BufferElementsAmount::NumberElements(1000), // todo how to determine constant...
-                },
-            )*/
-        })), rx3)
+        (
+            Some(std::thread::spawn(move || {
+                adlt::utils::buffer_sort_messages(
+                    rx2,
+                    tx3,
+                    &t3_lcs_r,
+                    3,
+                    2 * adlt::utils::US_PER_SEC,
+                )
+                /*
+                adlt::utils::buffer_elements( // todo we buffer here only to let the lifecycle start times become a bit more stable. need a better way...
+                    // its only needed to have msgs from different lifecycles sorted as well. within one lifecycle they will be sorted fine
+                    // the diff is usually just a few (<20) ms...
+                    rx2,
+                    tx3,
+                    adlt::utils::BufferElementsOptions {
+                        amount: adlt::utils::BufferElementsAmount::NumberElements(1000), // todo how to determine constant...
+                    },
+                )*/
+            })),
+            rx3,
+        )
     } else {
         (None, rx2)
     };
-    let t4 = std::thread::spawn(move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut output_file = if let Some(s) = output_file {
-            match std::fs::File::create(s) {
-                Ok(f) => Ok(BufWriter::new(f)),
-                Err(e) => Err(e),
-            }
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "no output_file param",
-            ))
-        };
+    let t4 = std::thread::spawn(
+        move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            let mut output_file = if let Some(s) = output_file {
+                match std::fs::File::create(s) {
+                    Ok(f) => Ok(BufWriter::new(f)),
+                    Err(e) => Err(e),
+                }
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "no output_file param",
+                ))
+            };
 
-        let mut output_screen = std::io::stdout();
+            let mut output_screen = std::io::stdout();
 
-        for msg in t4_input {
-            // lifecycle filtered?
-            if filter_lc_ids.len() > 0 && !filter_lc_ids.contains(&msg.lifecycle) {
-                continue;
-            }
-            // start with a simple dump of the msgs similar to dlt_message_header
-            if msg.index >= index_first && msg.index <= index_last {
-                // if print header, ascii, hex or mixed: todo
-                match output_style {
-                    OutputStyle::HeaderOnly => {
-                        msg.header_as_text_to_write(&mut output_screen)?;
-                        output_screen.write(&['\n' as u8])?;
+            for msg in t4_input {
+                // lifecycle filtered?
+                if !filter_lc_ids.is_empty() && !filter_lc_ids.contains(&msg.lifecycle) {
+                    continue;
+                }
+                // start with a simple dump of the msgs similar to dlt_message_header
+                if msg.index >= index_first && msg.index <= index_last {
+                    // if print header, ascii, hex or mixed: todo
+                    match output_style {
+                        OutputStyle::HeaderOnly => {
+                            msg.header_as_text_to_write(&mut output_screen)?;
+                            output_screen.write_all(&[b'\n'])?;
+                        }
+                        OutputStyle::Ascii => {
+                            msg.header_as_text_to_write(&mut output_screen)?;
+                            // output_screen.write(&[' ' as u8])?;
+                            writeln!(output_screen, " [{}]", msg.payload_as_text()?)?;
+                            // todo change to write directly to Writer
+                            // output_screen.write(&['\n' as u8])?;
+                        }
+                        _ => {
+                            // todo...
+                        }
                     }
-                    OutputStyle::Ascii => {
-                        msg.header_as_text_to_write(&mut output_screen)?;
-                        // output_screen.write(&[' ' as u8])?;
-                        writeln!(output_screen, " [{}]", msg.payload_as_text()?)?; // todo change to write directly to Writer
-                        // output_screen.write(&['\n' as u8])?;
-                    }
-                    _ => {
-                        // todo...
+                    // if output to file:
+                    if let Ok(ref mut file) = output_file {
+                        msg.to_write(file)?;
                     }
                 }
-                // if output to file:
-                if let Ok(ref mut file) = output_file {
-                    msg.to_write(file)?;
-                }
             }
-        }
-        if output_file.is_ok() {
-            let mut writer = output_file.unwrap();
-            writer.flush()?;
-            drop(writer); // close, happens anyhow autom...
-        }
+            if let Ok(mut writer) = output_file {
+                writer.flush()?;
+                drop(writer); // close, happens anyhow autom...
+            }
 
-        Ok(())
-    });
+            Ok(())
+        },
+    );
 
     loop {
         if f.is_none() {
@@ -238,41 +239,38 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
     }
 
     match t4.join() {
-        Err(s) =>error!(log, "t4 join got Error {:?}",s),
+        Err(s) => error!(log, "t4 join got Error {:?}", s),
         Ok(s) => debug!(log, "t2 join was Ok {:?}", s),
     }
 
     info!(log, "finished processing"; "bytes_processed"=>bytes_processed, "number_messages"=>number_messages);
 
     // print lifecycles:
-    match output_style  {
-        OutputStyle::None => {
-            if let Some(a) = lcs_r.read() {
-                let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
-                println!("have {} lifecycles:", sorted_lcs.len(),);
-                // output lifecycles
-                for lc in sorted_lcs {
-                    println!(
-                        "LC#{:3}: {:4} {} - {} #{:8} {}",
-                        lc.id(),
-                        lc.ecu,
-                        Local
-                            .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
-                            .format("%Y/%m/%d %H:%M:%S%.6f"),
-                        Local
-                            .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time()))
-                            .format("%H:%M:%S"),
-                        lc.nr_msgs,
-                        if lc.only_control_requests() {
-                            "CTRL_REQUESTS_ONLY"
-                        } else {
-                            ""
-                        }
-                    );
-                }
+    if let OutputStyle::None = output_style {
+        if let Some(a) = lcs_r.read() {
+            let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
+            println!("have {} lifecycles:", sorted_lcs.len(),);
+            // output lifecycles
+            for lc in sorted_lcs {
+                println!(
+                    "LC#{:3}: {:4} {} - {} #{:8} {}",
+                    lc.id(),
+                    lc.ecu,
+                    Local
+                        .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
+                        .format("%Y/%m/%d %H:%M:%S%.6f"),
+                    Local
+                        .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time()))
+                        .format("%H:%M:%S"),
+                    lc.nr_msgs,
+                    if lc.only_control_requests() {
+                        "CTRL_REQUESTS_ONLY"
+                    } else {
+                        ""
+                    }
+                );
             }
         }
-        _ => {}
     }
 
     Ok(())

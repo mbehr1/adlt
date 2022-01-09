@@ -16,7 +16,8 @@ pub type LifecycleItem = Lifecycle; // Box<Lifecycle>; V needs to be Eq+Hash+Sha
                                     // RwLock&Mutex misses ShallowCopy, Eq and Hash
 
 fn new_lifecycle_item(lc: Lifecycle) -> LifecycleItem {
-    LifecycleItem::from(lc) // Box::from(lc)
+    lc
+    //LifecycleItem::from(lc) // Box::from(lc)
                             //std::sync::Arc::new(std::cell::Cell::from(lc))
 }
 
@@ -82,7 +83,7 @@ impl Lifecycle {
     /// * the time of the last log message of this lifecycle or
     /// * the time until the logs have been recorded but the lifecycle might be continued.
     pub fn end_time(&self) -> u64 {
-        return self.start_time + self.max_timestamp_us;
+        self.start_time + self.max_timestamp_us
     }
 
     /// returns whether this lifecycle contains only control request messages.
@@ -103,7 +104,7 @@ impl Lifecycle {
 
         let alc = Lifecycle {
             id: NEXT_LC_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            ecu: msg.ecu.clone(),
+            ecu: msg.ecu,
             nr_msgs: 1,
             nr_control_req_msgs: if is_ctrl_request { 1 } else { 0 },
             start_time: msg.reception_time_us - timestamp_us,
@@ -299,10 +300,9 @@ where
             let lc = b.get_one().unwrap();
             match ecu_map.get_mut(&lc.ecu) {
                 None => {
-                    //ecu_map.insert(lc.ecu.clone(), [lc.id].to_vec());
-                    ecu_map.insert(lc.ecu.clone(), [lc.clone()].to_vec());
+                    ecu_map.insert(lc.ecu, [*lc].to_vec());
                 }
-                Some(v) => v.push(lc.clone()),
+                Some(v) => v.push(*lc),
             }
         }
     }
@@ -317,7 +317,7 @@ where
     for mut msg in inflow {
         // println!("last_last_lc_id {} got msg:{:?}", last_last_lc_id, msg);
         // get the lifecycles for the ecu from that msg:
-        let ecu_lcs = ecu_map.entry(msg.ecu.clone()).or_insert_with(|| Vec::new());
+        let ecu_lcs = ecu_map.entry(msg.ecu).or_insert_with(Vec::new);
 
         let ecu_lcs_len = ecu_lcs.len();
         if ecu_lcs_len > 0 {
@@ -454,9 +454,9 @@ where
             match ecu_map.get_mut(&lc.ecu) {
                 None => {
                     //ecu_map.insert(lc.ecu.clone(), [lc.id].to_vec());
-                    ecu_map.insert(lc.ecu.clone(), [lc.clone()].to_vec());
+                    ecu_map.insert(lc.ecu, [*lc].to_vec());
                 }
-                Some(v) => v.push(lc.clone()),
+                Some(v) => v.push(*lc),
             }
         }
     }
@@ -476,8 +476,8 @@ where
     for mut msg in inflow {
         // println!("last_last_lc_id {} got msg:{:?}", last_last_lc_id, msg);
         // get the lifecycles for the ecu from that msg:
-        let msg_ecu = msg.ecu.clone();
-        let ecu_lcs = ecu_map.entry(msg_ecu).or_insert_with(|| Vec::new());
+        let msg_ecu = msg.ecu;//.clone();
+        let ecu_lcs = ecu_map.entry(msg_ecu).or_insert_with(Vec::new);
 
         let ecu_lcs_len = ecu_lcs.len();
         if ecu_lcs_len > 0 {
@@ -499,7 +499,7 @@ where
                                 merged_needed_id = lc2.id;
                             }
                         }
-                        if false && lc2.start_time <= prev_lc.end_time() {
+                        if false /* && lc2.start_time <= prev_lc.end_time() */ {
                             // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
                             println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
                             // we merge into the prev. one (so use the prev.one only)
@@ -528,8 +528,8 @@ where
                                 buffered_lcs.remove(&lc2.id);
                                 remove_last_lc = true;
                                 // if we have no more yet, send the other msgs:
-                                if buffered_lcs.len() == 0 {
-                                    while buffered_msgs.len() > 0 {
+                                if buffered_lcs.is_empty() {
+                                    while !buffered_msgs.is_empty() {
                                         // todo really inefficient!!!! use drain???
                                         let msg = buffered_msgs.remove(0);
                                         // println!("sending early buffered_msg {:?}", msg);
@@ -538,16 +538,18 @@ where
                                     assert_eq!(buffered_msgs.len(), 0);
                                 }
                             } else {
-                                assert!(false, "todo shouldn't happen yet!");
+                                panic!("todo shouldn't happen yet!");
                                 // this is the rare case where there had been already 2 lifecycles from prev. run and now
                                 // the 2nd got merged... todo think about how to handle that... as we dont want to have our callers
                                 // have to support/handle interims lifecycles!
+                                /*
                                 prev_lc.merge(lc2);
                                 lcs_w.update(prev_lc.id, *prev_lc);
                                 // we will store lc2 later as the msgs still point to this one
                                 // but we have to make sure that this is not ecu_lcs anymore
                                 remove_last_lc = true;
                                 // check whether prev_lc now overlaps with the prevprev one... todo
+                                */
                             }
                         }
                         // can we close the buffered lifecycle now?
@@ -563,8 +565,8 @@ where
                                 lcs_w.insert(lc2.id, new_lifecycle_item(*lc2));
                                 lcs_w.refresh();
                                 // if we have no more yet, send the other msgs:
-                                if buffered_lcs.len() == 0 {
-                                    while buffered_msgs.len() > 0 {
+                                if buffered_lcs.is_empty() {
+                                    while !buffered_msgs.is_empty() {
                                         // todo really inefficient!!!! use drain???
                                         let msg = buffered_msgs.remove(0);
                                         // println!("sending early buffered_msg {:?}", msg);
@@ -577,7 +579,7 @@ where
                     }
                     // if we have buffered lifecycles check whether we can stop buffering them and mark as valid ones:
                     // once the lifecycle start even including a max buffering delay can not fit into the prev one any longer:
-                    if buffered_lcs.len() > 0 {
+                    if !buffered_lcs.is_empty() {
                         // we compare all lcs vs. the current msg received time (as we do assume that messages are sorted by received time even across ecus)
                         // todo let _rcvd_time = msg.reception_time_us;
                         // todo impl this as well to close e.g. lifecycles with very few messages from ecus earlier
@@ -636,7 +638,7 @@ where
         }
 
         // pass msg to outflow only if we dont have buffered lcs:
-        if buffered_lcs.len() > 0 {
+        if !buffered_lcs.is_empty() {
             buffered_msgs.push(msg);
         } else {
             // todo slog... println!("sending non-buffered_msg {:?}", msg);

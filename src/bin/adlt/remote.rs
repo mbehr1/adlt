@@ -10,9 +10,7 @@ use tungstenite::{
     Message, WebSocket,
 };
 
-use adlt::{
-    filter::{Filter, FilterKind, FilterKindContainer},
-};
+use adlt::filter::{Filter, FilterKind, FilterKindContainer};
 
 /// provide remote server functionalities
 pub fn remote(
@@ -49,7 +47,9 @@ pub fn remote(
                 Ok(response)
             };
             let a_stream = stream.unwrap();
-            a_stream.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+            a_stream
+                .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+                .expect("failed to set_read_timeout"); // panic on failure
             let mut websocket = accept_hdr(a_stream, callback).unwrap();
 
             let mut file_context: Option<FileContext> = None;
@@ -63,14 +63,12 @@ pub fn remote(
             let mut last_all_msgs_len = usize::MAX;
             loop {
                 // 1st step any new messages to process
-                match file_context {
-                    Some(ref mut fc) => process_file_context(&log, fc, &mut websocket),
-                    _ => {}
-                };
+                if let Some(ref mut fc) = file_context {
+                    process_file_context(&log, fc, &mut websocket)
+                }
 
                 let msg = websocket.read_message();
-                if msg.is_err() {
-                    let err = msg.unwrap_err();
+                if let Err(err) = msg {
                     match err {
                         tungstenite::Error::Io(ref e)
                             if e.kind() == std::io::ErrorKind::WouldBlock =>
@@ -111,9 +109,7 @@ pub fn remote(
                     Message::Ping(_) | Message::Pong(_) => {}
                 }
             }
-            match websocket.write_pending() {
-                _ => {}
-            }; // ignore any errors
+            let _ = websocket.write_pending(); // ignore error
         });
     }
 
@@ -126,8 +122,8 @@ struct StreamContext {
     id: u32,
     filters_active: bool,
     filters: FilterKindContainer<Vec<Filter>>,
-    filtered_msgs: Vec<usize>, // indizes to all_msgs vec
-    all_msgs_last_processed_len: usize, // last len of all_msgs reflected in filtered_msgs
+    filtered_msgs: Vec<usize>,            // indizes to all_msgs vec
+    all_msgs_last_processed_len: usize,   // last len of all_msgs reflected in filtered_msgs
     msgs_to_send: std::ops::Range<usize>, // the requested window
     msgs_sent: std::ops::Range<usize>,
 }
@@ -135,7 +131,7 @@ struct StreamContext {
 /// next stream id. Zero is used as "no lifecycle" so first one must start with 1
 static NEXT_STREAM_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
-impl StreamContext{
+impl StreamContext {
     fn from(
         log: &slog::Logger,
         json_str: &str,
@@ -146,7 +142,7 @@ impl StreamContext{
 
         let mut start_idx = 0;
         let mut end_idx = 20; // todo
-        let mut filters : FilterKindContainer<Vec<Filter>> = Default::default();
+        let mut filters: FilterKindContainer<Vec<Filter>> = Default::default();
 
         match &v["window"] {
             serde_json::Value::Array(a) => {
@@ -154,8 +150,9 @@ impl StreamContext{
                 if a.len() != 2 {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        format!("'window' expects array with two elements. got {}", a.len())
-                    ).into());    
+                        format!("'window' expects array with two elements. got {}", a.len()),
+                    )
+                    .into());
                 } else {
                     start_idx = a[0].as_u64().unwrap_or(0) as usize; // todo better err and not ignore
                     end_idx = a[1].as_u64().unwrap_or(20) as usize; // todo better err and not default 20
@@ -165,8 +162,9 @@ impl StreamContext{
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "wrong type for 'window'"
-                ).into());
+                    "wrong type for 'window'",
+                )
+                .into());
             }
         }
 
@@ -182,13 +180,15 @@ impl StreamContext{
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "wrong type for 'filters'"
-                ).into());
+                    "wrong type for 'filters'",
+                )
+                .into());
             }
         }
 
         // todo think about Marker, Event...
-        let filters_active = filters[FilterKind::Positive].len() + filters[FilterKind::Negative].len()  > 0;
+        let filters_active =
+            filters[FilterKind::Positive].len() + filters[FilterKind::Negative].len() > 0;
 
         Ok(StreamContext {
             id: NEXT_STREAM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -196,7 +196,10 @@ impl StreamContext{
             filters_active,
             filtered_msgs: Vec::new(),
             all_msgs_last_processed_len: 0,
-            msgs_to_send: std::ops::Range { start: start_idx, end: end_idx },
+            msgs_to_send: std::ops::Range {
+                start: start_idx,
+                end: end_idx,
+            },
             msgs_sent: std::ops::Range { start: 0, end: 0 },
         })
     }
@@ -207,20 +210,17 @@ struct FileContext {
     file_names: Vec<String>,
     file_names_index: usize,
     f: Option<BufReader<File>>,
-    parsing_thread: Option<(
-        std::thread::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>,
-        std::sync::mpsc::Receiver<adlt::dlt::DltMessage>,
-    )>,
+    parsing_thread: Option<ParserThreadType>,
 
     all_msgs: Vec<adlt::dlt::DltMessage>,
 
-    streams : Vec<StreamContext>,
+    streams: Vec<StreamContext>,
 }
 
 impl FileContext {
     fn from(file_names: Vec<String>) -> Result<FileContext, std::io::Error> {
         // check whether at least the first file can be opened:
-        if file_names.len() < 1 {
+        if file_names.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "at least one file name needed",
@@ -235,7 +235,7 @@ impl FileContext {
         Ok(FileContext {
             file_names,
             file_names_index: 0,
-            f: f,
+            f,
             parsing_thread: None,
             all_msgs: Vec::new(),
             streams: Vec::new(),
@@ -267,8 +267,8 @@ fn process_incoming_text_message<T: Read + Write>(
     websocket: &mut WebSocket<T>,
 ) {
     info!(log, "got text message {:?}", t);
-    let cmd_params: Vec<&str> = t.splitn(2, " ").collect();
-    let command = if cmd_params.len() >= 1 {
+    let cmd_params: Vec<&str> = t.splitn(2, ' ').collect();
+    let command = if !cmd_params.is_empty() {
         cmd_params[0]
     } else {
         ""
@@ -295,15 +295,15 @@ fn process_incoming_text_message<T: Read + Write>(
             // todo
             } else {
                 match FileContext::from(vec![params.to_string()]) {
-                    // todo support multiple
                     Ok(mut s) => {
+                        assert_eq!(0, s.file_names_index); // todo support multiple
                         let f: Option<BufReader<File>> = s.f;
                         s.f = None;
 
-                        let (lcs_r, lcs_w) = evmap::new::<
+                        /*let (lcs_r, lcs_w) = evmap::new::<
                             adlt::lifecycle::LifecycleId,
                             adlt::lifecycle::LifecycleItem,
-                        >();
+                        >();*/
                         // setup parsing thread
                         //let f: Option<BufReader<File>> = (&file_context).as_mut().unwrap().f;
                         s.parsing_thread = Some(create_parser_thread(log.clone(), f));
@@ -334,12 +334,12 @@ fn process_incoming_text_message<T: Read + Write>(
                 websocket
                     .write_message(Message::Text(format!("ok: '{}'!", command)))
                     .unwrap(); // todo
-                // todo send info with 0 msgs
+                               // todo send info with 0 msgs
             } else {
                 websocket
-                    .write_message(Message::Text(format!(
-                        "err: close failed as no file open. open first!"
-                    )))
+                    .write_message(Message::Text(
+                        "err: close failed as no file open. open first!".to_string(),
+                    ))
                     .unwrap(); // todo
             }
         }
@@ -352,7 +352,9 @@ fn process_incoming_text_message<T: Read + Write>(
                             websocket
                                 .write_message(Message::Text(format!(
                                     "ok: stream {{\"id\":{}, \"number_filters\":[{},{}]}}",
-                                    stream.id, stream.filters[FilterKind::Positive].len(), stream.filters[FilterKind::Negative].len()
+                                    stream.id,
+                                    stream.filters[FilterKind::Positive].len(),
+                                    stream.filters[FilterKind::Negative].len()
                                 )))
                                 .unwrap(); // todo
                             fc.streams.push(stream);
@@ -369,9 +371,9 @@ fn process_incoming_text_message<T: Read + Write>(
                 }
                 None => {
                     websocket
-                        .write_message(Message::Text(format!(
-                            "err: stream failed as no file open. open first!"
-                        )))
+                        .write_message(Message::Text(
+                            "err: stream failed as no file open. open first!".to_string(),
+                        ))
                         .unwrap(); // todo
                 }
             }
@@ -400,9 +402,9 @@ fn process_incoming_text_message<T: Read + Write>(
                         }
                         None => {
                             websocket
-                                .write_message(Message::Text(format!(
-                                    "err: stop stream failed. No file opened!"
-                                )))
+                                .write_message(Message::Text(
+                                    "err: stop stream failed. No file opened!".to_string(),
+                                ))
                                 .unwrap(); // todo
                         }
                     }
@@ -436,26 +438,24 @@ fn process_file_context<T: Read + Write>(
 ) {
     let mut got_new_msgs = false;
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
-    match &fc.parsing_thread {
-        Some((_pt, rx)) => {
-            loop {
-                // todo use rx.try_recv first???
-                let rm = rx.recv_timeout(std::time::Duration::from_millis(10));
-                match rm {
-                    Ok(msg) => {
-                        fc.all_msgs.push(msg);
-                        got_new_msgs = true;
-                    }
-                    _ => {
-                        break;
-                    }
-                };
-                if std::time::Instant::now() > deadline {
+
+    if let Some((_pt, rx)) = &fc.parsing_thread {
+        loop {
+            // todo use rx.try_recv first???
+            let rm = rx.recv_timeout(std::time::Duration::from_millis(10));
+            match rm {
+                Ok(msg) => {
+                    fc.all_msgs.push(msg);
+                    got_new_msgs = true;
+                }
+                _ => {
                     break;
                 }
+            };
+            if std::time::Instant::now() > deadline {
+                break;
             }
         }
-        _ => {}
     }
     // inform about new msgs
     if got_new_msgs && websocket.can_write() {
@@ -470,16 +470,15 @@ fn process_file_context<T: Read + Write>(
     // in any stream any messages to send?
     let all_msgs_len = fc.all_msgs.len();
     for mut stream in &mut fc.streams {
-
         let mut new_stream_msgs = false; // todo needed?
-        // more messages avail?
+                                         // more messages avail?
         if all_msgs_len > stream.all_msgs_last_processed_len {
             if stream.filters_active {
                 // check msgs from _processed_len to all_msgs_len
                 // todo use parallel iterator
-                for i in stream.all_msgs_last_processed_len .. all_msgs_len {
-                    let msg : &adlt::dlt::DltMessage = &fc.all_msgs[i];
-                    let mut matches = stream.filters[FilterKind::Positive].len() == 0;
+                for i in stream.all_msgs_last_processed_len..all_msgs_len {
+                    let msg: &adlt::dlt::DltMessage = &fc.all_msgs[i];
+                    let mut matches = stream.filters[FilterKind::Positive].is_empty();
 
                     // for now do a simple support of pos. and neg. filters
                     for filter in &stream.filters[FilterKind::Positive] {
@@ -504,7 +503,6 @@ fn process_file_context<T: Read + Write>(
                         stream.filtered_msgs.push(i);
                         new_stream_msgs = true;
                     }
-
                 }
             } else {
                 new_stream_msgs = true;
@@ -513,15 +511,18 @@ fn process_file_context<T: Read + Write>(
         }
 
         if got_new_msgs || new_stream_msgs { // todo or once at least?
-            // or kind of keep-alive from the stream every sec?
-            // todo post info amount of filtered msgs vs all_msgs?
-            // so that the client can understand whether messages should arrive?
+             // or kind of keep-alive from the stream every sec?
+             // todo post info amount of filtered msgs vs all_msgs?
+             // so that the client can understand whether messages should arrive?
         }
 
-        let stream_msgs_len = if stream.filters_active { stream.filtered_msgs.len() } else { fc.all_msgs.len() };
+        let stream_msgs_len = if stream.filters_active {
+            stream.filtered_msgs.len()
+        } else {
+            fc.all_msgs.len()
+        };
 
-        if stream.msgs_sent.end < stream.msgs_to_send.end
-            && stream.msgs_sent.end <= stream_msgs_len
+        if stream.msgs_sent.end < stream.msgs_to_send.end && stream.msgs_sent.end <= stream_msgs_len
         {
             // send some more...
             let new_end = std::cmp::min(stream_msgs_len, stream.msgs_to_send.end);
@@ -529,8 +530,14 @@ fn process_file_context<T: Read + Write>(
             for i in stream.msgs_sent.end..new_end {
                 let data = Vec::<u8>::with_capacity(65000);
                 let mut writer = std::io::BufWriter::new(data);
-                let msg_idx = if stream.filters_active { stream.filtered_msgs[i] } else { i };
-                fc.all_msgs[msg_idx].header_as_text_to_write(&mut writer).unwrap();
+                let msg_idx = if stream.filters_active {
+                    stream.filtered_msgs[i]
+                } else {
+                    i
+                };
+                fc.all_msgs[msg_idx]
+                    .header_as_text_to_write(&mut writer)
+                    .unwrap();
                 let data = writer.into_inner().unwrap();
                 websocket
                     .write_message(Message::Text(format!(
@@ -547,18 +554,17 @@ fn process_file_context<T: Read + Write>(
     }
 }
 
+type ParserThreadType = (
+    std::thread::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>,
+    std::sync::mpsc::Receiver<adlt::dlt::DltMessage>,
+);
+
 /// create a parser thread including a channel
 ///
 /// The thread reads data from the BufReader, parses the DLT messages via `parse_dlt_with_storage_header`
 /// and forwards the DLT messages to the mpsc channel.
 /// Returns the thread handle and the channel receiver where the parsed messages will be send to.
-fn create_parser_thread(
-    log: slog::Logger,
-    mut f: Option<BufReader<File>>,
-) -> (
-    std::thread::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>,
-    std::sync::mpsc::Receiver<adlt::dlt::DltMessage>,
-) {
+fn create_parser_thread(log: slog::Logger, mut f: Option<BufReader<File>>) -> ParserThreadType {
     let (tx, rx) = std::sync::mpsc::channel();
     (
         std::thread::spawn(

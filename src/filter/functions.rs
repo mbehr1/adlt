@@ -34,14 +34,14 @@ pub fn filter_as_streams(
         // if we have no pos. filters we let it pass.
         let found_after_pos_filters: bool;
 
-        if pos_filters.len() > 0 {
+        if !pos_filters.is_empty() {
             // any matching pos filter adds the message
             found_after_pos_filters = pos_filters.iter().any(|f| f.matches(&msg));
         } else {
             found_after_pos_filters = true;
         }
         let mut found_after_neg_filters: bool = found_after_pos_filters;
-        if found_after_neg_filters && neg_filters.len()>0 {
+        if found_after_neg_filters && !neg_filters.is_empty() {
             // any matching neg filters removes the message
             found_after_neg_filters = !neg_filters.iter().any(|f| f.matches(&msg));
         }

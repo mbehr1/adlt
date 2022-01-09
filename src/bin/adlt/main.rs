@@ -104,7 +104,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> { // io::Result<()> {
         0 => slog::Level::Warning,
         1 => slog::Level::Info,
         2 => slog::Level::Debug,
-        3 | _ => slog::Level::Trace,
+        3 => slog::Level::Trace,
+        _ => slog::Level::Trace,
     };
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::CompactFormat::new(decorator).build().fuse();

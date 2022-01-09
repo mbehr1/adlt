@@ -22,11 +22,12 @@ pub fn buf_as_hex_to_write(
     writer: &mut impl std::fmt::Write,
     buf: &[u8],
 ) -> Result<(), std::fmt::Error> {
-    for i in 0..buf.len() {
+    //for i in 0..buf.len() {
+    for (i, item) in buf.iter().enumerate() {
         if i > 0 {
-            write!(writer, " {:02x}", buf[i])?;
+            write!(writer, " {:02x}", item)?;
         } else {
-            write!(writer, "{:02x}", buf[i])?;
+            write!(writer, "{:02x}", item)?;
         }
     }
 
@@ -118,12 +119,10 @@ impl std::cmp::Ord for SortedDltMessage {
             } else {
                 self.m.timestamp_dms.cmp(&other.m.timestamp_dms)
             }
+        } else if self.calculated_time_us == other.calculated_time_us {
+            self.m.index.cmp(&other.m.index) // keep the initial order on same timestamp
         } else {
-            if self.calculated_time_us == other.calculated_time_us {
-                self.m.index.cmp(&other.m.index) // keep the initial order on same timestamp
-            } else {
-                self.calculated_time_us.cmp(&other.calculated_time_us)
-            }
+            self.calculated_time_us.cmp(&other.calculated_time_us)
         }
     }
 }
@@ -145,15 +144,10 @@ impl std::cmp::Eq for SortedDltMessage {}
 /// buffers the messages for at least that timeframe.
 /// #### Note Make sure that the messages are not delayed/buffered longer than the `min_buffer_delay_us`. Otherwise the result will not be sorted correctly.
 /// #### Note The lifecycle start times are not changed during the processing but are cached with the first value. So if the times slightly change any messages from parallel lifecycles will be wrongly sorted.
-pub fn buffer_sort_messages<'a, M, S>(
+pub fn buffer_sort_messages<M, S>(
     inflow: Receiver<crate::dlt::DltMessage>,
     outflow: Sender<crate::dlt::DltMessage>,
-    lcs_r: &'a evmap::ReadHandle<
-        crate::lifecycle::LifecycleId,
-        crate::lifecycle::LifecycleItem,
-        M,
-        S,
-    >,
+    lcs_r: &evmap::ReadHandle<crate::lifecycle::LifecycleId, crate::lifecycle::LifecycleItem, M, S>,
     windows_size_secs: u8,
     min_buffer_delay_us: u64,
 ) -> Result<(), std::sync::mpsc::SendError<crate::dlt::DltMessage>>
@@ -230,7 +224,7 @@ where
             }
             let mut recalc_buffering_delay = false;
             // from same lifecycle now
-            let insert_new = entry.1.len() == 0
+            let insert_new = entry.1.is_empty()
                 || entry.1.back().unwrap().start_time + crate::utils::US_PER_SEC
                     < msg_reception_time_us;
             if insert_new {
@@ -342,19 +336,12 @@ where
 
         // remove all messages from buffer that have a time more than max_buffer_time_us earlier
 
-        loop {
-            match buffer.front() {
-                Some(sm) => {
-                    if sm.calculated_time_us + max_buffer_time_us < msg_reception_time_us {
-                        let sm2 = buffer.pop_front().unwrap();
-                        outflow.send(sm2.m)?;
-                    } else {
-                        break; // msgs are sorted so we stop here and check after next msg
-                    }
-                }
-                None => {
-                    break;
-                }
+        while let Some(sm) = buffer.front() {
+            if sm.calculated_time_us + max_buffer_time_us < msg_reception_time_us {
+                let sm2 = buffer.pop_front().unwrap();
+                outflow.send(sm2.m)?;
+            } else {
+                break; // msgs are sorted so we stop here and check after next msg
             }
         }
     }

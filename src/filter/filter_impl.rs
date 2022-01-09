@@ -1,5 +1,6 @@
 use serde_json::{Value};
 use serde::ser::{Serialize, Serializer, SerializeStruct};
+use std::str::FromStr;
 use crate::dlt::DltChar4;
 use crate::dlt::DltMessage;
 use crate::dlt::Error; // todo??? or in crate::?
@@ -71,7 +72,7 @@ impl Filter {
         // Parse the string of data into serde_json::Value.
         let v = serde_json::from_str(json_str);
         if v.is_err() {
-            return Err(Error::new(ErrorKind::InvalidData(String::from(format!("json err '{:?}' parsing '{}'",v.unwrap_err(),json_str)))));
+            return Err(Error::new(ErrorKind::InvalidData(format!("json err '{:?}' parsing '{}'",v.unwrap_err(),json_str))));
         }
         let v :Value = v.unwrap();
         println!("Filter::from_json got {:?}", v);
@@ -93,13 +94,13 @@ impl Filter {
         if let Some(b) = v["atLoadTime"].as_bool() { at_load_time = b; }
 
         let mut ecu = None;
-        if let Some(s) = v["ecu"].as_str() { ecu = DltChar4::from_str(s); }
+        if let Some(s) = v["ecu"].as_str() { ecu = DltChar4::from_str(s).ok(); }
 
         let mut apid = None;
-        if let Some(s) = v["apid"].as_str() { apid = DltChar4::from_str(s); }
+        if let Some(s) = v["apid"].as_str() { apid = DltChar4::from_str(s).ok(); }
 
         let mut ctid = None;
-        if let Some(s) = v["ctid"].as_str() { ctid = DltChar4::from_str(s); }
+        if let Some(s) = v["ctid"].as_str() { ctid = DltChar4::from_str(s).ok(); }
 
         Ok(Filter {
             kind,
@@ -158,7 +159,7 @@ impl Filter {
             }
         }
 
-        return !negated;
+        !negated
     }
 }
 
@@ -168,7 +169,7 @@ impl Serialize for Filter {
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("Filter", 7)?;
-        let kind :u8 = (&self).kind as u8;
+        let kind :u8 = self.kind as u8;
         state.serialize_field("type", &kind)?;
         if !self.enabled { state.serialize_field("enabled", &self.enabled)?; }
         if self.at_load_time { state.serialize_field("atLoadTime", &self.at_load_time)?; }

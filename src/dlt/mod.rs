@@ -4,11 +4,15 @@ use std::convert::TryInto;
 use std::fmt;
 use std::fmt::Write;
 use std::io::BufRead; // SerializeStruct
+use std::str::FromStr;
 
 #[derive(Clone, PartialEq, Eq, Copy, Hash)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
     char4: [u8; 4], // String, // todo u8,4 array?
 }
+
+#[derive(Debug)]
+pub struct ParseNonAsciiError;
 
 impl DltChar4 {
     pub fn from_buf(buf: &[u8]) -> DltChar4 {
@@ -16,19 +20,23 @@ impl DltChar4 {
             char4: [buf[0], buf[1], buf[2], buf[3]],
         }
     }
-    pub fn from_str(astr: &str) -> Option<DltChar4> {
+}
+
+impl FromStr for DltChar4 {
+    type Err = ParseNonAsciiError;
+    fn from_str(astr: &str) -> Result<Self, Self::Err> {
         // we do only support ascii strings
         // add some defaults? or return None
         if !astr.is_ascii() {
-            return None;
+            return Err(ParseNonAsciiError);
         }
         let bytes = astr.as_bytes();
         let mut chars: [u8; 4] = [0, 0, 0, 0]; // [Dlt308]
-        for n in 0..std::cmp::min(bytes.len(), 4) {
-            chars[n] = bytes[n];
-        }
+        let avail_chars = std::cmp::min(bytes.len(), 4);
+        chars[..avail_chars].clone_from_slice(&bytes[..avail_chars]);
+        /*for n in 0..avail_chars {chars[n] = bytes[n];}*/
 
-        Some(DltChar4 { char4: chars })
+        Ok(DltChar4 { char4: chars })
     }
 }
 
@@ -129,7 +137,7 @@ impl DltStorageHeader {
     }
 
     fn reception_time_us(&self) -> u64 {
-        (self.secs as u64 * 1000_000) + self.micros as u64
+        (self.secs as u64 * 1_000_000) + self.micros as u64
     }
     #[allow(dead_code)]
     fn reception_time_ms(&self) -> u64 {
@@ -178,18 +186,19 @@ impl DltStandardHeader {
     }
 
     /// write a full DLT message starting with a standard header
-    /// todo example
+    /// changes the standard header (ignores) htyp to reflect
+    /// whether ecu, session_id, timestamp is available!
+    // todo example
     fn to_write(
         writer: &mut impl std::io::Write,
-        mcnt: u8,
+        std_hdr: &DltStandardHeader,
         ext_hdr: &Option<DltExtendedHeader>,
-        big_endian: bool,
         ecu: Option<DltChar4>,
         session_id: Option<u32>,
         timestamp: Option<u32>,
-        payload: &Vec<u8>,
+        payload: &[u8],
     ) -> Result<(), std::io::Error> {
-        let mut htyp: u8 = if big_endian {
+        let mut htyp: u8 = if std_hdr.is_big_endian() {
             DLT_STD_HDR_VERSION | DLT_STD_HDR_BIG_ENDIAN
         } else {
             DLT_STD_HDR_VERSION
@@ -213,25 +222,23 @@ impl DltStandardHeader {
         }
         len += payload.len() as u16; // todo check for max len...
 
-        let b1 = &[htyp, mcnt];
         let b2 = &u16::to_be_bytes(len);
-
-        let bufs = &mut [std::io::IoSlice::new(b1), std::io::IoSlice::new(b2)];
-        writer.write_vectored(bufs)?;
+        let b1 = &[htyp, std_hdr.mcnt, b2[0], b2[1]];
+        writer.write_all(b1)?;
         if let Some(e) = ecu {
-            writer.write(&e.char4)?;
+            writer.write_all(&e.char4)?;
         }
         if let Some(s) = session_id {
-            writer.write(&u32::to_be_bytes(s))?;
+            writer.write_all(&u32::to_be_bytes(s))?;
         }
         if let Some(t) = timestamp {
-            writer.write(&u32::to_be_bytes(t))?;
+            writer.write_all(&u32::to_be_bytes(t))?;
         }
         if let Some(e) = ext_hdr {
             e.to_write(writer)?;
         }
-        if payload.len() > 0 {
-            writer.write(payload)?;
+        if !payload.is_empty() {
+            writer.write_all(payload)?;
         }
 
         Ok(())
@@ -316,7 +323,8 @@ impl DltMessageLogType {
             4 => DltMessageLogType::Info,
             5 => DltMessageLogType::Debug,
             6 => DltMessageLogType::Verbose,
-            1 | _ => DltMessageLogType::Fatal,
+            1 => DltMessageLogType::Fatal,
+            _ => DltMessageLogType::Fatal,
         }
     }
 }
@@ -337,7 +345,8 @@ impl DltMessageTraceType {
             3 => DltMessageTraceType::FunctionOut,
             4 => DltMessageTraceType::State,
             5 => DltMessageTraceType::Vfb,
-            1 | _ => DltMessageTraceType::Variable,
+            1 => DltMessageTraceType::Variable,
+            _ => DltMessageTraceType::Variable,
         }
     }
 }
@@ -360,7 +369,8 @@ impl DltMessageNwType {
             4 => DltMessageNwType::Most,
             5 => DltMessageNwType::Ethernet,
             6 => DltMessageNwType::SomeIp,
-            1 | _ => DltMessageNwType::Ipc,
+            1 => DltMessageNwType::Ipc,
+            _ => DltMessageNwType::Ipc,
         }
     }
 }
@@ -377,7 +387,8 @@ impl DltMessageControlType {
         match mtin {
             2 => DltMessageControlType::Response,
             3 => DltMessageControlType::Time,
-            1 | _ => DltMessageControlType::Request,
+            1 => DltMessageControlType::Request,
+            _ => DltMessageControlType::Request,
         }
     }
 }
@@ -426,7 +437,8 @@ impl DltExtendedHeader {
             1 => DltMessageType::AppTrace(DltMessageTraceType::from(mtin)),
             2 => DltMessageType::NwTrace(DltMessageNwType::from(mtin)),
             3 => DltMessageType::Control(DltMessageControlType::from(mtin)),
-            0 | _ => DltMessageType::Log(DltMessageLogType::from(mtin)),
+            0 => DltMessageType::Log(DltMessageLogType::from(mtin)),
+            _ => DltMessageType::Log(DltMessageLogType::from(mtin)),
         }
     }
 
@@ -464,7 +476,7 @@ pub struct DltMessage {
 static NEXT_TEST_TIMESTAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 static DEFAULT_APID_CTID: DltChar4 = DltChar4 {
-    char4: ['-' as u8, '-' as u8, '-' as u8, '-' as u8],
+    char4: [b'-', b'-', b'-', b'-'],
 };
 
 static LOG_LEVEL_STRS: [&str; 7] = ["", "fatal", "error", "warn", "info", "debug", "verbose"];
@@ -509,7 +521,7 @@ static CTRL_RESPONSE_STRS: [&str; 9] = [
 
 impl DltMessage {
     pub fn timestamp_us(&self) -> u64 {
-        return self.timestamp_dms as u64 * 100;
+        self.timestamp_dms as u64 * 100
     }
 
     pub fn reception_time(&self) -> chrono::NaiveDateTime {
@@ -533,14 +545,9 @@ impl DltMessage {
         match &self.extended_header {
             Some(e) => {
                 // could return e.mstp() == DltMessageType::Control(DltMessageControlType::Request)
-                if (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
+                (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
             (e.verb_mstp_mtin>>4 & 0x0f) == 1
                 // mtin == MTIN_CTRL.CONTROL_REQUEST
-                {
-                    true
-                } else {
-                    false
-                }
             }
             None => false,
         }
@@ -571,7 +578,7 @@ impl DltMessage {
     ) -> DltMessage {
         let ecu = standard_header
             .ecu(add_header_buf)
-            .unwrap_or_else(|| storage_header.ecu.clone());
+            .unwrap_or(storage_header.ecu);
 
         let timestamp_dms = standard_header.timestamp_dms(add_header_buf);
 
@@ -586,7 +593,7 @@ impl DltMessage {
         DltMessage {
             index,
             reception_time_us: storage_header.reception_time_us(),
-            ecu: ecu,
+            ecu,
             timestamp_dms,
             standard_header,
             extended_header,
@@ -608,9 +615,8 @@ impl DltMessage {
         storage_header.to_write(writer)?;
         DltStandardHeader::to_write(
             writer,
-            self.standard_header.mcnt,
+            &self.standard_header,
             &self.extended_header,
-            self.standard_header.is_big_endian(), //  if cfg!(target_endian = "big") { true } else { false },
             None,                                 // ecu already in storageheader
             None,                                 // session_id = None, todo
             Some(self.timestamp_dms),
@@ -655,9 +661,9 @@ impl DltMessage {
                 }
             }
             if self.is_verbose() {
-                writer.write(&[' ' as u8, 'V' as u8])?;
+                writer.write_all(&[b' ', b'V'])?;
             } else {
-                writer.write(&[' ' as u8, 'N' as u8])?;
+                writer.write_all(&[b' ', b'N'])?;
             }
         } else {
             write!(writer, "--- --- N -")?;
@@ -673,12 +679,10 @@ impl DltMessage {
 
         let mut args = self.into_iter();
         if self.is_verbose() {
-            let mut nr_arg = 0;
-            for arg in args {
+            for (nr_arg, arg) in args.enumerate() {
                 if nr_arg > 0 {
                     write!(text, " ")?;
                 }
-                nr_arg += 1;
                 let _tyle = arg.type_info & 0x0f;
                 let is_bool = arg.type_info & 0x10u32 > 0;
                 let is_sint = arg.type_info & 0x20u32 > 0;
@@ -833,14 +837,14 @@ impl DltMessage {
                         write!(&mut text, "service({})", message_id)?;
                     }
 
-                    if payload.len() > 0 {
+                    if !payload.is_empty() {
                         write!(&mut text, ", ")?;
                     }
 
                     match ct {
                         DltMessageControlType::Response => {
                             // todo dump first byte as response result
-                            if payload.len() > 0 {
+                            if !payload.is_empty() {
                                 let retval = payload.get(0).unwrap();
                                 if *retval < 5u8 || *retval == 8u8 {
                                     write!(&mut text, "{}", CTRL_RESPONSE_STRS[*retval as usize])?;
@@ -980,12 +984,12 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                 // vari info? (for STRG it's after the str len...)
                 if type_info & (0x1u32 << 11) != 0 {
                     // todo e.g. [Dlt369] unsigned 16-bit int. following as first payload, then the name, then the bool!
-                    assert!(false, "type_info VARI not supported yet!");
+                    panic!("type_info VARI not supported yet!");
                 }
                 // fixp set?
                 if type_info & (0x1u32 << 12) != 0 {
                     // todo e.g. [Dlt386] 32-bit float, then tyle signed int as offset.
-                    assert!(false, "type_info FIXP not supported yet!");
+                    panic!("type_info FIXP not supported yet!");
                 }
 
                 if type_info & 0x10u32 != 0 {
@@ -1055,19 +1059,18 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                                 .unwrap(),
                         })
                     } else {
-                        assert!(
-                            false,
+                        panic!(
+                            // todo ignore,skip,...
                             "not enough payload for the string. expected len={} got={}",
                             len,
                             self.msg.payload.len() - self.index
                         );
-                        None
+                        //None
                     };
                     self.index += len; // we incr. in any case
                     return to_ret;
                 } else {
-                    assert!(
-                        false,
+                    panic!(
                         "type_info=0x{:x} unhandled! is_big_endian={}, index={}, msg={:?}",
                         type_info, self.is_big_endian, self.index, self.msg
                     );
@@ -1083,10 +1086,8 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                 };
                 self.index += len; // we incr. in any case
                 return to_ret;
-            } else {
-                if self.msg.payload.len() > self.index {
-                    assert!(false, "have unhandled payload data");
-                }
+            } else if self.msg.payload.len() > self.index {
+                panic!("have unhandled payload data"); // todo error/skip/ignore?
             }
         } else {
             // non-verbose:
@@ -1137,7 +1138,7 @@ impl Error {
     }
 
     pub fn kind(&self) -> &ErrorKind {
-        return &self.kind;
+        &self.kind
     }
 }
 
