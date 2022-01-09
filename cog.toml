@@ -1,6 +1,10 @@
 tag_prefix = "v"
 
-pre_bump_hooks = []
+pre_bump_hooks = [
+    "cargo build --release",
+    "echo 'bumping from {{latest}} to {{version}}'",
+    "cargo bump {{version}}"
+]
 post_bump_hooks = []
 
 [commit_types]
