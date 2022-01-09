@@ -16,7 +16,7 @@ jobs:
           fetch-depth: 0
 
       - name: Conventional commit check
-        uses: oknozor/cocogitto-action@v1
+        uses: cocogitto/cocogitto-action@v2
         with:
           git-user: 'mbehr1'
           git-user-email: 'mbehr+adlt@mcbehr.de'
