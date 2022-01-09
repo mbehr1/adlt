@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.1.1 - 2022-01-09
+#### Miscellaneous Chores
+- cog bump support - (d3e093d) - Matthias Behr
+- - -
+
 ## v0.1.0 - 2022-01-09
 #### Bug Fixes
 - lifecycle add 2nd check to avoid merge - (df6c374) - Matthias Behr
