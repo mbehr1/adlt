@@ -2,6 +2,24 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.1.2 - 2022-01-09
+#### Bug Fixes
+- **(tests)** fix unit tests - (fbbd869) - Matthias Behr
+#### Continuous Integration
+- **(commitlint)** add some debug info - (af09996) - Matthias Behr
+- **(commitlint)** use cocogitto-action@v2 - (6cfbf0d) - Matthias Behr
+- **(commitlint)** change git-user - (cd71936) - Matthias Behr
+- **(rust)** trigger build only for push on main branch - (84bb3a0) - Matthias Behr
+- **(rust)** trigger on all but gh-pages branches - (e7f3c5e) - Matthias Behr
+- add rust build/clippy/test workflow - (cda874f) - Matthias Behr
+- fix commitlint job - (74b8639) - Matthias Behr
+- fix github workflow - (92320ac) - Matthias Behr
+- add commitlint for PRs - (e9e8007) - Matthias Behr
+- add funding github info - (30af2a8) - Matthias Behr
+#### Documentation
+- **(README)** refer to CHANGELOG - (31ee82a) - Matthias Behr
+- - -
+
 ## v0.1.1 - 2022-01-09
 #### Miscellaneous Chores
 - cog bump support - (d3e093d) - Matthias Behr
