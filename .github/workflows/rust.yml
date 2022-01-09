@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ $default-branch ]
+    branches-ignore:
+      - gh-pages
   pull_request:
-    branches: [ $default-branch ]
 
 env:
   CARGO_TERM_COLOR: always
