@@ -28,7 +28,7 @@ Open an [issue](https://github.com/mbehr1/adlt/issues) or create a pull request 
 
 ## Release Notes
 
-todo...
+see [CHANGELOG](./CHANGELOG.md)
 
 ## Third-party Content
 
