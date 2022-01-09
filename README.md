@@ -35,3 +35,5 @@ todo...
 This library leverages a lot of amazing 3rd party components distributed under MIT or MPL-2.0 or Apache-2.0 license. Thanks a lot to the authors!
 
 See dependencies section in Cargo.toml for details.
+
+Using cocogitto to enforce conventional commit messages.
