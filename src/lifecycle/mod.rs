@@ -18,7 +18,7 @@ pub type LifecycleItem = Lifecycle; // Box<Lifecycle>; V needs to be Eq+Hash+Sha
 fn new_lifecycle_item(lc: Lifecycle) -> LifecycleItem {
     lc
     //LifecycleItem::from(lc) // Box::from(lc)
-                            //std::sync::Arc::new(std::cell::Cell::from(lc))
+    //std::sync::Arc::new(std::cell::Cell::from(lc))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -197,9 +197,7 @@ impl Lifecycle {
         let msg_timestamp_us = msg.timestamp_us();
         let msg_lc_start = msg.reception_time_us - msg_timestamp_us;
         let cur_end_time = self.end_time();
-        if msg_lc_start <= cur_end_time || 
-            msg_lc_start <= self.last_reception_time
-         {
+        if msg_lc_start <= cur_end_time || msg_lc_start <= self.last_reception_time {
             // ok belongs to this lifecycle
 
             if self.max_timestamp_us < msg_timestamp_us {
@@ -207,7 +205,7 @@ impl Lifecycle {
             }
 
             if self.last_reception_time > msg.reception_time_us {
-                // seems like a bug in dltviewer... 
+                // seems like a bug in dltviewer...
                 // println!("msg.update reception time going backwards! LC:{:?} {:?} {}", self.last_reception_time, msg.reception_time_us, msg.index);
             }
             self.last_reception_time = msg.reception_time_us;
@@ -471,12 +469,12 @@ where
     let mut buffered_lcs: std::collections::HashSet<LifecycleId> = std::collections::HashSet::new();
 
     // todo add check that msg.received times increase monotonically!
-    let mut merged_needed_id : LifecycleId = 0;
+    let mut merged_needed_id: LifecycleId = 0;
 
     for mut msg in inflow {
         // println!("last_last_lc_id {} got msg:{:?}", last_last_lc_id, msg);
         // get the lifecycles for the ecu from that msg:
-        let msg_ecu = msg.ecu;//.clone();
+        let msg_ecu = msg.ecu; //.clone();
         let ecu_lcs = ecu_map.entry(msg_ecu).or_insert_with(Vec::new);
 
         let ecu_lcs_len = ecu_lcs.len();
@@ -499,7 +497,9 @@ where
                                 merged_needed_id = lc2.id;
                             }
                         }
-                        if false /* && lc2.start_time <= prev_lc.end_time() */ {
+                        if false
+                        /* && lc2.start_time <= prev_lc.end_time() */
+                        {
                             // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
                             println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
                             // we merge into the prev. one (so use the prev.one only)
@@ -792,19 +792,19 @@ mod tests {
         let start = Instant::now();
         {
             let read_handle = lcs_r.read();
-            assert_eq!(read_handle.is_some(), true);
+            assert!(read_handle.is_some());
             let read_handle = read_handle.unwrap();
             for i in 0..NUMBER_ITERATIONS {
                 // check whether all msgs have a lifecycle:
                 let m = rx2.recv();
-                assert_eq!(m.is_ok(), true, "{}th message missing", i + 1);
+                assert!(m.is_ok(), "{}th message missing", i + 1);
                 let msg = m.unwrap();
                 assert_ne!(msg.lifecycle, 0, "{}th message without lifecycle", i + 1);
                 // check that the lifecycle is known as well: (this seems time consuming! around if omitted 90ms instead of 180ms)
                 //let l = lcs_r.get_one(&msg.lifecycle);
                 // using the read_handle its a lot faster: 106ms instead of 180ms/90ms
                 let l = read_handle.get_one(&msg.lifecycle);
-                assert_eq!(l.is_some(), true);
+                assert!(l.is_some());
             }
         }
         let duration = start.elapsed();
@@ -812,7 +812,7 @@ mod tests {
             "Time elapsed reading/verifying {}msgs is: {:?}",
             NUMBER_ITERATIONS, duration
         );
-        assert_ne!(rx2.recv().is_ok(), true);
+        assert!(rx2.recv().is_ok());
         // and lifecycle info be available
         for a in lcs_r.read().iter() {
             println!("lcs_r content {:?}", a);
@@ -822,7 +822,7 @@ mod tests {
                 println!("lcs_w2 content id={:?} lc={:?}", id, b);
             }
         }
-        assert_eq!(lcs_r.is_empty(), false, "empty lcs!");
+        assert!(!lcs_r.is_empty(), "empty lcs!");
         assert_eq!(lcs_r.len(), 1, "wrong number of lcs!");
     }
     #[test]
@@ -832,7 +832,7 @@ mod tests {
         drop(tx);
         let (_lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
         parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2);
-        assert_eq!(rx2.recv().is_err(), true);
+        assert!(rx2.recv().is_err());
     }
     #[test]
     fn basics_read_in_different_thread() {
@@ -841,8 +841,8 @@ mod tests {
         drop(tx);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
         parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2);
-        assert_eq!(rx2.recv().is_err(), true);
-        let r = lcs_r.clone();
+        assert!(rx2.recv().is_err());
+        let r = lcs_r;
         let t = std::thread::spawn(move || {
             for a in r.read().iter() {
                 println!("r content {:?}", a);
@@ -907,9 +907,8 @@ mod tests {
         type Item = DltMessage;
         fn next(&mut self) -> Option<Self::Item> {
             // Check to see if we've finished counting or not.
-            if self.msgs.len() > 0 {
-                let r = Some(self.msgs.remove(0));
-                r
+            if !self.msgs.is_empty() {
+                Some(self.msgs.remove(0))
             } else {
                 None
             }
@@ -1006,7 +1005,7 @@ mod tests {
             // so using the mapped lifecycles gives the current view
             for _i in 0..NUMBER_MSGS {
                 let rm = rx2.recv();
-                assert_eq!(rm.is_err(), false);
+                assert!(!rm.is_err());
                 let m = rm.unwrap();
                 assert!(m.lifecycle != 0);
                 assert!(
@@ -1017,7 +1016,7 @@ mod tests {
                 assert!(mapped_lcs.get(&m.lifecycle).unwrap().was_merged().is_none());
                 //println!("got msg:{:?}", rm.unwrap());
             }
-            assert_eq!(rx2.recv().is_err(), true);
+            assert!(rx2.recv().is_err());
         } else {
             assert_eq!(true, false);
         };
@@ -1139,7 +1138,7 @@ mod tests {
             // so using the mapped lifecycles gives the current view
             for _i in 0..2 * NUMBER_MSGS {
                 let rm = rx2.recv();
-                assert_eq!(rm.is_err(), false);
+                assert!(!rm.is_err());
                 let m = rm.unwrap();
                 assert!(m.lifecycle != 0);
                 assert!(
@@ -1150,7 +1149,7 @@ mod tests {
                 assert!(mapped_lcs.get(&m.lifecycle).unwrap().was_merged().is_none());
                 //println!("got msg:{:?}", rm.unwrap());
             }
-            assert_eq!(rx2.recv().is_err(), true);
+            assert!(rx2.recv().is_err());
         } else {
             assert_eq!(true, false);
         };
@@ -1246,10 +1245,7 @@ mod tests {
                     .unwrap()
                     .final_lc(&interims_lcs)
                     .start_time;
-                let s_m = SortedDltMessage {
-                    m: m,
-                    lc_start_time,
-                };
+                let s_m = SortedDltMessage { m, lc_start_time };
                 if buffer.len() == buffer.capacity() {
                     let s_m2 = buffer.pop_front().unwrap();
                     // todo verify
@@ -1270,7 +1266,7 @@ mod tests {
                 let idx = buffer.binary_search(&s_m).unwrap_or_else(|x| x); // todo this is not stable!
                 buffer.insert(idx, s_m);
             }
-            while buffer.len() > 0 {
+            while !buffer.is_empty() {
                 let s_m2 = buffer.pop_front().unwrap();
                 // todo verify
                 let s_m2_time = s_m2.lc_start_time + s_m2.m.timestamp_us();

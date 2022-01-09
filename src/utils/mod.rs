@@ -364,11 +364,11 @@ mod tests {
         buf_as_hex_to_write(&mut s, &[]).unwrap();
         assert_eq!(s.len(), 0);
 
-        buf_as_hex_to_write(&mut s, &[0x0f as u8]).unwrap();
+        buf_as_hex_to_write(&mut s, &[0x0f_u8]).unwrap();
         assert_eq!(s, "0f");
 
         let mut s = String::new();
-        buf_as_hex_to_write(&mut s, &[0x0f as u8, 0x00 as u8, 0xff as u8]).unwrap();
+        buf_as_hex_to_write(&mut s, &[0x0f_u8, 0x00_u8, 0xff_u8]).unwrap();
         assert_eq!(s, "0f 00 ff");
     }
 

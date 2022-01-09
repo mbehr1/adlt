@@ -1,10 +1,10 @@
-use serde_json::{Value};
-use serde::ser::{Serialize, Serializer, SerializeStruct};
-use std::str::FromStr;
 use crate::dlt::DltChar4;
 use crate::dlt::DltMessage;
 use crate::dlt::Error; // todo??? or in crate::?
-use crate::dlt::ErrorKind; // todo??? or in crate::?
+use crate::dlt::ErrorKind;
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+use serde_json::Value;
+use std::str::FromStr; // todo??? or in crate::?
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u8)]
@@ -15,7 +15,7 @@ pub enum FilterKind {
     Event = 3, // filter that collects data. Is basically a pos. filter
 }
 impl FilterKind {
-/*    fn value(&self) -> u8 {
+    /*    fn value(&self) -> u8 {
         match *self {
             FilterKind::Positive => 0,
             FilterKind::Negative => 1,
@@ -26,7 +26,9 @@ impl FilterKind {
 }
 
 #[derive(Debug, Default)]
-pub struct FilterKindContainer<T: Default> {e:[T;4]}
+pub struct FilterKindContainer<T: Default> {
+    e: [T; 4],
+}
 
 impl<T: Default> std::ops::Index<FilterKind> for FilterKindContainer<T> {
     type Output = T;
@@ -51,7 +53,6 @@ impl<T: Default> std::ops::IndexMut<FilterKind> for FilterKindContainer<T> {
     }
 }
 
-
 #[derive(Debug)]
 pub struct Filter {
     pub kind: FilterKind,
@@ -72,35 +73,55 @@ impl Filter {
         // Parse the string of data into serde_json::Value.
         let v = serde_json::from_str(json_str);
         if v.is_err() {
-            return Err(Error::new(ErrorKind::InvalidData(format!("json err '{:?}' parsing '{}'",v.unwrap_err(),json_str))));
+            return Err(Error::new(ErrorKind::InvalidData(format!(
+                "json err '{:?}' parsing '{}'",
+                v.unwrap_err(),
+                json_str
+            ))));
         }
-        let v :Value = v.unwrap();
+        let v: Value = v.unwrap();
         println!("Filter::from_json got {:?}", v);
-        let kind:FilterKind = match v["type"].as_u64() {
+        let kind: FilterKind = match v["type"].as_u64() {
             Some(0) => FilterKind::Positive,
             Some(1) => FilterKind::Negative,
             Some(2) => FilterKind::Marker,
             Some(3) => FilterKind::Event,
-            _ => return Err(Error::new(ErrorKind::InvalidData(String::from("unsupported type"))))
+            _ => {
+                return Err(Error::new(ErrorKind::InvalidData(String::from(
+                    "unsupported type",
+                ))))
+            }
         };
 
         let mut enabled = true;
-        if let Some(b) = v["enabled"].as_bool() { enabled = b; }
+        if let Some(b) = v["enabled"].as_bool() {
+            enabled = b;
+        }
 
         let mut negate_match = false;
-        if let Some(b) = v["not"].as_bool() { negate_match = b; }
+        if let Some(b) = v["not"].as_bool() {
+            negate_match = b;
+        }
 
         let mut at_load_time = false;
-        if let Some(b) = v["atLoadTime"].as_bool() { at_load_time = b; }
+        if let Some(b) = v["atLoadTime"].as_bool() {
+            at_load_time = b;
+        }
 
         let mut ecu = None;
-        if let Some(s) = v["ecu"].as_str() { ecu = DltChar4::from_str(s).ok(); }
+        if let Some(s) = v["ecu"].as_str() {
+            ecu = DltChar4::from_str(s).ok();
+        }
 
         let mut apid = None;
-        if let Some(s) = v["apid"].as_str() { apid = DltChar4::from_str(s).ok(); }
+        if let Some(s) = v["apid"].as_str() {
+            apid = DltChar4::from_str(s).ok();
+        }
 
         let mut ctid = None;
-        if let Some(s) = v["ctid"].as_str() { ctid = DltChar4::from_str(s).ok(); }
+        if let Some(s) = v["ctid"].as_str() {
+            ctid = DltChar4::from_str(s).ok();
+        }
 
         Ok(Filter {
             kind,
@@ -169,15 +190,27 @@ impl Serialize for Filter {
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("Filter", 7)?;
-        let kind :u8 = self.kind as u8;
+        let kind: u8 = self.kind as u8;
         state.serialize_field("type", &kind)?;
-        if !self.enabled { state.serialize_field("enabled", &self.enabled)?; }
-        if self.at_load_time { state.serialize_field("atLoadTime", &self.at_load_time)?; }
-        if self.negate_match { state.serialize_field("not", &self.negate_match)?; }
+        if !self.enabled {
+            state.serialize_field("enabled", &self.enabled)?;
+        }
+        if self.at_load_time {
+            state.serialize_field("atLoadTime", &self.at_load_time)?;
+        }
+        if self.negate_match {
+            state.serialize_field("not", &self.negate_match)?;
+        }
 
-        if let Some(s) = &self.ecu { state.serialize_field("ecu", &s)?; }
-        if let Some(s) = &self.apid { state.serialize_field("apid", &s)?; }
-        if let Some(s) = &self.ctid { state.serialize_field("ctid", &s)?; }
+        if let Some(s) = &self.ecu {
+            state.serialize_field("ecu", &s)?;
+        }
+        if let Some(s) = &self.apid {
+            state.serialize_field("apid", &s)?;
+        }
+        if let Some(s) = &self.ctid {
+            state.serialize_field("ctid", &s)?;
+        }
 
         state.end()
     }
@@ -192,26 +225,26 @@ mod tests {
     fn default_values() {
         let f = Filter::new(FilterKind::Positive);
         assert_eq!(f.kind, FilterKind::Positive);
-        assert_eq!(f.enabled, true);
-        assert_eq!(f.negate_match, false);
+        assert!(f.enabled);
+        assert!(!f.negate_match);
     }
 
     #[test]
     fn disabled_dont_match() {
         let mut f = Filter::new(FilterKind::Positive);
         let m = DltMessage::for_test();
-        assert_eq!(f.matches(&m), true);
+        assert!(f.matches(&m));
         f.enabled = false;
-        assert_eq!(f.matches(&m), false);
+        assert!(!f.matches(&m));
     }
     #[test]
     fn disabled_dont_match_even_negated() {
         let mut f = Filter::new(FilterKind::Positive);
         let m = DltMessage::for_test();
-        assert_eq!(f.matches(&m), true);
+        assert!(f.matches(&m));
         f.enabled = false;
         f.negate_match = true;
-        assert_eq!(f.matches(&m), false);
+        assert!(!f.matches(&m));
     }
 
     #[test]
@@ -219,14 +252,14 @@ mod tests {
         let mut f = Filter::new(FilterKind::Positive);
         let m = DltMessage::for_test();
         f.ecu = Some(DltChar4::from_buf(b"ECU1"));
-        assert_eq!(f.matches(&m), false);
-        f.ecu = Some(m.ecu.clone());
-        assert_eq!(f.matches(&m), true);
+        assert!(!f.matches(&m));
+        f.ecu = Some(m.ecu);
+        assert!(f.matches(&m));
         // and now negated:
         f.negate_match = true;
-        assert_eq!(f.matches(&m), false);
+        assert!(!f.matches(&m));
         f.ecu = Some(DltChar4::from_buf(b"ECU1"));
-        assert_eq!(f.matches(&m), true);
+        assert!(f.matches(&m));
     }
 
     #[test]
@@ -236,10 +269,10 @@ mod tests {
         f.ecu = Some(DltChar4::from_buf(b"ECU1"));
         f.apid = Some(DltChar4::from_buf(b"APID"));
         // neither ecu nor apid match
-        assert_eq!(f.matches(&m), false);
-        f.ecu = Some(m.ecu.clone());
+        assert!(!f.matches(&m));
+        f.ecu = Some(m.ecu);
         // now ecu matches but not apid
-        assert_eq!(f.matches(&m), false);
+        assert!(!f.matches(&m));
         m.extended_header = Some(DltExtendedHeader {
             apid: DltChar4::from_buf(b"APID"),
             noar: 0,
@@ -247,10 +280,10 @@ mod tests {
             verb_mstp_mtin: 0,
         });
         // now both match:
-        assert_eq!(f.matches(&m), true);
+        assert!(f.matches(&m));
         f.ecu = Some(DltChar4::from_buf(b"ECU1"));
         // now apid matches but not ecu:
-        assert_eq!(f.matches(&m), false);
+        assert!(!f.matches(&m));
     }
     #[test]
     fn match_ecu_and_apid_and_ctid() {
@@ -260,10 +293,10 @@ mod tests {
         f.apid = Some(DltChar4::from_buf(b"APID"));
         f.ctid = Some(DltChar4::from_buf(b"CTID"));
         // neither ecu nor apid match
-        assert_eq!(f.matches(&m), false);
-        f.ecu = Some(m.ecu.clone());
+        assert!(!f.matches(&m));
+        f.ecu = Some(m.ecu);
         // now ecu matches but not apid
-        assert_eq!(f.matches(&m), false);
+        assert!(!f.matches(&m));
         m.extended_header = Some(DltExtendedHeader {
             apid: DltChar4::from_buf(b"APID"),
             noar: 0,
@@ -271,31 +304,31 @@ mod tests {
             verb_mstp_mtin: 0,
         });
         // now all match:
-        assert_eq!(f.matches(&m), true);
+        assert!(f.matches(&m));
         f.ctid = Some(DltChar4::from_buf(b"CTIF"));
         // now apid,ecu matches but not ctid:
-        assert_eq!(f.matches(&m), false);
+        assert!(!f.matches(&m));
     }
 
     #[test]
     fn from_json() {
         // missing type
         let f = Filter::from_json(r#""#);
-        assert_eq!(f.is_err(), true);
+        assert!(f.is_err());
 
         // wrong type
         let f = Filter::from_json(r#"{"type": 4}"#);
-        assert_eq!(f.is_err(), true);
+        assert!(f.is_err());
 
         // proper type
         let f = Filter::from_json(r#"{"type": 3}"#).unwrap();
         assert_eq!(f.kind, FilterKind::Event);
-        assert_eq!(f.enabled, true);
-        
+        assert!(f.enabled);
+
         // proper type and enabled
         let f = Filter::from_json(r#"{"type": 0, "enabled": false}"#).unwrap();
         assert_eq!(f.kind, FilterKind::Positive);
-        assert_eq!(f.enabled, false);
+        assert!(!f.enabled);
 
         // proper type and ecu
         let f = Filter::from_json(r#"{"type": 0, "ecu": "AbC"}"#).unwrap();
@@ -305,7 +338,7 @@ mod tests {
         // proper type and ecu with lower ascii range... (json strings are in unicode / rfc7159)
         let f = Filter::from_json(r#"{"type": 0, "ecu": "A\u0001C"}"#).unwrap();
         assert_eq!(f.kind, FilterKind::Positive);
-        assert_eq!(f.ecu, Some(DltChar4::from_buf(&[0x41,1 ,0x43, 0 ])));
+        assert_eq!(f.ecu, Some(DltChar4::from_buf(&[0x41, 1, 0x43, 0])));
     }
 
     #[test]
@@ -317,30 +350,33 @@ mod tests {
         // field enabled and "not"
         let f = Filter::from_json(r#"{"type": 0, "enabled":false,"not":true}"#).unwrap();
         let s = f.to_json();
-        assert_eq!(s.contains(r#""type":0"#), true);
-        assert_eq!(s.contains(r#""enabled":false"#), true);
-        assert_eq!(s.contains(r#""not":true"#), true);
+        assert!(s.contains(r#""type":0"#));
+        assert!(s.contains(r#""enabled":false"#));
+        assert!(s.contains(r#""not":true"#));
 
         // field ecu
         let f = Filter::from_json(r#"{"type": 0, "ecu":"ec1"}"#).unwrap();
         let s = f.to_json();
-        assert_eq!(s.contains(r#""ecu":"ec1""#), true, "ecu wrong in {}", &s);
+        assert!(s.contains(r#""ecu":"ec1""#), "ecu wrong in {}", &s);
 
         // field apid
         let f = Filter::from_json(r#"{"type": 0, "apid":"ap1"}"#).unwrap();
         let s = f.to_json();
-        assert_eq!(s.contains(r#""apid":"ap1""#), true, "apid wrong in {:?} as {}", f, &s);
+        assert!(
+            s.contains(r#""apid":"ap1""#),
+            "apid wrong in {:?} as {}",
+            f,
+            &s
+        );
 
         // field ctid
         let f = Filter::from_json(r#"{"type": 0, "ctid":"CTID"}"#).unwrap();
         let s = f.to_json();
-        assert_eq!(s.contains(r#""ctid":"CTID""#), true, "ctid wrong in {}", &s);
-        
+        assert!(s.contains(r#""ctid":"CTID""#), "ctid wrong in {}", &s);
 
         // field ecu with 5 chars (should lead to parser error? todo)
         let f = Filter::from_json(r#"{"type": 0, "ecu":"12345"}"#).unwrap();
         let s = f.to_json();
-        assert_eq!(s.contains(r#""ecu":"1234""#), true, "ecu wrong in {}", &s);
-        
+        assert!(s.contains(r#""ecu":"1234""#), "ecu wrong in {}", &s);
     }
 }

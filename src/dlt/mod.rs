@@ -1242,13 +1242,13 @@ mod tests {
                 0x41, 0x4c, 0x54, 0x01, 224, 181, 124, 94, 0, 0, 0, 0, 0x45, 0x43, 0x55, 0x31,
             ];
             let shdr = DltStorageHeader::from_buf(&buf);
-            assert_eq!(shdr.is_none(), true);
+            assert!(shdr.is_none());
             // too short
             let buf: Vec<u8> = vec![
                 0x41, 0x4c, 0x54, 0x01, 224, 181, 124, 94, 0, 0, 0, 0, 0x45, 0x43, 0x55,
             ];
             let shdr = DltStorageHeader::from_buf(&buf);
-            assert_eq!(shdr.is_none(), true);
+            assert!(shdr.is_none());
         }
         #[test]
         fn from_buf_valid1() {
@@ -1295,13 +1295,13 @@ mod tests {
         #[test]
         fn verbose() {
             let eh = DltExtendedHeader::from_buf(&[0, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
-            assert_eq!(eh.is_verbose(), false);
+            assert!(!eh.is_verbose());
             let eh = DltExtendedHeader::from_buf(&[1, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
-            assert_eq!(eh.is_verbose(), true);
+            assert!(eh.is_verbose());
             let eh = DltExtendedHeader::from_buf(&[0xff, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
-            assert_eq!(eh.is_verbose(), true);
+            assert!(eh.is_verbose());
             let eh = DltExtendedHeader::from_buf(&[0xfe, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
-            assert_eq!(eh.is_verbose(), false);
+            assert!(!eh.is_verbose());
         }
         #[test]
         fn mstp() {
@@ -1311,7 +1311,7 @@ mod tests {
             assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Fatal)); // default still
 
             let eh =
-                DltExtendedHeader::from_buf(&[(0 << 1) | (3 << 4) | 1, 0, 1, 2, 3, 4, 5, 6, 7, 8])
+                DltExtendedHeader::from_buf(&[/*(0 << 1) |*/ (3 << 4) | 1, 0, 1, 2, 3, 4, 5, 6, 7, 8])
                     .unwrap();
             assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Warn));
 
@@ -1336,7 +1336,7 @@ mod tests {
         #[test]
         fn arg_iter() {
             let m = DltMessage::for_test();
-            assert_eq!(m.is_verbose(), false);
+            assert!(!m.is_verbose());
             let args_iter = m.into_iter();
 
             assert_eq!(args_iter.count(), 0);
@@ -1367,7 +1367,7 @@ mod tests {
             let mut args_iter = m.into_iter();
             assert_eq!(args_iter.next().unwrap().payload_raw, vec!(1, 2, 3, 4));
             assert_eq!(args_iter.next().unwrap().payload_raw, vec!(5));
-            assert_eq!(args_iter.next().is_none(), true);
+            assert!(args_iter.next().is_none());
 
             // now non-verbose, with only the id as payload:
             let m = DltMessage {

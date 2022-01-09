@@ -205,7 +205,7 @@ mod tests {
             let mut neg_filter = Filter::new(FilterKind::Negative);
             neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2"));
             let msg = DltMessage::for_test();
-            assert_eq!(neg_filter.matches(&msg), false);
+            assert!(!neg_filter.matches(&msg));
             tx.send(DltMessage::for_test()).unwrap();
             drop(tx);
             let (passed, filtered) =
