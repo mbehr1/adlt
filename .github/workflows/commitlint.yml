@@ -18,4 +18,6 @@ jobs:
       - name: Conventional commit check
         uses: oknozor/cocogitto-action@v1
         with:
+          git-user: 'mbehr1'
+          git-user-email: 'mbehr+adlt@mcbehr.de'
           check-latest-tag-only: true
