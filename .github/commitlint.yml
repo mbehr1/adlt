@@ -1,0 +1,21 @@
+name: Lint Commit Messages using cocogitto
+on:
+  push:
+    # release.yml workflow does it already there.
+    branches-ignore:
+      - main
+      - gh-pages
+  pull_request:
+jobs:
+  cog_check_job:
+    runs-on: ubuntu-latest
+    name: check conventional commit compliance
+    with:
+      check-latest-tag-only: true
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Conventional commit check
+        uses: oknozor/cocogitto-action@v1
