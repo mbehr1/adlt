@@ -801,7 +801,7 @@ impl DltMessage {
                                 match s {
                                     Ok(s) => {
                                         // need to replace the \n to a ' ' and remove other junk chars... todo use faster methods
-                                        let s = s.replace("\n", " ");
+                                        let s = s.replace('\n', " ");
                                         write!(text, "{}", s)?;
                                     }
                                     Err(e) => {
@@ -1240,6 +1240,8 @@ mod tests {
     use super::*;
 
     mod dlt_char4 {
+        use super::*;
+
         #[test]
         fn dltchar4_from_invalid() {
             assert_eq!(format!("{}", DltChar4::from_str("ABCDE").unwrap()), "ABCD");

@@ -192,7 +192,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 }
             }
         }
-        assert!(!f.is_none());
+        assert!(f.is_some());
         let reader: &mut BufReader<File> = f.as_mut().unwrap();
         match adlt::dlt::parse_dlt_with_storage_header(number_messages, &mut *reader) {
             Ok((res, msg)) => {
