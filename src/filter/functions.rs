@@ -1,10 +1,10 @@
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 
-use crate::filter::{Filter, FilterKind};
 use crate::dlt::DltMessage;
 use crate::dlt::Error;
 use crate::dlt::ErrorKind;
+use crate::filter::{Filter, FilterKind};
 
 pub fn filter_as_streams(
     filters: &[Filter],
@@ -32,14 +32,12 @@ pub fn filter_as_streams(
         let msg = recv.unwrap();
 
         // if we have no pos. filters we let it pass.
-        let found_after_pos_filters: bool;
-
-        if !pos_filters.is_empty() {
+        let found_after_pos_filters: bool = if !pos_filters.is_empty() {
             // any matching pos filter adds the message
-            found_after_pos_filters = pos_filters.iter().any(|f| f.matches(&msg));
+            pos_filters.iter().any(|f| f.matches(&msg))
         } else {
-            found_after_pos_filters = true;
-        }
+            true
+        };
         let mut found_after_neg_filters: bool = found_after_pos_filters;
         if found_after_neg_filters && !neg_filters.is_empty() {
             // any matching neg filters removes the message
@@ -67,8 +65,8 @@ pub fn filter_as_streams(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::channel;
     use crate::dlt::DltChar4;
+    use std::sync::mpsc::channel;
 
     mod filter_as_streams {
         use super::*;
@@ -119,7 +117,8 @@ mod tests {
             let mut neg_filter = Filter::new(FilterKind::Negative);
             neg_filter.enabled = false;
 
-            let (passed, filtered) = filter_as_streams(&[neg_filter, pos_filter], &rx, &tx2).unwrap();
+            let (passed, filtered) =
+                filter_as_streams(&[neg_filter, pos_filter], &rx, &tx2).unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
@@ -151,8 +150,15 @@ mod tests {
             drop(tx);
             // one pos. filter (but without any criteria -> should match)
             // one neg. filter -> should remove
-            let (passed, filtered) =
-                filter_as_streams(&[Filter::new(FilterKind::Positive),Filter::new(FilterKind::Negative)], &rx, &tx2).unwrap();
+            let (passed, filtered) = filter_as_streams(
+                &[
+                    Filter::new(FilterKind::Positive),
+                    Filter::new(FilterKind::Negative),
+                ],
+                &rx,
+                &tx2,
+            )
+            .unwrap();
             // check return value:
             assert_eq!(passed, 0);
             assert_eq!(filtered, 1);
@@ -169,8 +175,7 @@ mod tests {
             // one pos. filter should not match
             let mut pos_filter = Filter::new(FilterKind::Positive);
             pos_filter.ecu = Some(DltChar4::from_buf(b"ECU2"));
-            let (passed, filtered) =
-                filter_as_streams(&[pos_filter], &rx, &tx2).unwrap();
+            let (passed, filtered) = filter_as_streams(&[pos_filter], &rx, &tx2).unwrap();
             // check return value:
             assert_eq!(passed, 0);
             assert_eq!(filtered, 1);
@@ -187,8 +192,7 @@ mod tests {
             // one neg. filter -> should stay
             let mut neg_filter = Filter::new(FilterKind::Negative);
             neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2"));
-            let (passed, filtered) =
-                filter_as_streams(&[neg_filter], &rx, &tx2).unwrap();
+            let (passed, filtered) = filter_as_streams(&[neg_filter], &rx, &tx2).unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
@@ -209,7 +213,8 @@ mod tests {
             tx.send(DltMessage::for_test()).unwrap();
             drop(tx);
             let (passed, filtered) =
-                filter_as_streams(&[Filter::new(FilterKind::Positive),neg_filter], &rx, &tx2).unwrap();
+                filter_as_streams(&[Filter::new(FilterKind::Positive), neg_filter], &rx, &tx2)
+                    .unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
