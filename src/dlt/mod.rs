@@ -11,11 +11,17 @@ pub struct DltChar4 {
     char4: [u8; 4], // String, // todo u8,4 array?
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ParseNonAsciiError;
 
 impl DltChar4 {
     pub fn from_buf(buf: &[u8]) -> DltChar4 {
+        assert_eq!(
+            4,
+            buf.len(),
+            "DltChar::from_buf with invalid buf len {} called",
+            buf.len()
+        );
         DltChar4 {
             char4: [buf[0], buf[1], buf[2], buf[3]],
         }
@@ -617,8 +623,8 @@ impl DltMessage {
             writer,
             &self.standard_header,
             &self.extended_header,
-            None,                                 // ecu already in storageheader
-            None,                                 // session_id = None, todo
+            None, // ecu already in storageheader
+            None, // session_id = None, todo
             Some(self.timestamp_dms),
             &self.payload,
         )?;
@@ -1233,6 +1239,53 @@ pub fn parse_dlt_with_storage_header(
 mod tests {
     use super::*;
 
+    mod dlt_char4 {
+        #[test]
+        fn dltchar4_from_invalid() {
+            assert_eq!(format!("{}", DltChar4::from_str("ABCDE").unwrap()), "ABCD");
+            assert!(DltChar4::from_str("AB\u{2122}").is_err());
+            assert_eq!(DltChar4::from_str("AB\u{2122}"), Err(ParseNonAsciiError));
+        }
+        #[test]
+        #[should_panic]
+        fn dltchar4_from_invalid2() {
+            assert_eq!(format!("{}", DltChar4::from_buf(&[b'a', b'b'])), "ab"); // is invalid as too short so for now panic
+        }
+        #[test]
+        fn dltchar4_from_valid2() {
+            assert_eq!(format!("{}", DltChar4::from_str("").unwrap()), "");
+            assert_eq!(
+                format!("{}", DltChar4::from_buf(&[0u8, b'b', b'c', b'd'])),
+                "" // and not bcd!
+            );
+            assert!(DltChar4::from_str("AB\u{2122}").is_err());
+            assert_eq!(DltChar4::from_str("AB\u{2122}"), Err(ParseNonAsciiError));
+        }
+
+        #[test]
+        fn dltchar4_format() {
+            assert_eq!(format!("{}", DltChar4::from_str("----").unwrap()), "----");
+            // just 3 bytes
+            assert_eq!(format!("{}", DltChar4::from_str("ECU").unwrap()), "ECU");
+            // just 2 bytes
+            assert_eq!(format!("{}", DltChar4::from_str("EC").unwrap()), "EC");
+            // just 1 byte
+            assert_eq!(format!("{}", DltChar4::from_str("E").unwrap()), "E");
+
+            // just 1 byte but width 4
+            assert_eq!(format!("{:4}", DltChar4::from_str("E").unwrap()), "E   ");
+
+            // just 1 byte but pad left bound with - with interims to_string
+            assert_eq!(
+                format!("{:-<4}", DltChar4::from_str("E").unwrap().to_string()),
+                "E---"
+            );
+
+            // just 1 byte but pad left bound with - without to_string
+            assert_eq!(format!("{:-<4}", DltChar4::from_str("E").unwrap()), "E---");
+        }
+    }
+
     mod dlt_storage_header {
         use super::*;
         #[test]
@@ -1264,29 +1317,7 @@ mod tests {
                 shdr.reception_time_ms() as u64 * 1000,
                 shdr.reception_time_us()
             );
-        }
-
-        #[test]
-        fn dltchar4_format() {
-            assert_eq!(format!("{}", DltChar4::from_str("----").unwrap()), "----");
-            // just 3 bytes
-            assert_eq!(format!("{}", DltChar4::from_str("ECU").unwrap()), "ECU");
-            // just 2 bytes
-            assert_eq!(format!("{}", DltChar4::from_str("EC").unwrap()), "EC");
-            // just 1 byte
-            assert_eq!(format!("{}", DltChar4::from_str("E").unwrap()), "E");
-
-            // just 1 byte but width 4
-            assert_eq!(format!("{:4}", DltChar4::from_str("E").unwrap()), "E   ");
-
-            // just 1 byte but pad left bound with - with interims to_string
-            assert_eq!(
-                format!("{:-<4}", DltChar4::from_str("E").unwrap().to_string()),
-                "E---"
-            );
-
-            // just 1 byte but pad left bound with - without to_string
-            assert_eq!(format!("{:-<4}", DltChar4::from_str("E").unwrap()), "E---");
+            assert!(!format!("{:?}", shdr).is_empty()); // we can debug print a storage header
         }
     }
 
@@ -1310,9 +1341,19 @@ mod tests {
             let eh = DltExtendedHeader::from_buf(&[1u8 << 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
             assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Fatal)); // default still
 
-            let eh =
-                DltExtendedHeader::from_buf(&[/*(0 << 1) |*/ (3 << 4) | 1, 0, 1, 2, 3, 4, 5, 6, 7, 8])
-                    .unwrap();
+            let eh = DltExtendedHeader::from_buf(&[
+                /*(0 << 1) |*/ (3 << 4) | 1,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+            ])
+            .unwrap();
             assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Warn));
 
             let eh = DltExtendedHeader::from_buf(&[(1 << 1) | (1 << 4), 0, 1, 2, 3, 4, 5, 6, 7, 8])
