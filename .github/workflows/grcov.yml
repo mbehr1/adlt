@@ -21,8 +21,6 @@ jobs:
           RUSTDOCFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
       - id: coverage
         uses: actions-rs/grcov@v0.1
-      - name: show lcov file
-        run: echo "${{ steps.coverage.outputs.report }}"
       - name: show lcov file ls
         run: ls -al ${{ steps.coverage.outputs.report }} 
       - uses: codecov/codecov-action@v2

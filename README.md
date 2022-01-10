@@ -25,6 +25,9 @@ cargo build --release
 
 ### determine code coverage from unit tests
 
+See CI generated code coverage results here:
+[![codecov](https://codecov.io/gh/mbehr1/adlt/branch/main/graph/badge.svg?token=IXSFCJO277)](https://codecov.io/gh/mbehr1/adlt)
+
 To install grcov support:
 ```
 cargo install grcov
