@@ -15,6 +15,46 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 
 Work in progress...
 
+## How to build
+
+```
+cargo build
+cargo test
+cargo build --release
+```
+
+### determine code coverage from unit tests
+
+To install grcov support:
+```
+cargo install grcov
+rustup install nightly
+rustup default stable
+rustup component add llvm-tools-preview
+```
+
+To generate coverage:
+```
+rm -rf ./target *.prof* 
+export RUSTFLAGS="-Zinstrument-coverage"
+export LLVM_PROFILE_FILE="your_name-%p-%m.profraw" 
+cargo +nightly build
+cargo +nightly test
+grcov . --binary-path ./target/debug/ -s . -t html --branch --ignore-not-existing -o ./coverage/
+cd coverage
+open ./index.html
+```
+
+### perform a release
+```
+cog bump --auto
+```
+
+### check commit messages
+```
+cog check -l
+```
+
 ## Contributions
 
 Any and all test, code or feedback contributions are welcome.
