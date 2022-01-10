@@ -2,6 +2,39 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.1.3 - 2022-01-10
+#### Bug Fixes
+- **(lib)** version returning package version - (c7fc05f) - Matthias Behr
+- **(tests)** fix unit tests - (6efde42) - Matthias Behr
+#### Continuous Integration
+- **(commitlint)** add some debug info - (bf3bb7b) - Matthias Behr
+- **(commitlint)** use cocogitto-action@v2 - (c42a8af) - Matthias Behr
+- **(commitlint)** change git-user - (c0e729b) - Matthias Behr
+- **(grcov)** upload to codecov - (95ca179) - Matthias Behr
+- **(grcov)** add grcov workflow - (b506c11) - Matthias Behr
+- **(rust)** trigger build only for push on main branch - (c5ed4ad) - Matthias Behr
+- **(rust)** trigger on all but gh-pages branches - (5129444) - Matthias Behr
+- add rust build/clippy/test workflow - (d21eca2) - Matthias Behr
+- fix commitlint job - (98b756b) - Matthias Behr
+- fix github workflow - (820e6e0) - Matthias Behr
+- add commitlint for PRs - (94ff068) - Matthias Behr
+- add funding github info - (a44e887) - Matthias Behr
+#### Documentation
+- **(README)** refer to CHANGELOG - (e55b65f) - Matthias Behr
+- **(readme)** add codecov badge - (b0cb4a0) - Matthias Behr
+- updated readme - (7a4be65) - Matthias Behr
+#### Miscellaneous Chores
+- **(version)** v0.1.2 - (0071467) - Matthias Behr
+- **(version)** v0.1.1 - (b82124f) - Matthias Behr
+- **(version)** v0.1.0 - (8c28494) - Matthias Behr
+- cog bump support - (6e3b5d1) - Matthias Behr
+#### Refactoring
+- clippy... - (5274d75) - Matthias Behr
+- clippy fixes - (2ff153f) - Matthias Behr
+#### Tests
+- **(dltchar4)** test coverage - (174441a) - Matthias Behr
+- - -
+
 ## v0.1.2 - 2022-01-09
 #### Bug Fixes
 - **(tests)** fix unit tests - (fbbd869) - Matthias Behr
