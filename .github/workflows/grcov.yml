@@ -3,7 +3,7 @@ on: [push]
 name: Code Coverage
 
 jobs:
-  lint:
+  grcov:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
@@ -19,4 +19,14 @@ jobs:
           CARGO_INCREMENTAL: '0'
           RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
           RUSTDOCFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-      - uses: actions-rs/grcov@v0.1
+      - id: coverage
+        uses: actions-rs/grcov@v0.1
+      - name: show lcov file
+        run: echo "${{ steps.coverage.outputs.report }}"
+      - name: show lcov file ls
+        run: ls -al ${{ steps.coverage.outputs.report }} 
+      - uses: codecov/codecov-action@v2
+        with:
+          files: ${{ steps.coverage.outputs.report }}
+          fail_ci_if_error: true # optional (default = false)
+          verbose: true # optional (default = false)
