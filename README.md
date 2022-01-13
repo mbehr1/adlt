@@ -80,3 +80,4 @@ This library leverages a lot of amazing 3rd party components distributed under M
 See dependencies section in Cargo.toml for details.
 
 Using cocogitto to enforce conventional commit messages.
+Using codecov to host code-coverage results. Thx!
