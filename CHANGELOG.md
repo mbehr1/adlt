@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.1.4 - 2022-01-13
+#### Bug Fixes
+- panic with Utf8Error on invalid/corrupt ECU id (#2) - (6a9cd35) - Matthias Behr
+#### Documentation
+- **(readme)** add codecov appreciation - (8f94aff) - Matthias Behr
+- - -
+
 ## v0.1.3 - 2022-01-10
 #### Bug Fixes
 - **(lib)** version returning package version - (c7fc05f) - Matthias Behr
