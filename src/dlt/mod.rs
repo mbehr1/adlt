@@ -15,6 +15,17 @@ pub struct DltChar4 {
 pub struct ParseNonAsciiError;
 
 impl DltChar4 {
+    /**
+    convert from buffer to DltChar4
+    It's assumed only printable ascii.
+
+    Anyhow no conversions are done at construction on wrong/invalid data!
+
+    [ ] todo decide whether the following should be done here already but then the orig data will be lost on export!
+
+    chars < 0x20 are represented as '-'
+    chars > 0x7e as '?'
+    */
     pub fn from_buf(buf: &[u8]) -> DltChar4 {
         assert_eq!(
             4,
@@ -62,20 +73,35 @@ impl fmt::Debug for DltChar4 {
 }
 
 impl fmt::Display for DltChar4 {
+    /**
+        format the DltChar4 as a readable/printable ascii.
+
+        The following conversions are done:
+        - chars < 0x20 are represented as '-'
+        - chars > 0x7e as '?'
+    */
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let a_str: &str = if self.char4[0] > 0 {
-            if self.char4[1] > 0 {
-                if self.char4[2] > 0 {
-                    if self.char4[3] > 0 {
-                        std::str::from_utf8(&self.char4).unwrap()
-                    } else {
-                        std::str::from_utf8(&self.char4[0..3]).unwrap()
-                    }
+        let mut printable_chars: [u8; 4] = [0; 4];
+        let mut printable_len = 0;
+        for (i,printable_char) in printable_chars.iter_mut().enumerate() {
+            let c = self.char4[i];
+            if c > 0 {
+                printable_len += 1;
+                *printable_char = if c < 0x20 {
+                    b'-'
+                } else if c > 0x7e {
+                    b'?'
                 } else {
-                    std::str::from_utf8(&self.char4[0..2]).unwrap()
-                }
+                    c
+                };
             } else {
-                std::str::from_utf8(&self.char4[0..1]).unwrap()
+                break;
+            }
+        }
+        let a_str: &str = if printable_len > 0 {
+            unsafe {
+                // we are really sure its valid utf8
+                std::str::from_utf8_unchecked(&printable_chars[0..printable_len])
             }
         } else {
             ""
@@ -1251,14 +1277,23 @@ mod tests {
         #[test]
         #[should_panic]
         fn dltchar4_from_invalid2() {
-            assert_eq!(format!("{}", DltChar4::from_buf(&[b'a', b'b'])), "ab"); // is invalid as too short so for now panic
+            assert_eq!(format!("{}", DltChar4::from_buf(&[b'a', b'b'])), "ab"); // is invalid as too short so for now panic as we treat this a logical and not a data error!
+        }
+
+        #[test]
+        fn dltchar4_from_invalid_printable_ascii() {
+            assert_eq!(
+                format!("{}", DltChar4::from_buf(&[67, 9, 92, 140])),
+                "C-\\?"
+            ); // is invalid printable ascii
+               // we want <0x20 as - and >0x7e as ?
         }
         #[test]
         fn dltchar4_from_valid2() {
             assert_eq!(format!("{}", DltChar4::from_str("").unwrap()), "");
             assert_eq!(
                 format!("{}", DltChar4::from_buf(&[0u8, b'b', b'c', b'd'])),
-                "" // and not bcd!
+                "" // and not bcd! todo think about this. Another option "-bcd" (see _invalid_utf8)
             );
             assert!(DltChar4::from_str("AB\u{2122}").is_err());
             assert_eq!(DltChar4::from_str("AB\u{2122}"), Err(ParseNonAsciiError));
