@@ -99,7 +99,12 @@ impl Lifecycle {
         let timestamp_us = if is_ctrl_request {
             0
         } else {
-            msg.timestamp_us()
+            let tmsp = msg.timestamp_us();
+            if tmsp > msg.reception_time_us {
+                0 // tmsp > reception_tims_us is invalid, we ignore the tmsp!
+            } else {
+                tmsp
+            }
         };
 
         let alc = Lifecycle {
@@ -850,6 +855,25 @@ mod tests {
             assert_eq!(r.len(), 0);
         });
         t.join().unwrap();
+    }
+
+    #[test]
+    fn lc_invalid_msg_timestamps() {
+        // lifecycle use case 1:
+        // one long lifecycle but with timestamp_dms all 0 (e.g. from Dlt-Viewer SER/ASC)
+        let (tx, parse_lc_in) = channel();
+        // 3 lifecycle messages:
+        let mut m1 = crate::dlt::DltMessage::for_test();
+        m1.timestamp_dms += 40_000 * 10; // that should now be invalid!
+        assert!(m1.timestamp_us() > m1.reception_time_us);
+
+        tx.send(m1).unwrap();
+        drop(tx);
+        let (parse_lc_out, _rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        assert_eq!(1, lcs_r.len(), "wrong number of lcs!");
+        // todo
     }
 
     /// a generator for messages to ease test scenarios for lifecycles
