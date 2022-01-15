@@ -83,7 +83,12 @@ impl Lifecycle {
     /// * the time of the last log message of this lifecycle or
     /// * the time until the logs have been recorded but the lifecycle might be continued.
     pub fn end_time(&self) -> u64 {
-        self.start_time + self.max_timestamp_us
+        if self.max_timestamp_us == 0 {
+            // for lifecyces without max_timestamp_us we return the last reception time
+            self.last_reception_time
+        } else {
+            self.start_time + self.max_timestamp_us
+        }
     }
 
     /// returns whether this lifecycle contains only control request messages.
