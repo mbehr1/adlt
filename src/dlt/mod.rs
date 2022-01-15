@@ -83,7 +83,7 @@ impl fmt::Display for DltChar4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut printable_chars: [u8; 4] = [0; 4];
         let mut printable_len = 0;
-        for (i,printable_char) in printable_chars.iter_mut().enumerate() {
+        for (i, printable_char) in printable_chars.iter_mut().enumerate() {
             let c = self.char4[i];
             if c > 0 {
                 printable_len += 1;
@@ -916,6 +916,24 @@ impl DltMessage {
             reception_time_us: 100_000 + timestamp_us,
             ecu: DltChar4::from_buf(b"TEST"),
             timestamp_dms: (timestamp_us / 100) as u32,
+            standard_header: DltStandardHeader {
+                htyp: 1,
+                len: 0,
+                mcnt: 0,
+            },
+            extended_header: None,
+            payload: [].to_vec(),
+            lifecycle: 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn for_test_rcv_tms_ms(reception_time_ms: u64, timestamp_ms: u32) -> DltMessage {
+        DltMessage {
+            index: 0,
+            reception_time_us: 1640991600000000 /* 1.1.22, 00:00:00 */ + (reception_time_ms * 1_000),
+            ecu: DltChar4::from_buf(b"TEST"),
+            timestamp_dms: (timestamp_ms * 10) as u32,
             standard_header: DltStandardHeader {
                 htyp: 1,
                 len: 0,
