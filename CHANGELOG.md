@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.2.0 - 2022-01-15
+#### Bug Fixes
+- **(lifecycle)** ignore timestamps > reception time - (fc90eb5) - Matthias Behr
+#### Features
+- **(lifecycle)** use last_reception_time for lc end - (06bec20) - Matthias Behr
+- **(lifecycle)** implement proper merge handling - (b6f81ac) - Matthias Behr
+#### Tests
+- **(DltMessage)** add for_test_rcv_tms_ms helper - (68bfb19) - Matthias Behr
+- **(lifecycle)** fix flaky test - (b8be0f8) - Matthias Behr
+- add ntest to allow timeouts - (94d58e9) - Matthias Behr
+- - -
+
 ## v0.1.4 - 2022-01-13
 #### Bug Fixes
 - panic with Utf8Error on invalid/corrupt ECU id (#2) - (6a9cd35) - Matthias Behr
