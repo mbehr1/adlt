@@ -17,6 +17,9 @@ categories = ["command-line-utilities", "development-tools", "encoding", "parsin
 name = "adlt"
 path = "src/lib.rs"
 
+[dev-dependencies]
+ntest = "*"
+
 [dependencies]
 slog = "2.7.0"
 slog-term = "2.8.0"
