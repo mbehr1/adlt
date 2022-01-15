@@ -1079,11 +1079,13 @@ mod tests {
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
         let t = std::thread::spawn(move || {
-            for _ in 0..4 {
-                // 4 messages can be received. two from first LC and two from 2nd lc
+            for _ in 0..6 {
+                // 4 messages can be received. two from first LC and two from 2nd lc and two from 3rd
                 assert!(!rx.recv().is_err()); // one msg can be received
             }
-            assert!(rx.try_recv().is_err());
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_millis(10))
+                .is_err());
             drop(tx);
             rx
         });
