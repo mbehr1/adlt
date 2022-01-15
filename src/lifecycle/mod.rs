@@ -199,10 +199,15 @@ impl Lifecycle {
         // or
         // 2) the reception_time - timestamp <= reception_time from last msg
         // rationale for 2): there must be at least a gap of timestamp_us to last message if the message is from a new lifecycle
+        // 3) msg has 0 timestamp (todo. this is not ok if a "perfect" ecu starts the first msg with a 0 timestamp
+
         let msg_timestamp_us = msg.timestamp_us();
         let msg_lc_start = msg.reception_time_us - msg_timestamp_us;
         let cur_end_time = self.end_time();
-        if msg_lc_start <= cur_end_time || msg_lc_start <= self.last_reception_time {
+        if msg_lc_start <= cur_end_time
+            || msg_lc_start <= self.last_reception_time
+            || msg_timestamp_us == 0
+        {
             // ok belongs to this lifecycle
 
             if self.max_timestamp_us < msg_timestamp_us {
@@ -410,7 +415,7 @@ where
 ///
 /// The messages are passed via a stream and will be forwarded to one after processing.
 /// Messages might be buffered internally and are only forwarded as soon as the lifecycle is determined.
-///
+/// Messages are not sorted and output in same order as incoming.
 ///
 /// # Examples
 /// ````
@@ -445,7 +450,8 @@ where
     S: std::hash::BuildHasher + Clone,
     M: 'static + Clone,
 {
-    let max_buffering_delay: u64 = 60_000;
+    let max_buffering_delay_us: u64 = 60_000_000; // 60s
+
     // create a map of ecu:vec<lifecycle.id>
     // we can maintain that here as we're the only one modifying the lcs_ evmap
     let mut ecu_map: std::collections::HashMap<DltChar4, Vec<Lifecycle>> =
@@ -465,22 +471,40 @@ where
     }
 
     /*
-    println!("Have ecu_map.len={}", ecu_map.len());
+    println!("parse_lifecycles_buffered_from_stream. Have ecu_map.len={}", ecu_map.len());
     for (k, v) in &ecu_map {
         println!("Have for ecu {:?} {:?}", &k, &v);
-    }*/
+    } */
 
-    let mut buffered_msgs: std::vec::Vec<DltMessage> = std::vec::Vec::new();
+    // we buffer all messages until we do treat the lifecycles as stable (e.g. likelhood of being merged with prev one low)
+    // we buffer all messages in the same order as they arrive. So not e.g per ECU as we want to output them in the same order.
+    let mut buffered_msgs: std::collections::VecDeque<DltMessage> =
+        std::collections::VecDeque::with_capacity(10_000_000); // todo what is a good value to buffer at least 60s?
+                                                               // the lifecycles that have a likelyhood of being merged with prev or changing start times are kept here:
     let mut buffered_lcs: std::collections::HashSet<LifecycleId> = std::collections::HashSet::new();
 
-    // todo add check that msg.received times increase monotonically!
+    // todo add check that msg.received times increase monotonically! (ignoring the dlt viewer bug)
+    let mut next_buffer_check_time: u64 = 0;
     let mut merged_needed_id: LifecycleId = 0;
-
+    let start = std::time::Instant::now();
+    let mut lcs_w_needs_refresh = false;
     for mut msg in inflow {
-        // println!("last_last_lc_id {} got msg:{:?}", last_last_lc_id, msg);
+        /* if msg.ecu == DltChar4::from_str("ECU").unwrap() && msg.timestamp_dms > 0 {
+            println!(
+                "got msg:{} {:?}:{:?} {} {}",
+                msg.index,
+                msg.apid(),
+                msg.ctid(),
+                msg.reception_time_us,
+                msg.timestamp_dms
+            );
+        }*/
         // get the lifecycles for the ecu from that msg:
-        let msg_ecu = msg.ecu; //.clone();
-        let ecu_lcs = ecu_map.entry(msg_ecu).or_insert_with(Vec::new);
+        let msg_reception_time = msg.reception_time_us;
+
+        let msg_timestamp_us = msg.timestamp_us();
+
+        let ecu_lcs = ecu_map.entry(msg.ecu).or_insert_with(Vec::new);
 
         let ecu_lcs_len = ecu_lcs.len();
         if ecu_lcs_len > 0 {
@@ -497,53 +521,43 @@ where
                         let prev_lc = rest_lcs.last_mut().unwrap(); // : &mut Lifecycle = &mut last_lcs[ecu_lcs_len - 2];
                         if lc2.start_time <= prev_lc.end_time() {
                             // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
-                            if merged_needed_id != lc2.id {
-                                println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
-                                merged_needed_id = lc2.id;
-                            }
-                        }
-                        if false
-                        /* && lc2.start_time <= prev_lc.end_time() */
-                        {
-                            // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
-                            println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
+                            //println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
                             // we merge into the prev. one (so use the prev.one only)
-                            let is_buffered = buffered_lcs.contains(&lc2.id);
+                            let is_buffered = buffered_lcs.contains(&prev_lc.id);
                             if is_buffered {
-                                // the buffered lcs shall be merged again.
+                                // the buffered lcs shall be merged again (so lc2 is invalid afterwards)
                                 // this is easy now:
                                 prev_lc.merge(lc2);
                                 msg.lifecycle = prev_lc.id;
                                 // and now update the buffered msgs:
                                 {
                                     buffered_msgs.iter_mut().for_each(|m| {
-                                        println!(
+                                        /*println!(
                                             "modifying lifecycle from {} to {} for {:?}",
                                             lc2.id, prev_lc.id, m
-                                        );
+                                        );*/
                                         if m.lifecycle == lc2.id {
                                             (*m).lifecycle = prev_lc.id;
                                         }
                                     });
-                                    buffered_msgs.iter().for_each(|m| {
-                                        assert_ne!(m.lifecycle, lc2.id);
-                                    });
                                 };
                                 // we can delete the buffered_lcs elem now:
+                                assert!(
+                                    buffered_lcs.contains(&lc2.id),
+                                    "buffered_lcs does not contain {} msg:{:?}",
+                                    lc2.id,
+                                    msg
+                                ); // logical error otherwise
                                 buffered_lcs.remove(&lc2.id);
                                 remove_last_lc = true;
-                                // if we have no more yet, send the other msgs:
-                                if buffered_lcs.is_empty() {
-                                    while !buffered_msgs.is_empty() {
-                                        // todo really inefficient!!!! use drain???
-                                        let msg = buffered_msgs.remove(0);
-                                        // println!("sending early buffered_msg {:?}", msg);
-                                        outflow.send(msg).unwrap();
-                                    }
-                                    assert_eq!(buffered_msgs.len(), 0);
-                                }
+                                // if we have no more yet, send the other msgs: (not possible as prev_lc exists)
                             } else {
-                                panic!("todo shouldn't happen yet!");
+                                #[allow(clippy::collapsible_else_if)]
+                                if merged_needed_id != lc2.id {
+                                    println!("merge needed but prev_lc not buffered anymore! (todo!):\n {:?}\n {:?} msg #{}", prev_lc, lc2, msg.index);
+                                    merged_needed_id = lc2.id;
+                                }
+                                //panic!("todo shouldn't happen yet!");
                                 // this is the rare case where there had been already 2 lifecycles from prev. run and now
                                 // the 2nd got merged... todo think about how to handle that... as we dont want to have our callers
                                 // have to support/handle interims lifecycles!
@@ -557,46 +571,16 @@ where
                                 */
                             }
                         }
-                        // can we close the buffered lifecycle now?
-                        let is_buffered = buffered_lcs.contains(&lc2.id);
-                        if is_buffered {
-                            // lets calc the earliest possible lc start time assuming the current message has max buffering delays:
-                            let min_lc_start_time =
-                                (msg.reception_time_us - msg.timestamp_us()) - max_buffering_delay;
-                            // if this is not earlier than the prev_lc start-time we can conclude its a new lifecycle
-                            if min_lc_start_time > prev_lc.start_time {
-                                // println!("confirmed buffered lc {} as min_lc_start_time {} > prev_lc.start_time {}, lc={:?}", lc2.id, min_lc_start_time, prev_lc.start_time, lc2);
-                                buffered_lcs.remove(&lc2.id);
-                                lcs_w.insert(lc2.id, new_lifecycle_item(*lc2));
-                                lcs_w.refresh();
-                                // if we have no more yet, send the other msgs:
-                                if buffered_lcs.is_empty() {
-                                    while !buffered_msgs.is_empty() {
-                                        // todo really inefficient!!!! use drain???
-                                        let msg = buffered_msgs.remove(0);
-                                        // println!("sending early buffered_msg {:?}", msg);
-                                        outflow.send(msg).unwrap();
-                                    }
-                                    assert_eq!(buffered_msgs.len(), 0);
-                                }
-                            }
-                        }
-                    }
-                    // if we have buffered lifecycles check whether we can stop buffering them and mark as valid ones:
-                    // once the lifecycle start even including a max buffering delay can not fit into the prev one any longer:
-                    if !buffered_lcs.is_empty() {
-                        // we compare all lcs vs. the current msg received time (as we do assume that messages are sorted by received time even across ecus)
-                        // todo let _rcvd_time = msg.reception_time_us;
-                        // todo impl this as well to close e.g. lifecycles with very few messages from ecus earlier
                     }
 
                     if lcs_w.contains_key(&lc2.id) {
+                        // this assert is met. so we can ignore the above prev_lc merge part assert!(!buffered_lcs.contains(&lc2.id));
+                        // and prev_lc is still buffered as well to as well not contained.
+                        // to update nr of msgs in lifecycle and end time:
                         lcs_w.update(lc2.id, *lc2);
-                        lcs_w.refresh(); // only needed if start_time changed
+                        lcs_w_needs_refresh = true;
                     }
                     // todo refresh logic needed, e.g. by option every x sec or every x msgs
-                    // for now only at the end or if a new lc is created
-                    //lcs_w.refresh();
                 }
                 Some(lc3) => {
                     // new lc was created (as calc. lc start_time was past prev lc end time)
@@ -611,18 +595,7 @@ where
                     // 2. once the new lifecycle contains messages with timestamp > x (max buffering at (start plus at runtime) buffer)
                     // println!("added lc id {} to buffered_lcs", lc3.id);
                     buffered_lcs.insert(lc3.id);
-                    ecu_lcs.push(lc3); // we (sadly?) have copy trait for lifecycle
-                                       /*
-                                       lcs_w.insert(lc3.id, new_lifecycle_item(lc3));
-                                       ecu_lcs.push(lc3);
-
-                                       // have to refresh here as a new lc was created to ensure that lcs always contains all lcs referenced by the msgs
-                                       lcs_w.refresh();
-                                       for a in lcs_w.read().iter() {
-                                           for (id, b) in a {
-                                               println!("lcs_w content id={:?} lc={:?}", id, b);
-                                           }
-                                       }*/
+                    ecu_lcs.push(lc3);
                 }
             }
             if remove_last_lc {
@@ -630,23 +603,81 @@ where
                 assert!(!buffered_lcs.contains(&removed.id));
             }
         } else {
-            assert_eq!(
-                buffered_lcs.len(),
-                0,
-                "buffered_lcs exist already. not yet implemented/tested!"
-            );
+            // msg.ecu not known yet:
             let lc = Lifecycle::new(&mut msg);
+            // we dont have to buffer the first lifecycle per ecu (as it cannot disappear later on)
             lcs_w.insert(lc.id, new_lifecycle_item(lc));
+            lcs_w_needs_refresh = true;
             ecu_lcs.push(lc);
-            // have to refresh here as a new lc was created to ensure that lcs always contains all lcs referenced by the msgs
-            lcs_w.refresh();
+        }
+
+        // if we have buffered lifecycles check whether we can stop buffering them and mark as valid ones:
+        // once the lifecycle start even including a max buffering delay can not fit into the prev one any longer:
+        // we do this only once per sec
+        if next_buffer_check_time < msg_reception_time {
+            let min_lc_start_time =
+                if msg.reception_time_us > (msg_timestamp_us + max_buffering_delay_us) {
+                    (msg.reception_time_us - msg_timestamp_us) - max_buffering_delay_us
+                } else {
+                    0
+                };
+            for ecu_lcs in ecu_map.values() {
+                for lc in ecu_lcs.iter().rev() {
+                    if !buffered_lcs.contains(&lc.id) {
+                        break;
+                    } else {
+                        // this lc is still buffered:
+                        if min_lc_start_time > lc.start_time {
+                            //println!("confirmed buffered lc as min_lc_start_time {} > lc.start_time {}, confirmed lc={:?}", min_lc_start_time, lc.start_time, lc);
+                            buffered_lcs.remove(&lc.id);
+                            /*println!("remaining buffered_lcs={}", buffered_lcs.len());
+                            for lc in &buffered_lcs {
+                                println!(" buffered_lc={}", lc);
+                            }*/
+                            lcs_w.insert(lc.id, new_lifecycle_item(*lc));
+                            lcs_w_needs_refresh = true;
+
+                            // if the first msg in buffered_msgs belongs to this confirmed lc
+                            // then send all msgs until one msgs belongs to a buffered_lcs
+                            let mut prune_lc_id = lc.id;
+                            while !buffered_msgs.is_empty() {
+                                let msg_lc = buffered_msgs[0].lifecycle;
+                                if msg_lc == prune_lc_id {
+                                    let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
+                                    if lcs_w_needs_refresh {
+                                        lcs_w.refresh();
+                                        lcs_w_needs_refresh = false;
+                                    }
+                                    outflow.send(msg).unwrap();
+                                } else if !buffered_lcs.contains(&msg_lc) {
+                                    prune_lc_id = msg_lc;
+                                    // and we can delete right away
+                                    let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
+                                    if lcs_w_needs_refresh {
+                                        lcs_w.refresh();
+                                        lcs_w_needs_refresh = false;
+                                    }
+                                    outflow.send(msg).unwrap();
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                next_buffer_check_time = msg_reception_time + 1_000_000; // in 1s again
+            }
         }
 
         // pass msg to outflow only if we dont have buffered lcs:
         if !buffered_lcs.is_empty() {
-            buffered_msgs.push(msg);
+            buffered_msgs.push_back(msg);
         } else {
             // todo slog... println!("sending non-buffered_msg {:?}", msg);
+            if lcs_w_needs_refresh {
+                lcs_w.refresh();
+                lcs_w_needs_refresh = false;
+            }
             outflow.send(msg).unwrap(); // todo how handle errors?
         }
     }
@@ -687,6 +718,10 @@ where
             println!("lcs_w content id={:?} lc={:?}", id, b);
         }
     }*/
+    let duration = start.elapsed();
+    if duration > std::time::Duration::from_millis(1) {
+        // println!("parse_lifecycles_buffered_from_stream took {:?}", duration);
+    }
     lcs_w
 }
 
@@ -761,6 +796,7 @@ where
 mod tests {
     //use super::*;
     use crate::lifecycle::*;
+    use ntest::timeout;
     use std::sync::mpsc::channel;
     use std::time::Instant;
     extern crate nohash_hasher;
@@ -875,6 +911,234 @@ mod tests {
         assert_eq!(1, lcs_r.len(), "wrong number of lcs!");
         // todo
     }
+
+    #[test]
+    fn lc_uc_1() {
+        // lifecycle use case 1:
+        // one long lifecycle but with timestamp_dms all 0 (e.g. from Dlt-Viewer SER/ASC)
+        // todo
+    }
+
+    #[test]
+    fn lc_uc_2() {
+        // lifecycle use case 2:
+        // one lc but first message is with higher timestamp, then smaller ones
+        // todo
+    }
+
+    #[test]
+    fn lc_uc_3() {
+        // lifecycle use case 3:
+        // two lc with each first message is with higher timestamp, then smaller ones
+        // todo
+    }
+
+    #[test]
+    fn lc_uc_4() {
+        // lifecycle use case 4:
+        // three small lifecycles each 40s (<60s max_buffering_delay_us) long
+        let (tx, parse_lc_in) = channel();
+        // 3 lifecycle messages:
+        let mut m1 = crate::dlt::DltMessage::for_test();
+        m1.timestamp_dms = 40_000 * 10; // 40s
+        m1.reception_time_us = m1.timestamp_us() + 1_000_000_000;
+
+        let mut m2 = crate::dlt::DltMessage::for_test();
+        m2.timestamp_dms = 40_000 * 10;
+        m2.reception_time_us = m2.timestamp_us() + m1.reception_time_us + m1.timestamp_us() + 1;
+
+        let mut m3 = crate::dlt::DltMessage::for_test();
+        m3.timestamp_dms = 40_000 * 10;
+        m3.reception_time_us = m3.timestamp_us() + m2.reception_time_us + m2.timestamp_us() + 1;
+
+        tx.send(m1).unwrap();
+        tx.send(m2).unwrap();
+        tx.send(m3).unwrap();
+        drop(tx);
+        let (parse_lc_out, _rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        assert_eq!(3, lcs_r.len(), "wrong number of lcs!");
+    }
+
+    #[test]
+    #[timeout(1000)]
+    fn lc_uc_4_buf_delay_easy() {
+        // lifecycle use case 4:
+        // three small lifecycles each 70s (>60s max_buffering_delay_us) long, 1 one needs to be streamed from parse_lifecycles_buffered_from_stream while stream is not done
+        let (tx, parse_lc_in) = channel();
+        // 3 lifecycle messages:
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(70_000, 50_000); // 20s buf delay
+        tx.send(m1).unwrap();
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(70_000, 70_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        // next lifecycle starts 1ms after end of prev one (so at timestamp 70.001s)
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(70_000 + 70_001, 50_000); // 20s buf delay
+        tx.send(m1).unwrap();
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(140_001, 70_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(140_001 + 70_001, 50_000); // 20s buf delay
+        tx.send(m1).unwrap();
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(210_002, 70_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let (parse_lc_out, rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+
+        let t = std::thread::spawn(move || {
+            for _ in 0..4 {
+                // 4 messages can be received. two from first and the two from second lc
+                assert!(!rx.recv().is_err()); // one msg can be received
+            }
+            drop(tx);
+            rx
+        });
+
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        // wait until one message could be received
+        let _rx = t.join().unwrap(); // need result to avoid channel being closed too early!
+
+        assert_eq!(3, lcs_r.len(), "wrong number of lcs!");
+    }
+    #[test]
+    #[timeout(1000)]
+    fn lc_uc_4_buf_delay_easy2() {
+        // lifecycle use case 4:
+        // three small lifecycles each 70s (>60s max_buffering_delay_us) long, 1 one needs to be streamed from parse_lifecycles_buffered_from_stream while stream is not done
+        let (tx, parse_lc_in) = channel();
+        // 3 lifecycle messages:
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(70_000, 70_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        // next lifecycle starts 1ms after end of prev one (so at timestamp 70.001s)
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(140_001, 70_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(210_002, 70_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let (parse_lc_out, rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+
+        let t = std::thread::spawn(move || {
+            for _ in 0..2 {
+                // 2 messages can be received. one from first and one from second lc
+                assert!(!rx.recv().is_err()); // one msg can be received
+            }
+            drop(tx);
+            rx
+        });
+
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        // wait until one message could be received
+        let _rx = t.join().unwrap(); // need result to avoid channel being closed too early!
+
+        assert_eq!(3, lcs_r.len(), "wrong number of lcs!");
+    }
+
+    #[test]
+    #[timeout(1000)]
+    fn lc_uc_4_buf_delay_small() {
+        // lifecycle use case 4:
+        // four small lifecycles each 40s (<60s max_buffering_delay_us) long, 1 one needs to be streamed from parse_lifecycles_buffered_from_stream while stream is not done
+        // this is a bit trickier than the lc_uc_4_buf_delay_easy as the lifecycles itself are not confirmed directly
+        // 4 lifecycle messages:
+        let (tx, parse_lc_in) = channel();
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(40_000, 20_000); // 20s buf delay
+        tx.send(m1).unwrap();
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(40_000, 40_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        // next lifecycle starts 1ms after end of prev one (so at timestamp 40.001s)
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(40_000 + 40_001, 20_000); // 20s buf delay
+        tx.send(m1).unwrap();
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(80_001, 40_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(80_001 + 40_001, 20_000); // 20s buf delay
+        tx.send(m1).unwrap();
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(120_002, 40_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(120_002 + 40_001, 20_000); // 20s buf delay
+        tx.send(m1).unwrap();
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(160_003, 40_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let (parse_lc_out, rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+
+        let t = std::thread::spawn(move || {
+            for _ in 0..4 {
+                // 4 messages can be received. two from first LC and two from 2nd lc
+                assert!(!rx.recv().is_err()); // one msg can be received
+            }
+            assert!(rx.try_recv().is_err());
+            drop(tx);
+            rx
+        });
+
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        // wait until one message could be received
+        let rx = t.join().unwrap(); // need result to avoid channel being closed too early!
+        assert!(rx.try_recv().is_ok()); // now msgs can be recvd
+        assert_eq!(4, lcs_r.len(), "wrong number of lcs!");
+    }
+    #[test]
+    #[timeout(1000)]
+    fn lc_uc_4_buf_delay_small2() {
+        // lifecycle use case 4:
+        // four small lifecycles each 40s (<60s max_buffering_delay_us) long, 1 one needs to be streamed from parse_lifecycles_buffered_from_stream while stream is not done
+        // this is a bit trickier than the lc_uc_4_buf_delay_easy as the lifecycles itself are not confirmed directly
+        // 4 lifecycle messages:
+        let (tx, parse_lc_in) = channel();
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(40_000, 40_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        // next lifecycle starts 1ms after end of prev one (so at timestamp 40.001s)
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(80_001, 40_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(120_002, 40_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(160_003, 40_000); // 0s buf delay
+        tx.send(m1).unwrap();
+
+        let (parse_lc_out, rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+
+        let t = std::thread::spawn(move || {
+            for _ in 0..2 {
+                // 2 messages can be received. one from first LC and one from 2nd lc
+                assert!(!rx.recv().is_err()); // one msg can be received
+            }
+            assert!(rx
+                .recv_timeout(std::time::Duration::from_millis(10))
+                .is_err());
+            drop(tx);
+            rx
+        });
+
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        // wait until one message could be received
+        let rx = t.join().unwrap(); // need result to avoid channel being closed too early!
+        assert!(rx.try_recv().is_ok());
+
+        assert_eq!(4, lcs_r.len(), "wrong number of lcs!");
+    }
+
+    // todo add test where 2nd lc gets merged into first
+
+    // todo add test where 3rd lc gets merged into 2nd lc
+
+    // todo add test where 3rd lc gets merged into 2nd lc and then into 1st lc
 
     /// a generator for messages to ease test scenarios for lifecycles
     struct MessageGenerator {
