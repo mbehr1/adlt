@@ -431,9 +431,9 @@ where
         } else {
             // msg.ecu not known yet:
             let lc = Lifecycle::new(&mut msg);
-            // we dont have to buffer the first lifecycle per ecu (as it cannot disappear later on)
-            lcs_w.insert(lc.id, new_lifecycle_item(lc));
-            lcs_w_needs_refresh = true;
+            // even though the first lifecycle per ecu cannot disappear it still has to be buffered
+            // as the 2nd lifecycle might want to merge into that one
+            buffered_lcs.insert(lc.id);
             ecu_lcs.push(lc);
         }
 
@@ -917,11 +917,81 @@ mod tests {
         assert_eq!(4, lcs_r.len(), "wrong number of lcs!");
     }
 
-    // todo add test where 2nd lc gets merged into first
+    #[test]
+    fn lc_merge_1() {
+        // test where 2nd lc gets merged into first
+        let (tx, parse_lc_in) = channel();
+        // 0s buffering delay assumed, lc start at 0
+        tx.send(DltMessage::for_test_rcv_tms_ms(1_000, 1_000))
+            .unwrap();
+        // 1.5s buffering delay  -> but could be a new lifecycle as well with lc start at 1.5
+        tx.send(DltMessage::for_test_rcv_tms_ms(2_000, 500))
+            .unwrap();
+        // 1s buffering delay
+        tx.send(DltMessage::for_test_rcv_tms_ms(2_500, 1_500))
+            .unwrap();
 
-    // todo add test where 3rd lc gets merged into 2nd lc
+        drop(tx);
+        let (parse_lc_out, _rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        assert_eq!(1, lcs_r.len(), "wrong number of lcs: {:?}", lcs_r.read());
+    }
 
-    // todo add test where 3rd lc gets merged into 2nd lc and then into 1st lc
+    #[test]
+    fn lc_merge_2() {
+        // test where 3rd lc gets merged into 2nd lc
+        let (tx, parse_lc_in) = channel();
+        // 0s buffering delay assumed, lc start at 0
+        tx.send(DltMessage::for_test_rcv_tms_ms(1_000, 1_000))
+            .unwrap();
+
+        // new lc with 0s buf delay assumed, lc start at 2_000
+        tx.send(DltMessage::for_test_rcv_tms_ms(3_000, 1_000))
+            .unwrap();
+
+        // 1.5s buffering delay  -> but could be a new lifecycle as well with lc start at 3.5
+        tx.send(DltMessage::for_test_rcv_tms_ms(4_000, 500))
+            .unwrap();
+        // 1s buffering delay
+        tx.send(DltMessage::for_test_rcv_tms_ms(4_500, 1_500))
+            .unwrap();
+
+        drop(tx);
+        let (parse_lc_out, _rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        assert_eq!(2, lcs_r.len(), "wrong number of lcs!");
+    }
+
+    #[test]
+    fn lc_merge_3() {
+        // test where 3rd lc gets merged into 2nd lc and then into 1st lc
+        let (tx, parse_lc_in) = channel();
+        // 0s buffering delay assumed, lc start at 0
+        tx.send(DltMessage::for_test_rcv_tms_ms(1_000, 1_000))
+            .unwrap();
+
+        // 2s buffering delay  -> but could be a new lifecycle as well with lc start at 2
+        tx.send(DltMessage::for_test_rcv_tms_ms(3_000, 1_000))
+            .unwrap();
+
+        // 2s buffering delay  -> but could be a new lifecycle as well with lc start at 4
+        tx.send(DltMessage::for_test_rcv_tms_ms(5_000, 1_00))
+            .unwrap();
+        // 1s buffering delay -> now we should have just one lifecycle
+        tx.send(DltMessage::for_test_rcv_tms_ms(5_500, 4_500))
+            .unwrap();
+        // todo bug: but we currently need a 2nd message to trigger next merge
+        tx.send(DltMessage::for_test_rcv_tms_ms(5_501, 4_501))
+            .unwrap();
+
+        drop(tx);
+        let (parse_lc_out, _rx) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        assert_eq!(1, lcs_r.len(), "wrong number of lcs!");
+    }
 
     /// a generator for messages to ease test scenarios for lifecycles
     struct MessageGenerator {
