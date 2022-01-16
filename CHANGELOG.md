@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.3.0 - 2022-01-16
+#### Bug Fixes
+- **(lifecycle)** merge with first LC (#4) - (8713549) - Matthias Behr
+#### Miscellaneous Chores
+- **(lifecycle)** remove interims lifecycle (#3) - (dc78d66) - Matthias Behr
+- - -
+
 ## v0.2.0 - 2022-01-15
 #### Bug Fixes
 - **(lifecycle)** ignore timestamps > reception time - (fc90eb5) - Matthias Behr
