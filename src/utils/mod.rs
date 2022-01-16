@@ -616,7 +616,7 @@ mod tests {
     fn buffer_sort_message_sorted_basic1() {
         // a very basic test...
         // 1 ecu, msgs already sorted properly. see whether we keep same order
-        // we do need lc calculated as well, could do this manually...
+        // we do need lc calculated as well, could do this manually... (or use the None -> 0 start case)
         let (tx, parse_lc_in) = channel();
         // 0s buffering delay assumed, lc start at 0
         tx.send(DltMessage::for_test_rcv_tms_ms(1_000, 1_000))
@@ -644,4 +644,82 @@ mod tests {
             last_timestamp = m.timestamp_us();
         }
     }
+
+    #[test]
+    fn buffer_sort_message_sorted_basic2() {
+        // a very basic test...
+        // this time lifecycle detection is skipped
+        // 1 ecu, msgs already sorted properly. see whether we keep same order
+        let (tx, sort_in) = channel();
+        // 0s buffering delay assumed, lc start at 0
+        tx.send(DltMessage::for_test_rcv_tms_ms(1_000, 1_000))
+            .unwrap();
+        // 0.1s buffering delay
+        tx.send(DltMessage::for_test_rcv_tms_ms(1_200, 1_100))
+            .unwrap();
+        drop(tx);
+
+        let (sort_out, rx) = channel();
+
+        let (lcs_r, _lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+
+        let res = buffer_sort_messages(sort_in, sort_out, &lcs_r, 3, 2_000_000);
+        assert!(res.is_ok());
+        // check whether the messages are in same (= sorted by timestamp) order
+        let mut last_timestamp = 0;
+        for _ in 0..2 {
+            let m = rx.recv().unwrap();
+            assert!(m.timestamp_us() > last_timestamp);
+            last_timestamp = m.timestamp_us();
+        }
+    }
+
+    #[test]
+    fn buffer_sort_message_sorted_basic3() {
+        // a very basic test...
+        // this time lifecycle detection is skipped
+        // 1 ecu, msgs rev sorted. see whether they will be sorted
+        let (tx, sort_in) = channel();
+        // first message received is not the one with lowest timestamp
+        let mut m1 = DltMessage::for_test_rcv_tms_ms(0, 1_100);
+
+        // we need to provide a lifecycle as otherwise sorting doesn't work! (todo fix (check with setting lc.start_time to 0))
+        let mut lc = Lifecycle::new(&mut m1);
+
+        tx.send(m1).unwrap();
+        // 2nd one is slightly earlier... (so has 0.099 less buffering delay)
+        let mut m2 = DltMessage::for_test_rcv_tms_ms(1, 1_000);
+        assert!(lc.update(&mut m2).is_none());
+
+        tx.send(m2).unwrap();
+        drop(tx);
+
+        let (sort_out, rx) = channel();
+
+        let (lcs_r, mut lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+        lcs_w.insert(lc.id(), lc);
+        lcs_w.refresh();
+
+        let res = buffer_sort_messages(sort_in, sort_out, &lcs_r, 3, 2_000_000);
+        assert!(res.is_ok());
+        // check whether the messages are in same (= sorted by timestamp) order
+        let mut last_timestamp = 0;
+        for i in 0..2 {
+            let m = rx.recv().unwrap();
+            assert!(
+                m.timestamp_us() > last_timestamp,
+                "wrong order at msg#{}: {:?}",
+                i,
+                m
+            );
+            last_timestamp = m.timestamp_us();
+        }
+    }
+
+    // todo add buffer_sort_message test that:
+    // - are longer than the window_size
+    // - that have within the buffer a larger buffer_delay and wont get sorted
+    // - have a really huge initial buffer delay within the window_size
+    // - have multiple lifecycles
+    // - are from multiple (independent) ecus
 }
