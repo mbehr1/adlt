@@ -1361,18 +1361,50 @@ mod tests {
         #[test]
         fn from_buf_valid1() {
             let buf: Vec<u8> = vec![
-                0x44, 0x4c, 0x54, 0x01, 224, 181, 124, 94, 0, 0, 0, 0, 0x45, 0x43, 0x55, 0x31,
+                0x44, 0x4c, 0x54, 0x01, 224, 181, 124, 94, 0xe8, 3, 0, 0, 0x45, 0x43, 0x55, 0x31,
             ];
             let shdr =
                 DltStorageHeader::from_buf(&buf).expect("failed to parse valid storage header");
             assert_eq!(shdr.secs, 1585231328); // 26.3.2020 14:02:08 gmt
-            assert_eq!(shdr.micros, 0);
+            assert_eq!(shdr.micros, 1000);
             assert_eq!(&shdr.ecu.char4, b"ECU1");
             assert_eq!(
                 shdr.reception_time_ms() as u64 * 1000,
                 shdr.reception_time_us()
             );
             assert!(!format!("{:?}", shdr).is_empty()); // we can debug print a storage header
+        }
+
+        #[test]
+        fn from_msg1() {
+            let mut m = DltMessage::for_test_rcv_tms_ms(0, 0);
+            m.reception_time_us = (1585231328 * 1_000_000) + 1_000;
+            m.ecu = DltChar4::from_buf(b"ECU1");
+            let shdr = DltStorageHeader::from_msg(&m);
+            assert_eq!(shdr.secs, 1585231328); // 26.3.2020 14:02:08 gmt
+            assert_eq!(shdr.micros, 1000);
+            assert_eq!(&shdr.ecu.char4, b"ECU1");
+        }
+
+        #[test]
+        fn to_write1() {
+            let shdr = DltStorageHeader {
+                secs: 1585231328,
+                micros: 1000,
+                ecu: DltChar4::from_buf(b"ECU1"),
+            };
+
+            let mut file = Vec::<u8>::new();
+            let res = shdr.to_write(&mut file);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), 16);
+            assert_eq!(
+                file,
+                vec![
+                    0x44, 0x4c, 0x54, 0x01, 224, 181, 124, 94, 0xe8, 3, 0, 0, 0x45, 0x43, 0x55,
+                    0x31,
+                ]
+            );
         }
     }
 
