@@ -1442,16 +1442,85 @@ mod tests {
             assert!(shdr.has_ecu_id());
             assert!(shdr.has_session_id());
             assert!(shdr.has_timestamp());
+            assert_eq!(
+                shdr.std_ext_header_size(),
+                (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + 4 + 4 + 4) as u16
+            );
 
             let buf: Vec<u8> = vec![0x22, 0x42, 0, 4];
             let shdr = DltStandardHeader::from_buf(&buf).unwrap();
-            assert_eq!(shdr.len, 4);
+            assert_eq!(shdr.len as usize, DLT_MIN_STD_HEADER_SIZE);
             assert_eq!(shdr.dlt_vers(), 1);
             assert!(!shdr.has_ext_hdr());
             assert!(shdr.is_big_endian());
             assert!(!shdr.has_ecu_id());
             assert!(!shdr.has_session_id());
             assert!(!shdr.has_timestamp());
+            assert_eq!(shdr.std_ext_header_size(), DLT_MIN_STD_HEADER_SIZE as u16);
+            assert!(shdr.ecu(&buf).is_none());
+        }
+
+        #[test]
+        fn from_buf_valid2() {
+            // minimal with ecu id
+            let buf: Vec<u8> = vec![0x26, 0x42, 0xf1, 0x23, b'a', b'B', b'c', b'D'];
+            let shdr = DltStandardHeader::from_buf(&buf).unwrap();
+            assert_eq!(shdr.mcnt, 0x42);
+            assert_eq!(shdr.len, 0xf123);
+            assert_eq!(shdr.dlt_vers(), 1);
+            assert!(!shdr.has_ext_hdr());
+            assert!(shdr.is_big_endian());
+            assert!(shdr.has_ecu_id());
+            assert!(!shdr.has_session_id());
+            assert!(!shdr.has_timestamp());
+            assert_eq!(
+                shdr.std_ext_header_size(),
+                (DLT_MIN_STD_HEADER_SIZE + 4) as u16
+            );
+            assert_eq!(shdr.ecu(&buf[4..]), DltChar4::from_str("aBcD").ok());
+            assert_eq!(shdr.timestamp_dms(&buf[4..]), 0);
+        }
+
+        #[test]
+        fn from_buf_valid3() {
+            // minimal with timestamp
+            let buf: Vec<u8> = vec![0x32, 0x42, 0xf1, 0x23, 0xf2, 0x34, 0x56, 0x78];
+            let shdr = DltStandardHeader::from_buf(&buf).unwrap();
+            assert_eq!(shdr.mcnt, 0x42);
+            assert_eq!(shdr.len, 0xf123);
+            assert_eq!(shdr.dlt_vers(), 1);
+            assert!(!shdr.has_ext_hdr());
+            assert!(shdr.is_big_endian());
+            assert!(!shdr.has_ecu_id());
+            assert!(!shdr.has_session_id());
+            assert!(shdr.has_timestamp());
+            assert_eq!(
+                shdr.std_ext_header_size(),
+                (DLT_MIN_STD_HEADER_SIZE + 4) as u16
+            );
+            assert_eq!(shdr.timestamp_dms(&buf[4..]), 0xf2345678);
+        }
+
+        #[test]
+        fn from_buf_valid4() {
+            // minimal with timestamp and ecu id and session id
+            let buf: Vec<u8> = vec![
+                0x3e, 0x42, 0xf1, 0x23, 0, 0, 0, 0, 1, 1, 1, 2, 0xf2, 0x34, 0x56, 0x78,
+            ];
+            let shdr = DltStandardHeader::from_buf(&buf).unwrap();
+            assert_eq!(shdr.mcnt, 0x42);
+            assert_eq!(shdr.len, 0xf123);
+            assert_eq!(shdr.dlt_vers(), 1);
+            assert!(!shdr.has_ext_hdr());
+            assert!(shdr.is_big_endian());
+            assert!(shdr.has_ecu_id());
+            assert!(shdr.has_session_id());
+            assert!(shdr.has_timestamp());
+            assert_eq!(
+                shdr.std_ext_header_size(),
+                (DLT_MIN_STD_HEADER_SIZE + 4 + 4 + 4) as u16
+            );
+            assert_eq!(shdr.timestamp_dms(&buf[4..]), 0xf2345678);
         }
 
         #[test]
