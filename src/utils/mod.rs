@@ -545,6 +545,74 @@ mod tests {
     }
 
     #[test]
+    fn buffer_sort_elements3() {
+        // check that if more elements are added than the BufferElementsAmount
+        // that then the smallest one gets pushed out.
+        // here: buffer is one smaller than elements
+        // so the last elements processed leads to one element being
+        // pushed out. Which should be the 2nd smallest one. As the last one
+        // is the smallest one.
+        let (tx, rx) = channel();
+        const NUMBER_MSGS: usize = 1_000;
+        let mut msgs: std::vec::Vec<SortedMsg> = std::vec::Vec::with_capacity(NUMBER_MSGS);
+        let mut second_msg_timestamp = 0;
+        for i in 0..NUMBER_MSGS {
+            let m = crate::dlt::DltMessage::for_test();
+            if i == 1 {
+                second_msg_timestamp = m.timestamp_us()
+            }
+            msgs.push(SortedMsg::from(m));
+        }
+        msgs.reverse();
+        let mut last_time_stamp = u32::MAX;
+        for m in msgs {
+            assert!(
+                m.0.timestamp_dms <= last_time_stamp,
+                "msg has wrong order/time_stamp! {} vs. exp. > {}",
+                m.0.timestamp_dms,
+                last_time_stamp
+            );
+            last_time_stamp = m.0.timestamp_dms;
+            tx.send(m).unwrap();
+        }
+
+        let (tx2, rx2) = channel();
+        let t = std::thread::spawn(move || {
+            buffer_sort_elements(
+                rx,
+                tx2,
+                BufferElementsOptions {
+                    amount: BufferElementsAmount::NumberElements(NUMBER_MSGS - 1),
+                },
+            )
+        });
+        // till now there must be exactly one message in tx:
+        let m = rx2.recv().unwrap();
+        assert_eq!(m.0.timestamp_us(), second_msg_timestamp); // msg with 2nd lowest timestamp
+        assert!(rx2
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err());
+        // close the sender:
+        drop(tx);
+        // now the first messages should arrive sorted by time_stamp:
+        let mut last_time_stamp = 0;
+        for i in 0..NUMBER_MSGS - 1 {
+            let mr = rx2.recv_timeout(std::time::Duration::from_millis(50));
+            assert!(mr.is_ok(), "failed to get msg#{}", i);
+            let m = mr.unwrap().0;
+            assert!(
+                m.timestamp_dms > last_time_stamp,
+                "msg#{} has wrong order/time_stamp! {} vs. exp. > {}",
+                i,
+                m.timestamp_dms,
+                last_time_stamp
+            );
+            last_time_stamp = m.timestamp_dms;
+        }
+        t.join().unwrap();
+    }
+
+    #[test]
     fn buffer_sort_message_sorted_basic1() {
         // a very basic test...
         // 1 ecu, msgs already sorted properly. see whether we keep same order
