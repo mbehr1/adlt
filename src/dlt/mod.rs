@@ -205,12 +205,12 @@ impl DltStandardHeader {
             len: u16::from_be_bytes([buf[2], buf[3]]), // all big endian includes std.header, ext header and the payload
         };
         // [Dlt104] check the version number. We expect 0x1 currently
-        let dlt_vers = (htyp >> 5) & 0x07;
+        let dlt_vers = sh.dlt_vers();
         match dlt_vers {
             1 => (),
             _ => {
                 eprintln!("DltStandardHeader with unsupported version {}!", dlt_vers);
-                // todo return None?
+                // todo return None? / set len to 0, exthdr,... to false
             }
         }
 
@@ -292,6 +292,11 @@ impl DltStandardHeader {
             length += DLT_EXT_HEADER_SIZE as u16;
         }
         length
+    }
+
+    /// returns the dlt version from header. Currently only 0x1 should be supported.
+    fn dlt_vers(&self) -> u8 {
+        (self.htyp >> 5) & 0x07
     }
 
     fn has_ext_hdr(&self) -> bool {
@@ -1406,6 +1411,64 @@ mod tests {
                 ]
             );
         }
+    }
+
+    mod dlt_standard_header {
+        use super::*;
+
+        #[test]
+        fn from_buf_invalid1() {
+            let buf: Vec<u8> = vec![0x44, 0x4c];
+            let stdh = DltStandardHeader::from_buf(&buf);
+            assert!(stdh.is_none());
+
+            let buf: Vec<u8> = vec![0, 0, 0, 0]; // invalid version 0, valid is only 1.
+                                                 // but we parse it anyhow... todo change...
+            let stdh = DltStandardHeader::from_buf(&buf).unwrap();
+            assert_eq!(stdh.dlt_vers(), 0);
+            assert!(!format!("{:?}", stdh).is_empty()); // we can debug print a standard header
+        }
+
+        #[test]
+        fn from_buf_valid1() {
+            let buf: Vec<u8> = vec![0x3f, 0x42, 0xf1, 0x23];
+            let shdr = DltStandardHeader::from_buf(&buf).unwrap();
+            assert_eq!(shdr.htyp, 0x3f);
+            assert_eq!(shdr.mcnt, 0x42);
+            assert_eq!(shdr.len, 0xf123);
+            assert_eq!(shdr.dlt_vers(), 1);
+            assert!(shdr.has_ext_hdr());
+            assert!(shdr.is_big_endian());
+            assert!(shdr.has_ecu_id());
+            assert!(shdr.has_session_id());
+            assert!(shdr.has_timestamp());
+
+            let buf: Vec<u8> = vec![0x22, 0x42, 0, 4];
+            let shdr = DltStandardHeader::from_buf(&buf).unwrap();
+            assert_eq!(shdr.len, 4);
+            assert_eq!(shdr.dlt_vers(), 1);
+            assert!(!shdr.has_ext_hdr());
+            assert!(shdr.is_big_endian());
+            assert!(!shdr.has_ecu_id());
+            assert!(!shdr.has_session_id());
+            assert!(!shdr.has_timestamp());
+        }
+
+        #[test]
+        fn to_write1() {
+            // write a minimal standard header
+            let shdr = DltStandardHeader {
+                htyp: 0x3f,
+                mcnt: 0x42,
+                len: 4,
+            };
+
+            let mut file = Vec::<u8>::new();
+            let res = DltStandardHeader::to_write(&mut file, &shdr, &None, None, None, None, &[]);
+            assert!(res.is_ok());
+            assert_eq!(file, vec![0x22, 0x42, 0, 4,]);
+        }
+        // todo to_write2 with all options
     }
 
     mod dlt_extended_header {
