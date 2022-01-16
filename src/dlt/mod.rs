@@ -931,7 +931,7 @@ impl DltMessage {
     pub fn for_test_rcv_tms_ms(reception_time_ms: u64, timestamp_ms: u32) -> DltMessage {
         DltMessage {
             index: 0,
-            reception_time_us: 1640991600000000 /* 1.1.22, 00:00:00 */ + (reception_time_ms * 1_000),
+            reception_time_us: 1640995200000000 /* 1.1.22, 00:00:00 as GMT */ + (reception_time_ms * 1_000),
             ecu: DltChar4::from_buf(b"TEST"),
             timestamp_dms: (timestamp_ms * 10) as u32,
             standard_header: DltStandardHeader {

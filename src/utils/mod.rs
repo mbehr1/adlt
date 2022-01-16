@@ -357,6 +357,26 @@ mod tests {
     use crate::utils::*;
     use std::sync::mpsc::channel;
     //    use std::time::Instant;
+    use chrono::{Datelike, Timelike};
+
+    #[test]
+    fn time_utc() {
+        let utc_time = utc_time_from_us(1640995200000001); // epoch timestamp for GMT 1.1.2022, 0:00:00.001 (1ms)
+        assert_eq!(utc_time.date().day(), 1);
+        assert_eq!(utc_time.date().month(), 1);
+        assert_eq!(utc_time.date().year(), 2022);
+        assert_eq!(utc_time.time().hour(), 0);
+        assert_eq!(utc_time.time().minute(), 0);
+        assert_eq!(utc_time.time().second(), 0);
+        assert_eq!(utc_time.time().nanosecond(), 1000);
+
+        // and an invalid one:
+        let utc_time = utc_time_from_us((i64::MAX as u64) + 42); // seems internally an i64 is used as it can reflect time before 1.1.1970 as well
+        assert_eq!(utc_time.timestamp(), 0);
+        assert_eq!(utc_time.date().day(), 1);
+        assert_eq!(utc_time.date().month(), 1);
+        assert_eq!(utc_time.date().year(), 1970);
+    }
 
     #[test]
     fn buf_as_hex() {
