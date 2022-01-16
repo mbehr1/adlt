@@ -1142,7 +1142,7 @@ mod tests {
                 let m = rm.unwrap();
                 assert!(m.lifecycle != 0);
                 assert!(
-                    final_lcs.iter().find(|x| x.id == m.lifecycle).is_some(),
+                    final_lcs.iter().any(|x| x.id == m.lifecycle),
                     "no mapped_lcs for lc id {}",
                     &m.lifecycle
                 );
@@ -1272,7 +1272,7 @@ mod tests {
                 let m = rm.unwrap();
                 assert!(m.lifecycle != 0);
                 assert!(
-                    final_lcs.iter().find(|x| x.id == m.lifecycle).is_some(),
+                    final_lcs.iter().any(|x| x.id == m.lifecycle),
                     "no mapped_lcs for lc id {}",
                     &m.lifecycle
                 );
