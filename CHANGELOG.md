@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.3.1 - 2022-01-16
+#### Miscellaneous Chores
+- cargo fmt changes - (abbc972) - Matthias Behr
+#### Tests
+- **(lifecycle)** fix clippy warning - (ad320da) - Matthias Behr
+- **(util)** buffer_sort_message_sorted_basic3 - (b432065) - Matthias Behr
+- **(util)** one more test for buffer_sort_elements - (f8b7416) - Matthias Behr
+- **(util)** first basic test for buffer_sort_messages - (78995ad) - Matthias Behr
+- **(util)** test for utc_time_from_us - (afa71b1) - Matthias Behr
+- - -
+
 ## v0.3.0 - 2022-01-16
 #### Bug Fixes
 - **(lifecycle)** merge with first LC (#4) - (8713549) - Matthias Behr
