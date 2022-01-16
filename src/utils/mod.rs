@@ -354,6 +354,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::dlt::DltMessage;
+    use crate::lifecycle::*;
     use crate::utils::*;
     use std::sync::mpsc::channel;
     //    use std::time::Instant;
@@ -482,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn buffer_sort_messages() {
+    fn buffer_sort_elements2() {
         let (tx, rx) = channel();
         const NUMBER_MSGS: usize = 1_000;
         let mut msgs: std::vec::Vec<SortedMsg> = std::vec::Vec::with_capacity(NUMBER_MSGS);
@@ -541,5 +542,38 @@ mod tests {
         assert!(rx2
             .recv_timeout(std::time::Duration::from_millis(50))
             .is_err());
+    }
+
+    #[test]
+    fn buffer_sort_message_sorted_basic1() {
+        // a very basic test...
+        // 1 ecu, msgs already sorted properly. see whether we keep same order
+        // we do need lc calculated as well, could do this manually...
+        let (tx, parse_lc_in) = channel();
+        // 0s buffering delay assumed, lc start at 0
+        tx.send(DltMessage::for_test_rcv_tms_ms(1_000, 1_000))
+            .unwrap();
+        // 0.1s buffering delay
+        tx.send(DltMessage::for_test_rcv_tms_ms(1_200, 1_100))
+            .unwrap();
+        drop(tx);
+
+        let (parse_lc_out, sort_in) = channel();
+        let (sort_out, rx) = channel();
+
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        assert_eq!(1, lcs_r.len(), "wrong number of lcs!");
+
+        let res = buffer_sort_messages(sort_in, sort_out, &lcs_r, 3, 2_000_000);
+        assert!(res.is_ok());
+        // check whether the messages are in same (= sorted by timestamp) order
+        let mut last_timestamp = 0;
+        for _ in 0..2 {
+            let m = rx.recv().unwrap();
+            assert!(m.timestamp_us() > last_timestamp);
+            last_timestamp = m.timestamp_us();
+        }
     }
 }
