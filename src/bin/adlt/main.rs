@@ -11,7 +11,8 @@ use std::io::{self};
 //extern crate slog_term;
 use slog::{o, Drain};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> { // io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // io::Result<()> {
     let matches = App::new("automotive dlt tool")
         .version(clap::crate_version!())
         .author("Matthias Behr <mbehr+adlt@mcbehr.de>")
