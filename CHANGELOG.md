@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.3.2 - 2022-01-17
+#### Bug Fixes
+- **(convert)** remove debug output for uint args - (9c6862a) - Matthias Behr
+#### Miscellaneous Chores
+- **(util)** add hex_to_bytes - (42c5558) - Matthias Behr
+#### Tests
+- **(dlt)** more basic tests - (c3a9e04) - Matthias Behr
+- **(dlt)** DltStandardHeader full - (ecf7c4c) - Matthias Behr
+- **(dlt)** more DltStandardHeader tests - (c81bb71) - Matthias Behr
+- **(dlt)** DltStandardHeader first tests - (6f5d129) - Matthias Behr
+- **(dlt)** DltStorageHeader tests - (9322352) - Matthias Behr
+- - -
+
 ## v0.3.1 - 2022-01-16
 #### Miscellaneous Chores
 - cargo fmt changes - (abbc972) - Matthias Behr
