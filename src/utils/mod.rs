@@ -34,6 +34,29 @@ pub fn buf_as_hex_to_write(
     Ok(())
 }
 
+/// Convert a hex encoded string like "3d 0a 00..."
+/// to a Vec of u8.
+///
+/// We expect
+/// - exactly two chars per byte,
+/// - upper or lower case
+/// - a space in between each byte
+/// - but not at start or end
+pub fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
+    // we expect len 2 or 5 or 8 (so 2 + x*3)
+    if s.len() < 2 || (s.len() - 2) % 3 != 0 {
+        None
+    } else {
+        (0..s.len())
+            .step_by(3)
+            .map(|i| {
+                s.get(i..i + 2)
+                    .and_then(|sub| u8::from_str_radix(sub, 16).ok())
+            })
+            .collect()
+    }
+}
+
 pub enum BufferElementsAmount {
     NumberElements(usize),
 }
@@ -391,6 +414,21 @@ mod tests {
         let mut s = String::new();
         buf_as_hex_to_write(&mut s, &[0x0f_u8, 0x00_u8, 0xff_u8]).unwrap();
         assert_eq!(s, "0f 00 ff");
+    }
+
+    #[test]
+    fn hex_to_bytes1() {
+        assert!(hex_to_bytes("").is_none());
+        assert!(hex_to_bytes("1").is_none());
+        assert_eq!(hex_to_bytes("12").unwrap(), vec![0x12]);
+        assert!(hex_to_bytes("123").is_none());
+        assert!(hex_to_bytes("12 ").is_none());
+        assert!(hex_to_bytes("12 3").is_none());
+        assert_eq!(hex_to_bytes("12 34").unwrap(), vec![0x12, 0x34]);
+        assert!(hex_to_bytes("12 34 ").is_none());
+        assert!(hex_to_bytes("12 34 5").is_none());
+        assert_eq!(hex_to_bytes("ff dd").unwrap(), vec![0xff, 0xdd]);
+        assert_eq!(hex_to_bytes("fF Dd").unwrap(), vec![0xff, 0xdd]);
     }
 
     #[test]
