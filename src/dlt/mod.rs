@@ -1589,6 +1589,7 @@ mod tests {
             assert!(eh.is_verbose());
             let eh = DltExtendedHeader::from_buf(&[0xfe, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
             assert!(!eh.is_verbose());
+            assert!(!format!("{:?}", eh).is_empty()); // can debug print
         }
         #[test]
         fn mstp() {
@@ -1629,6 +1630,50 @@ mod tests {
 
     mod dlt_message {
         use super::*;
+        use crate::utils::*;
+
+        #[test]
+        fn basic_info() {
+            let m = DltMessage::for_test_rcv_tms_ms(0, 1);
+            let rt = m.reception_time();
+            // all those tests are a bit useless...
+            assert_eq!(rt.timestamp_millis(), 1640995200000);
+            assert_eq!(m.mcnt(), m.standard_header.mcnt);
+            assert_eq!(m.mstp(), DltMessageType::Log(DltMessageLogType::Fatal));
+            assert!(!m.is_ctrl_request());
+            assert_eq!(m.noar(), 0); // no ext header at all
+        }
+
+        #[test]
+        fn from_headers() {
+            let shdr = DltStorageHeader {
+                secs: 1,
+                micros: 2,
+                ecu: DltChar4::from_str("ECU1").unwrap(),
+            };
+            let stdh = DltStandardHeader {
+                htyp: 0x22,
+                mcnt: 42,
+                len: 4,
+            };
+            let m = DltMessage::from(2, shdr, stdh, &[], [].to_vec());
+            assert_eq!(m.mcnt(), 42);
+            assert_eq!(m.ecu, DltChar4::from_str("ECU1").unwrap()); // from storage header as no ext header
+            assert_eq!(m.reception_time_us, US_PER_SEC + 2);
+            assert_eq!(m.timestamp_us(), 0);
+
+            let mut file = Vec::<u8>::new();
+            assert!(m.header_as_text_to_write(&mut file).is_ok());
+            assert_eq!(
+                String::from_utf8_lossy(&file),
+                format!(
+                    "2 {}          0 042 ECU1 ---- ---- --- --- N - 0",
+                    Local
+                        .from_utc_datetime(&m.reception_time())
+                        .format("%Y/%m/%d %H:%M:%S%.6f")
+                )
+            ); // todo is printed in local timezone... consider proper TZ support for output
+        }
 
         #[test]
         fn arg_iter() {
@@ -1688,6 +1733,9 @@ mod tests {
             };
             let args_iter = m.into_iter();
             assert_eq!(args_iter.count(), 1);
+
+            let mut args_iter = m.into_iter();
+            assert!(!format!("{:?}", args_iter.next().unwrap()).is_empty()); // can debug print
 
             // now verbose, with two booleans:
             let m = DltMessage {
