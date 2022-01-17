@@ -1537,7 +1537,44 @@ mod tests {
             assert!(res.is_ok());
             assert_eq!(file, vec![0x22, 0x42, 0, 4,]);
         }
-        // todo to_write2 with all options
+
+        #[test]
+        fn to_write2() {
+            // write a full standard header
+            let shdr = DltStandardHeader {
+                htyp: 0x2, // set only endianess
+                mcnt: 0x42,
+                len: 4,
+            };
+
+            let mut file = Vec::<u8>::new();
+
+            let ehdr = Some(DltExtendedHeader {
+                verb_mstp_mtin: 0,
+                noar: 1,
+                apid: DltChar4::from_buf(b"APID"),
+                ctid: DltChar4::from_buf(b"CTID"),
+            });
+            let ecu = Some(DltChar4::from_buf(b"ECU1"));
+            let res = DltStandardHeader::to_write(
+                &mut file,
+                &shdr,
+                &ehdr,
+                ecu,
+                Some(0xdeadbeef),
+                Some(0x11223344),
+                &[42u8],
+            );
+            assert!(res.is_ok());
+            let len = (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + 4 + 4 + 4 + 1) as u8;
+            assert_eq!(
+                file,
+                vec![
+                    0x3f_u8, 0x42, 0, len, b'E', b'C', b'U', b'1', 0xde, 0xad, 0xbe, 0xef, 0x11,
+                    0x22, 0x33, 0x44, 0x0, 0x1, b'A', b'P', b'I', b'D', b'C', b'T', b'I', b'D', 42
+                ]
+            );
+        }
     }
 
     mod dlt_extended_header {
