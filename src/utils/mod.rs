@@ -420,6 +420,7 @@ mod tests {
     fn hex_to_bytes1() {
         assert!(hex_to_bytes("").is_none());
         assert!(hex_to_bytes("1").is_none());
+        assert_eq!(hex_to_bytes("02").unwrap(), vec![0x2]);
         assert_eq!(hex_to_bytes("12").unwrap(), vec![0x12]);
         assert!(hex_to_bytes("123").is_none());
         assert!(hex_to_bytes("12 ").is_none());
@@ -429,6 +430,8 @@ mod tests {
         assert!(hex_to_bytes("12 34 5").is_none());
         assert_eq!(hex_to_bytes("ff dd").unwrap(), vec![0xff, 0xdd]);
         assert_eq!(hex_to_bytes("fF Dd").unwrap(), vec![0xff, 0xdd]);
+        assert!(hex_to_bytes("gh").is_none());
+        assert!(hex_to_bytes("gh 10 23 ij").is_none());
     }
 
     #[test]
