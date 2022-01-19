@@ -976,7 +976,7 @@ pub struct DltMessageArgIterator<'a> {
     index: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct DltArg<'a> {
     type_info: u32,        // in host endianess already
     is_big_endian: bool,   // for the payload raw
@@ -1791,6 +1791,8 @@ mod tests {
         assert_eq!(m.mcnt(), 10);
         assert!(m.extended_header.is_some());
         assert!(!m.is_big_endian());
+        assert!(!m.is_ctrl_request());
+        assert_eq!(m.mstp(), DltMessageType::Log(DltMessageLogType::Info));
         assert!(m.is_verbose());
         assert_eq!(m.ecu, DltChar4::from_str("MMMA").unwrap());
         assert_eq!(m.apid().unwrap(), &DltChar4::from_str("LRMF").unwrap());
@@ -1809,6 +1811,62 @@ mod tests {
         assert!(!a.is_big_endian);
 
         println!("{:?}", m);
+    }
+
+    #[test]
+    fn real_ex1b() {
+        let v = hex_to_bytes("3d 0a 00 af 4d 4d 4d 41 00 00 03 48 00 75 7d 16 41 08 4c 52 4d 46 55 44 53 00 00 82 00 00 1c 00 46 69 6e 61 6c 20 61 6e 73 77 65 72 20 61 72 72 69 76 65 64 20 61 66 74 65 72 20 00 23 00 00 00 93 01 00 00 00 82 00 00 21 00 75 73 20 66 72 6f 6d 20 74 68 65 20 6a 6f 62 20 68 61 6e 64 6c 65 72 20 5b 73 74 61 74 65 3a 20 00 00 82 00 00 0a 00 41 6e 73 77 65 72 69 6e 67 00 00 82 00 00 0b 00 2c 20 61 6e 73 77 65 72 3a 20 00 10 00 00 00 01 00 82 00 00 10 00 5d 20 66 6f 72 20 72 65 71 75 65 73 74 20 23 00 43 00 00 00 dc 05 00 00").unwrap();
+        assert_eq!(175, v.len());
+        let sh = DltStorageHeader {
+            secs: 0,
+            micros: 0,
+            ecu: DltChar4::from_str("ECU1").unwrap(),
+        };
+        let stdh = DltStandardHeader::from_buf(&v).unwrap();
+        let payload_offset = stdh.std_ext_header_size() as usize;
+        let m = DltMessage::from(
+            1423084,
+            sh,
+            stdh,
+            &v[DLT_MIN_STD_HEADER_SIZE..payload_offset],
+            v[payload_offset..].to_vec(),
+        );
+        let mut file = Vec::new();
+        // persist to "file"/buf:
+        assert!(m.to_write(&mut file).is_ok());
+        // and parse that again
+        let sh2 = DltStorageHeader::from_buf(&file).unwrap();
+        let stdh2 = DltStandardHeader::from_buf(&file[DLT_STORAGE_HEADER_SIZE..]).unwrap();
+        let payload_offset = stdh2.std_ext_header_size() as usize;
+        assert_eq!(0, sh2.secs);
+        assert_eq!(0, sh2.micros);
+        assert_eq!(m.ecu, sh2.ecu);
+        // checks on std header (currently we don't persist the ecu again and the session_id. needs adaption once changed)
+        assert_eq!(stdh2.mcnt, m.mcnt());
+        assert_eq!(DLT_STORAGE_HEADER_SIZE + stdh2.len as usize, file.len());
+
+        assert!(!stdh2.has_session_id()); // see above
+        assert_eq!(m.is_big_endian(), stdh2.is_big_endian());
+
+        let m2 = DltMessage::from(
+            1423084,
+            sh2,
+            stdh2,
+            &file[DLT_STORAGE_HEADER_SIZE..DLT_STORAGE_HEADER_SIZE + payload_offset],
+            file[DLT_STORAGE_HEADER_SIZE + payload_offset..].to_vec(),
+        );
+        assert_eq!(m.ecu, m2.ecu);
+        assert_eq!(m.is_ctrl_request(), m2.is_ctrl_request());
+        assert_eq!(m.mstp(), m2.mstp());
+        assert_eq!(m.apid(), m2.apid());
+        assert_eq!(m.ctid(), m2.ctid());
+        assert_eq!(m.noar(), m2.noar());
+        let m_args: Vec<DltArg> = m.into_iter().collect();
+        let m2_args: Vec<DltArg> = m2.into_iter().collect();
+        assert_eq!(m_args.len(), m2_args.len());
+        for i in 0..m_args.len() {
+            assert_eq!(m_args[i], m2_args[i]);
+        }
     }
 
     // todo add smaller test cases for all SINT, UINT, FLOAT, VARI, FIXP, STRING encodings,...
