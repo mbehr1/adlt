@@ -1880,5 +1880,92 @@ mod tests {
         }
     }
 
+    /// return a verbose dltmessage with the noar and payload
+    fn get_testmsg_with_payload(noar: u8, payload_buf: &[u8]) -> DltMessage {
+        let sh = DltStorageHeader {
+            secs: 0,
+            micros: 0,
+            ecu: DltChar4::from_str("ECU1").unwrap(),
+        };
+        let exth = DltExtendedHeader {
+            verb_mstp_mtin: 0x1,
+            noar,
+            apid: DltChar4::from_buf(b"APID"),
+            ctid: DltChar4::from_buf(b"CTID"),
+        };
+        let stdh = DltStandardHeader {
+            htyp: 0x23,
+            mcnt: 0,
+            len: (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + payload_buf.len()) as u16,
+        };
+        let mut add_header_buf = Vec::new();
+        exth.to_write(&mut add_header_buf).unwrap();
+
+        DltMessage::from(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
+    }
+
+    #[test]
+    fn payload_bool() {
+        let m = get_testmsg_with_payload(
+            5,
+            &[
+                0, 0, 0, 0x11, 0, 0, 0, 0, 0x11, 1, 0, 0, 0, 0x11, 2, 0, 0, 0, 0x10, 1, 0, 0, 0,
+                0x10, 0,
+            ],
+        ); // tyle=1, 0x10(bool) with 0 (false), 1(true), 2 (undefined according to Dlt423, we default to !=0 -> true), tyle=0 (not fitting to Dlt139 but seems used)
+        let a: Vec<DltArg> = m.into_iter().collect();
+        assert_eq!(a.len(), 5);
+        assert_eq!(
+            a[0],
+            DltArg {
+                type_info: 0x11,
+                is_big_endian: true,
+                payload_raw: &[0]
+            }
+        );
+        assert_eq!(
+            a[4],
+            DltArg {
+                type_info: 0x10,
+                is_big_endian: true,
+                payload_raw: &[0]
+            }
+        );
+        assert_eq!(m.payload_as_text().unwrap(), "false true true true false");
+    }
+
+    #[test]
+    fn payload_sint() {
+        let m = get_testmsg_with_payload(
+            4,
+            &[
+                0, 0, 0, 0x21, 42, 0, 0, 0, 0x22, 0xab, 0xcd, 0, 0, 0, 0x23, 0x12, 0x23, 0x34,
+                0x45, 0, 0, 0, 0x24, 0xf0, 2, 3, 4, 5, 6, 7, 8,
+            ],
+        ); // tyle=1, 0x10(bool) with 0 (false), 1(true), 2 (undefined according to Dlt423, we default to !=0 -> true), tyle=0 (not fitting to Dlt139 but seems used)
+        let a: Vec<DltArg> = m.into_iter().collect();
+        assert_eq!(a.len(), 4);
+        assert_eq!(
+            a[0],
+            DltArg {
+                type_info: 0x21,
+                is_big_endian: true,
+                payload_raw: &[42]
+            }
+        );
+        assert_eq!(
+            a[3],
+            DltArg {
+                type_info: 0x24,
+                is_big_endian: true,
+                payload_raw: &[0xf0, 2, 3, 4, 5, 6, 7, 8]
+            }
+        );
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            format!("42 -21555 304297029 -1152355238854392056")
+        );
+    }
+
     // todo add smaller test cases for all SINT, UINT, FLOAT, VARI, FIXP, STRING encodings,...
 }
