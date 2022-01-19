@@ -1805,6 +1805,17 @@ mod tests {
         assert_eq!(args.len(), 8);
         assert!(args.iter().all(|a| !a.is_big_endian));
 
+        let mut file = Vec::new();
+        assert!(m.header_as_text_to_write(&mut file).is_ok());
+        assert_eq!(
+            String::from_utf8_lossy(&file),
+            format!(
+                "1423084 {}    7699734 010 MMMA LRMF UDS- log info V 8",
+                Local
+                    .from_utc_datetime(&m.reception_time())
+                    .format("%Y/%m/%d %H:%M:%S%.6f")
+            )
+        );
         assert_eq!(m.payload_as_text().unwrap(), "Final answer arrived after  403 us from the job handler [state:  Answering , answer:  true ] for request # 1500");
 
         let a = &args[0];
