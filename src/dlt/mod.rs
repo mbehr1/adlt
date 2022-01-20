@@ -736,8 +736,7 @@ impl DltMessage {
                     } else {
                         write!(text, "false")?;
                     }
-                }
-                if is_uint {
+                } else if is_uint {
                     /*write!(
                         text,
                         "<uint {} {:?}>",
@@ -773,10 +772,17 @@ impl DltMessage {
                             };
                             write!(text, "{}", val)?;
                         }
+                        16 => {
+                            let val: u128 = if arg.is_big_endian {
+                                u128::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                u128::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val)?;
+                        }
                         _ => (),
                     };
-                }
-                if is_sint {
+                } else if is_sint {
                     match arg.payload_raw.len() {
                         1 => {
                             let val: i8 = arg.payload_raw[0] as i8;
@@ -803,6 +809,14 @@ impl DltMessage {
                                 i64::from_be_bytes(arg.payload_raw.try_into().unwrap())
                             } else {
                                 i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val)?;
+                        }
+                        16 => {
+                            let val: i128 = if arg.is_big_endian {
+                                i128::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                i128::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
                             write!(text, "{}", val)?;
                         }
@@ -1881,7 +1895,7 @@ mod tests {
     }
 
     /// return a verbose dltmessage with the noar and payload
-    fn get_testmsg_with_payload(noar: u8, payload_buf: &[u8]) -> DltMessage {
+    fn get_testmsg_with_payload(big_endian: bool, noar: u8, payload_buf: &[u8]) -> DltMessage {
         let sh = DltStorageHeader {
             secs: 0,
             micros: 0,
@@ -1894,7 +1908,12 @@ mod tests {
             ctid: DltChar4::from_buf(b"CTID"),
         };
         let stdh = DltStandardHeader {
-            htyp: 0x23,
+            htyp: 0x21
+                | (if big_endian {
+                    DLT_STD_HDR_BIG_ENDIAN
+                } else {
+                    0
+                }),
             mcnt: 0,
             len: (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + payload_buf.len()) as u16,
         };
@@ -1907,6 +1926,7 @@ mod tests {
     #[test]
     fn payload_bool() {
         let m = get_testmsg_with_payload(
+            true,
             5,
             &[
                 0, 0, 0, 0x11, 0, 0, 0, 0, 0x11, 1, 0, 0, 0, 0x11, 2, 0, 0, 0, 0x10, 1, 0, 0, 0,
@@ -1937,6 +1957,7 @@ mod tests {
     #[test]
     fn payload_sint() {
         let m = get_testmsg_with_payload(
+            true,
             4,
             &[
                 0, 0, 0, 0x21, 42, 0, 0, 0, 0x22, 0xab, 0xcd, 0, 0, 0, 0x23, 0x12, 0x23, 0x34,
@@ -1963,9 +1984,124 @@ mod tests {
         );
         assert_eq!(
             m.payload_as_text().unwrap(),
-            format!("42 -21555 304297029 -1152355238854392056")
+            "42 -21555 304297029 -1152355238854392056"
+        );
+        let m = get_testmsg_with_payload(
+            false,
+            4,
+            &[
+                0x21, 0, 0, 0, 42, 0x22, 0, 0, 0, 0xcd, 0xab, 0x23, 0, 0, 0, 0x45, 0x34, 0x23,
+                0x12, 0x24, 0, 0, 0, 8, 7, 6, 5, 4, 3, 2, 0xf0,
+            ],
+        ); // tyle=1, 0x10(bool) with 0 (false), 1(true), 2 (undefined according to Dlt423, we default to !=0 -> true), tyle=0 (not fitting to Dlt139 but seems used)
+        let a: Vec<DltArg> = m.into_iter().collect();
+        assert_eq!(a.len(), 4);
+        assert_eq!(
+            a[0],
+            DltArg {
+                type_info: 0x21,
+                is_big_endian: false,
+                payload_raw: &[42]
+            }
+        );
+        assert_eq!(
+            a[3],
+            DltArg {
+                type_info: 0x24,
+                is_big_endian: false,
+                payload_raw: &[8, 7, 6, 5, 4, 3, 2, 0xf0]
+            }
+        );
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            "42 -21555 304297029 -1152355238854392056"
         );
     }
 
-    // todo add smaller test cases for all SINT, UINT, FLOAT, VARI, FIXP, STRING encodings,...
+    macro_rules! to_endian_vec {
+        ($x:expr, $i:expr) => {
+            if $i {
+                $x.to_be_bytes().to_vec()
+            } else {
+                $x.to_le_bytes().to_vec()
+            }
+        };
+    }
+
+    #[test]
+    fn payload_int() {
+        for big_endian in [false, true] {
+            let testsdata = [
+                (0x41u32, vec![0xffu8], "255"),
+                (0x21u32, vec![0xffu8], "-1"),
+                (0x21u32, to_endian_vec!(-128i8, big_endian), "-128"),
+                (0x21u32, to_endian_vec!(127i8, big_endian), "127"),
+                (0x41u32, vec![0], "0"),
+                (0x21u32, vec![0], "0"),
+                (0x42, to_endian_vec!(4711u16, big_endian), "4711"),
+                (0x22, to_endian_vec!(4711i16, big_endian), "4711"),
+                (0x22, to_endian_vec!(-4711i16, big_endian), "-4711"),
+                (0x43, to_endian_vec!(12345678u32, big_endian), "12345678"),
+                (0x23, to_endian_vec!(12345678i32, big_endian), "12345678"),
+                (0x23, to_endian_vec!(-12345678i32, big_endian), "-12345678"),
+                (
+                    0x44,
+                    to_endian_vec!(1234567890123u64, big_endian),
+                    "1234567890123",
+                ),
+                (
+                    0x24,
+                    to_endian_vec!(-1234567890123i64, big_endian),
+                    "-1234567890123",
+                ),
+                (
+                    0x45,
+                    to_endian_vec!(1234567890123456789u128, big_endian),
+                    "1234567890123456789",
+                ),
+                (
+                    0x45,
+                    to_endian_vec!(u128::MAX, big_endian),
+                    &format!("{}", u128::MAX),
+                ),
+                (
+                    0x25,
+                    to_endian_vec!(i128::MIN, big_endian),
+                    &format!("{}", i128::MIN),
+                ),
+                (
+                    0x25,
+                    to_endian_vec!(i128::MAX, big_endian),
+                    &format!("{}", i128::MAX),
+                ),
+            ];
+            let noar = testsdata.len();
+            let string_expected = testsdata
+                .iter()
+                .map(|e| e.2)
+                .collect::<Vec<&str>>()
+                .join(" ");
+            let mut payload: Vec<u8> = Vec::new();
+            for t in &testsdata {
+                // push the type
+                let mut type_buf = to_endian_vec!(t.0, big_endian);
+                payload.append(&mut type_buf);
+                for b in &t.1 {
+                    payload.push(*b);
+                }
+            }
+
+            let m = get_testmsg_with_payload(big_endian, noar as u8, &payload);
+            let args: Vec<DltArg> = m.into_iter().collect();
+            assert_eq!(m.noar() as usize, noar);
+            assert_eq!(args.len(), noar);
+            for (i, arg) in args.iter().enumerate() {
+                assert_eq!(arg.type_info, testsdata[i].0);
+            }
+            assert_eq!(m.payload_as_text().unwrap(), string_expected);
+        }
+    }
+
+    // todo add smaller test cases for all FLOAT, VARI, FIXP, STRING encodings,...
+    // todo test invalid/missing payload for SINT, UINT, and think about proper error handling
 }
