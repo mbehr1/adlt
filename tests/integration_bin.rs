@@ -15,3 +15,10 @@ fn bin_convert_notext() {
     let assert = cmd.args(&["convert", "foo.dlt"]).assert();
     assert.failure();
 }
+
+#[test]
+fn bin_remote_invalidport() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let assert = cmd.args(&["remote", "-p 1"]).assert();
+    assert.failure();
+}
