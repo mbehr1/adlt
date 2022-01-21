@@ -186,7 +186,7 @@ const DLT_STD_HDR_HAS_TIMESTAMP: u8 = 1 << 4;
 
 const DLT_STD_HDR_VERSION: u8 = 0x1 << 5; // 3 bits (5,6,7) max.  [Dlt299]
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct DltStandardHeader {
     pub htyp: u8,
     pub mcnt: u8,
@@ -438,7 +438,7 @@ pub enum DltMessageType {
     Control(DltMessageControlType),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct DltExtendedHeader {
     pub(super) verb_mstp_mtin: u8,
     pub(super) noar: u8,
@@ -496,7 +496,7 @@ impl DltExtendedHeader {
 /// anyhow prepare a type so that it can be easily changed later.
 pub type DltMessageIndexType = u32;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct DltMessage {
     pub index: DltMessageIndexType,
     pub(super) reception_time_us: u64, // from storage header, ms would be sufficent but needs same 64 bit
@@ -2104,4 +2104,48 @@ mod tests {
 
     // todo add smaller test cases for all FLOAT, VARI, FIXP, STRING encodings,...
     // todo test invalid/missing payload for SINT, UINT, and think about proper error handling
+
+    use std::io::Cursor;
+
+    #[test]
+    fn parse_storage() {
+        let m = get_testmsg_with_payload(
+            true,
+            5,
+            &[
+                0, 0, 0, 0x11, 0, 0, 0, 0, 0x11, 1, 0, 0, 0, 0x11, 2, 0, 0, 0, 0x10, 1, 0, 0, 0,
+                0x10, 0,
+            ],
+        );
+        let mut file = Vec::new();
+        m.to_write(&mut file).unwrap();
+        let file_len = file.len();
+        let mut reader = Cursor::new(file);
+        let (parsed, m2) = parse_dlt_with_storage_header(1, &mut reader).unwrap();
+        assert_eq!(parsed, file_len);
+        assert_eq!(m.ecu, m2.ecu);
+        assert_ne!(m, m2); // standard header differs
+        assert_eq!(m.extended_header, m2.extended_header);
+        assert_eq!(m.payload, m2.payload);
+
+        // incomplete (no storage header)
+        let mut file = Vec::new();
+        m.to_write(&mut file).unwrap();
+        let mut reader = Cursor::new(&file[1..]);
+        assert!(parse_dlt_with_storage_header(1, &mut reader).is_err());
+
+        // incomplete (1 byte missing at end)
+        let mut file = Vec::new();
+        m.to_write(&mut file).unwrap();
+        let mut reader = Cursor::new(&file[0..file.len() - 1]);
+        assert!(parse_dlt_with_storage_header(1, &mut reader).is_err());
+
+        // incomplete (only storage, std but not full ext header)
+        let mut file = Vec::new();
+        m.to_write(&mut file).unwrap();
+        let mut reader = Cursor::new(
+            &file[0..DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE - 1],
+        );
+        assert!(parse_dlt_with_storage_header(1, &mut reader).is_err());
+    }
 }
