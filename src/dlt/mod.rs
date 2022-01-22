@@ -720,14 +720,14 @@ impl DltMessage {
                 if nr_arg > 0 {
                     write!(text, " ")?;
                 }
-                let _tyle = arg.type_info & 0x0f;
-                let is_bool = arg.type_info & 0x10u32 > 0;
-                let is_sint = arg.type_info & 0x20u32 > 0;
-                let is_uint = arg.type_info & 0x40u32 > 0;
-                let is_floa = arg.type_info & 0x80u32 > 0;
-                let _is_aray = arg.type_info & 0x100u32 > 0;
-                let is_strg = arg.type_info & 0x200u32 > 0;
-                let is_rawd = arg.type_info & 0x400u32 > 0;
+                // let _tyle = arg.type_info & 0x0f;
+                let is_bool = arg.type_info & DLT_TYPE_INFO_BOOL > 0;
+                let is_sint = arg.type_info & DLT_TYPE_INFO_SINT > 0;
+                let is_uint = arg.type_info & DLT_TYPE_INFO_UINT > 0;
+                let is_floa = arg.type_info & DLT_TYPE_INFO_FLOA > 0;
+                let _is_aray = arg.type_info & DLT_TYPE_INFO_ARAY > 0;
+                let is_strg = arg.type_info & DLT_TYPE_INFO_STRG > 0;
+                let is_rawd = arg.type_info & DLT_TYPE_INFO_RAWD > 0;
 
                 if is_bool {
                     let val = arg.payload_raw[0];
@@ -830,10 +830,10 @@ impl DltMessage {
                     write!(text, "<rawd>")?;
                 }
                 if is_strg {
-                    let scod = (arg.type_info >> 15) & 0x03; // 0 = ascii, 1 = utf
+                    let scod = arg.type_info & DLT_TYPE_INFO_MASK_SCOD;
 
                     match scod {
-                        0 | 1 => {
+                        DLT_SCOD_ASCII | DLT_SCOD_UTF8 => {
                             // use utf8 for ascii as well. it's somewhat wrong but we'd need to findout the proper codepage first! todo!
                             // they should be zero terminated
                             if arg.payload_raw.len() > 1 {
@@ -854,6 +854,12 @@ impl DltMessage {
                                     }
                                 };
                             }
+                        }
+                        DLT_SCOD_HEX => {
+                            write!(text, "<scod hex nyi! todo>")?;
+                        }
+                        DLT_SCOD_BIN => {
+                            write!(text, "<scod bin nyi! todo>")?;
                         }
                         _ => {
                             write!(text, "<scod unknown {}>", scod)?;
@@ -990,6 +996,40 @@ pub struct DltMessageArgIterator<'a> {
     index: usize,
 }
 
+/// DLT argument encoding mask for type lengths DLT_TYLE_*
+const DLT_TYPE_INFO_MASK_TYLE: u32 = 0x0000000f;
+
+const DLT_TYPE_INFO_BOOL: u32 = 0x00000010;
+const DLT_TYPE_INFO_SINT: u32 = 0x00000020;
+const DLT_TYPE_INFO_UINT: u32 = 0x00000040;
+const DLT_TYPE_INFO_FLOA: u32 = 0x00000080;
+/// DLT argument encoding for array of standard types
+const DLT_TYPE_INFO_ARAY: u32 = 0x00000100;
+
+const DLT_TYPE_INFO_STRG: u32 = 0x00000200;
+const DLT_TYPE_INFO_RAWD: u32 = 0x00000400;
+/// DLT argument encoding for additional information to a variable (name and unit)
+const DLT_TYPE_INFO_VARI: u32 = 0x00000800;
+/// DLT argument encoding for FIXP encoding with quantization and offset
+const DLT_TYPE_INFO_FIXP: u32 = 0x00001000;
+/// DLT argument encoding for additional trace information
+const DLT_TYPE_INFO_TRAI: u32 = 0x00002000;
+/// DLT argument encoding for structs
+const DLT_TYPE_INFO_STRU: u32 = 0x00004000;
+/// DLT argument encoding mask for the string types DLT_SCOD_*
+const DLT_TYPE_INFO_MASK_SCOD: u32 = 0x00038000;
+
+const DLT_TYLE_8BIT: u8 = 1;
+const DLT_TYLE_16BIT: u8 = 2;
+const DLT_TYLE_32BIT: u8 = 3;
+const DLT_TYLE_64BIT: u8 = 4;
+const DLT_TYLE_128BIT: u8 = 5;
+
+const DLT_SCOD_ASCII: u32 = 0x00000000;
+const DLT_SCOD_UTF8: u32 = 0x00008000;
+const DLT_SCOD_HEX: u32 = 0x00010000;
+const DLT_SCOD_BIN: u32 = 0x00018000;
+
 #[derive(Debug, PartialEq)]
 pub struct DltArg<'a> {
     type_info: u32,        // in host endianess already
@@ -1040,31 +1080,31 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                 self.index += 4;
 
                 // determine length
-                let tyle = type_info & 0x0f; // [Dlt354] 1 = 8, 2 = 16, 3 = 32, 4 = 64, 5 = 128bit
+                let tyle: u8 = (type_info & DLT_TYPE_INFO_MASK_TYLE) as u8; // [Dlt354] 1 = 8, 2 = 16, 3 = 32, 4 = 64, 5 = 128bit
                 let mut len: usize = match tyle {
-                    1 => 1,
-                    2 => 2,
-                    3 => 4,
-                    4 => 8,
-                    5 => 16,
+                    DLT_TYLE_8BIT => 1,
+                    DLT_TYLE_16BIT => 2,
+                    DLT_TYLE_32BIT => 4,
+                    DLT_TYLE_64BIT => 8,
+                    DLT_TYLE_128BIT => 16,
                     _ => 0,
                 };
 
                 // vari info? (for STRG it's after the str len...)
-                if type_info & (0x1u32 << 11) != 0 {
+                if type_info & DLT_TYPE_INFO_VARI != 0 {
                     // todo e.g. [Dlt369] unsigned 16-bit int. following as first payload, then the name, then the bool!
                     panic!("type_info VARI not supported yet!");
                 }
                 // fixp set?
-                if type_info & (0x1u32 << 12) != 0 {
+                if type_info & DLT_TYPE_INFO_FIXP != 0 {
                     // todo e.g. [Dlt386] 32-bit float, then tyle signed int as offset.
                     panic!("type_info FIXP not supported yet!");
                 }
 
-                if type_info & 0x10u32 != 0 {
-                    // bool
+                if type_info & DLT_TYPE_INFO_BOOL != 0 {
                     if len != 1 {
-                        // todo investigate why some libs use bool with len 0 lsm,nsc...
+                        // dlt-viewer persists bool with len 0
+                        // see https://github.com/COVESA/dlt-viewer/issues/242
                         if len != 0 {
                             println!(
                                 "type bool expects to have len 1 has len {} index={} msg={:?}",
@@ -1073,11 +1113,9 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                         }
                         len = 1;
                     }
-                } else if type_info & (0x60u32) != 0 {
-                    // SINT or UINT
+                } else if type_info & (DLT_TYPE_INFO_SINT | DLT_TYPE_INFO_UINT) != 0 {
                     assert!(len > 0);
-                } else if type_info & (0x80u32) != 0 {
-                    // FLOA
+                } else if type_info & (DLT_TYPE_INFO_FLOA) != 0 {
                     assert!(
                         len == 4 || len == 8,
                         "unexpected len={} for FLOA type_info=0x{:x} index={}, msg={:?}",
@@ -1086,7 +1124,7 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                         self.index,
                         self.msg
                     );
-                } else if type_info & (0x03u32 << 9) != 0 {
+                } else if type_info & (DLT_TYPE_INFO_STRG | DLT_TYPE_INFO_RAWD) != 0 {
                     // STRG bit9, rawd bit10, aray bit8, floa bit7, uint bit6, sint bit5, bool bit4, trai bit 13, stru bit 14
                     // bit 15-17 string coding (scod), 0 = ascii, 1 = utf-8, 2-7 reserved
                     // 16 bit uint with length of string + term. char first
@@ -1139,6 +1177,8 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                     self.index += len; // we incr. in any case
                     return to_ret;
                 } else {
+                    let _ = DLT_TYPE_INFO_ARAY | DLT_TYPE_INFO_TRAI | DLT_TYPE_INFO_STRU;
+
                     panic!(
                         "type_info=0x{:x} unhandled! is_big_endian={}, index={}, msg={:?}",
                         type_info, self.is_big_endian, self.index, self.msg
