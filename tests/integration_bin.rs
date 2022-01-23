@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 fn bin_version() {
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
     let assert = cmd.arg("-V").assert();
-    assert.stdout(predicate::str::contains("0.3.2")).success();
+    assert
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")))
+        .success();
 }
 
 #[test]
