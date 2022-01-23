@@ -1153,10 +1153,7 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                         // dlt-viewer persists bool with len 0
                         // see https://github.com/COVESA/dlt-viewer/issues/242
                         if len != 0 {
-                            println!(
-                                "type bool expects to have len 1 has len {} index={} msg={:?}",
-                                len, self.index, self.msg
-                            );
+                            return None; // [Dlt139] with exception for dlt-viewer bug 242
                         }
                         len = 1;
                     }
@@ -2222,9 +2219,10 @@ mod tests {
     fn payload_single_strg_rawd_floa() {
         for big_endian in [false, true] {
             let testsdata = [
-                (DLT_TYPE_INFO_SINT, vec![], None), // no len
-                (DLT_TYPE_INFO_FLOA, vec![], None), // no len
-                (DLT_TYPE_INFO_FLOA | DLT_TYLE_8BIT as u32, vec![], None), // len 1 not defined
+                (DLT_TYPE_INFO_BOOL | DLT_TYLE_16BIT as u32, vec![], None), // only 1 or 0 TYLE accepted
+                (DLT_TYPE_INFO_SINT, vec![], None),                         // no len
+                (DLT_TYPE_INFO_FLOA, vec![], None),                         // no len
+                (DLT_TYPE_INFO_FLOA | DLT_TYLE_8BIT as u32, vec![], None),  // len 1 not defined
                 (
                     // valid but empty
                     DLT_TYPE_INFO_STRG,
