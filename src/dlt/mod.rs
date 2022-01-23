@@ -1,4 +1,6 @@
 use chrono::{Local, TimeZone};
+use cow_utils::CowUtils;
+use encoding_rs::WINDOWS_1252;
 use serde::ser::{Serialize, Serializer};
 use std::convert::TryInto;
 use std::fmt;
@@ -822,39 +824,70 @@ impl DltMessage {
                         }
                         _ => (),
                     };
-                }
-                if is_floa {
+                } else if is_floa {
                     write!(text, "<floa>")?;
-                }
-                if is_rawd {
-                    write!(text, "<rawd>")?;
-                }
-                if is_strg {
+                } else if is_rawd {
+                    if !arg.payload_raw.is_empty() {
+                        for (i, &c) in arg.payload_raw[0..arg.payload_raw.len()].iter().enumerate()
+                        {
+                            if i > 0 {
+                                write!(text, " {:02x}", c)?;
+                            } else {
+                                write!(text, "{:02x}", c)?;
+                            }
+                        }
+                    }
+                } else if is_strg {
                     let scod = arg.type_info & DLT_TYPE_INFO_MASK_SCOD;
 
                     match scod {
-                        DLT_SCOD_ASCII | DLT_SCOD_UTF8 => {
-                            // use utf8 for ascii as well. it's somewhat wrong but we'd need to findout the proper codepage first! todo!
+                        DLT_SCOD_UTF8 => {
                             // they should be zero terminated
                             if arg.payload_raw.len() > 1 {
-                                let s = String::from_utf8(
-                                    arg.payload_raw
-                                        .get(0..arg.payload_raw.len() - 1)
-                                        .unwrap()
-                                        .to_vec(),
-                                ); // todo optimize str sufficient! str::from_utf8
-                                match s {
-                                    Ok(s) => {
-                                        // need to replace the \n to a ' ' and remove other junk chars... todo use faster methods
-                                        let s = s.replace('\n', " ");
-                                        write!(text, "{}", s)?;
-                                    }
-                                    Err(e) => {
-                                        write!(text, "!utf8-conv error {:?}", e)?;
-                                    }
-                                };
+                                // use copy-on-write strings that alloc only if modification is needed
+                                let s = String::from_utf8_lossy(
+                                    &arg.payload_raw[0..arg.payload_raw.len() - 1],
+                                );
+                                // todo use a replace in one shot (e.g. RegexSet with COW behaviour)
+                                let s = s.cow_replace("\n", " ");
+                                let s = s.cow_replace("\r", " ");
+                                let s = s.cow_replace("\t", " ");
+                                text.write_str(&s)?;
                             }
                         }
+                        DLT_SCOD_ASCII => {
+                            // dlt doesn't seem to define the ASCII codepage.
+                            // we could use ISO-8859-1 or WINDOWS_1252 "Latin 1"
+                            // or we reduce the printable ones to 0x20 (' ') .. 0x7e ('~')
+                            // for now we start with 0x20..0x7e and \n\r\t -> ' '
+                            // they should be zero terminated
+                            if arg.payload_raw.len() > 1 {
+                                // use copy-on-write strings that alloc only if modification is needed
+                                let (s, _) = WINDOWS_1252.decode_without_bom_handling(
+                                    &arg.payload_raw[0..arg.payload_raw.len() - 1],
+                                );
+                                // todo use a replace in one shot (e.g. RegexSet with COW behaviour)
+                                let s = s.cow_replace("\n", " ");
+                                let s = s.cow_replace("\r", " ");
+                                let s = s.cow_replace("\t", " ");
+                                text.write_str(&s)?;
+
+                                /* instead of WINDOWS-1252 we could use for printable ones only:
+                                for c in &arg.payload_raw[0..arg.payload_raw.len() - 1] {
+                                    let c = *c;
+                                    let printable_char = if c == b'\n' || c == b'\r' || c == b'\t' {
+                                        ' '
+                                    } else if !(0x20..0x7e).contains(&c) {
+                                        '\u{FFFD}'
+                                    } else {
+                                        char::from(c)
+                                    };
+                                    text.write_char(printable_char)?;
+                                }
+                                */
+                            }
+                        }
+
                         DLT_SCOD_HEX => {
                             write!(text, "<scod hex nyi! todo>")?;
                         }
@@ -1060,19 +1093,13 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
             if self.msg.payload.len() >= self.index + 4 {
                 let type_info = if self.is_big_endian {
                     u32::from_be_bytes(
-                        self.msg
-                            .payload
-                            .get(self.index..self.index + 4)
-                            .unwrap()
+                        self.msg.payload[self.index..self.index + 4]
                             .try_into()
                             .unwrap(),
                     )
                 } else {
                     u32::from_le_bytes(
-                        self.msg
-                            .payload
-                            .get(self.index..self.index + 4)
-                            .unwrap()
+                        self.msg.payload[self.index..self.index + 4]
                             .try_into()
                             .unwrap(),
                     )
@@ -1135,44 +1162,34 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                     }
                     len = if self.is_big_endian {
                         u16::from_be_bytes(
-                            self.msg
-                                .payload
-                                .get(self.index..self.index + 2)
-                                .unwrap()
+                            self.msg.payload[self.index..self.index + 2]
                                 .try_into()
                                 .unwrap(),
                         ) as usize
                     } else {
                         u16::from_le_bytes(
-                            self.msg
-                                .payload
-                                .get(self.index..self.index + 2)
-                                .unwrap()
+                            self.msg.payload[self.index..self.index + 2]
                                 .try_into()
                                 .unwrap(),
                         ) as usize
                     };
                     self.index += 2;
 
-                    // now the len
-                    let to_ret = if len > 0 && self.msg.payload.len() >= self.index + len {
+                    // now the payload
+                    let to_ret = if self.msg.payload.len() >= self.index + len {
+                        // len 0 is weird but valid
                         Some(DltArg {
                             type_info,
                             is_big_endian: self.is_big_endian,
-                            payload_raw: self
-                                .msg
-                                .payload
-                                .get(self.index..self.index + len)
-                                .unwrap(),
+                            payload_raw: &self.msg.payload[self.index..self.index + len],
                         })
                     } else {
-                        panic!(
-                            // todo ignore,skip,...
-                            "not enough payload for the string. expected len={} got={}",
-                            len,
-                            self.msg.payload.len() - self.index
-                        );
-                        //None
+                        None // todo we could output the partial/received payload here e.g. with an error bit set in type_info
+                             /* panic!(
+                                 "#{} at index {}: not enough payload for the string. type_info={:x} expected len={} got={} payload={:?}",
+                                 self.msg.index, self.index, type_info, len,
+                                 self.msg.payload.len() - self.index, self.msg.payload
+                             );*/
                     };
                     self.index += len; // we incr. in any case
                     return to_ret;
@@ -1188,7 +1205,7 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                     Some(DltArg {
                         type_info,
                         is_big_endian: self.is_big_endian,
-                        payload_raw: self.msg.payload.get(self.index..self.index + len).unwrap(),
+                        payload_raw: &self.msg.payload[self.index..self.index + len],
                     })
                 } else {
                     None
@@ -1209,9 +1226,8 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                         Some(DltArg {
                             type_info: 0,
                             is_big_endian: self.is_big_endian,
-                            payload_raw: self.msg.payload.get(0..4).unwrap(),
+                            payload_raw: &self.msg.payload[0..4],
                         })
-                        // Some(self.msg.payload.get(0..4).unwrap()) // todo end. convert here already?
                     } else {
                         None
                     }
@@ -1222,8 +1238,8 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                         Some(DltArg {
                             type_info: 0,
                             is_big_endian: self.is_big_endian,
-                            payload_raw: self.msg.payload.get(4..).unwrap(),
-                        }) // todo we cannot end. convert that...
+                            payload_raw: &self.msg.payload[4..],
+                        })
                     } else {
                         None
                     }
@@ -2139,6 +2155,164 @@ mod tests {
                 assert_eq!(arg.type_info, testsdata[i].0);
             }
             assert_eq!(m.payload_as_text().unwrap(), string_expected);
+        }
+    }
+
+    #[test]
+    fn payload_strg_rawd() {
+        for big_endian in [false, true] {
+            let testsdata = [
+                (
+                    // valid but empty
+                    DLT_TYPE_INFO_STRG,
+                    vec![to_endian_vec!(0u16, big_endian)],
+                    Some(""),
+                ),
+                (
+                    DLT_TYPE_INFO_RAWD,
+                    vec![to_endian_vec!(0u16, big_endian)],
+                    Some(""),
+                ),
+                (
+                    DLT_TYPE_INFO_RAWD,
+                    vec![to_endian_vec!(1u16, big_endian), vec![0xfe]],
+                    Some("fe"),
+                ),
+                (
+                    DLT_TYPE_INFO_RAWD,
+                    vec![to_endian_vec!(2u16, big_endian), vec![0x0f, 0x00]],
+                    Some("0f 00"),
+                ),
+                (
+                    DLT_TYPE_INFO_RAWD,
+                    vec![to_endian_vec!(3u16, big_endian), vec![0x00, 0x01, 0xff]],
+                    Some("00 01 ff"),
+                ),
+                (DLT_TYPE_INFO_STRG, vec![], None), // no len
+                (DLT_TYPE_INFO_STRG, vec![vec![42u8]], None), // only 1 byte from len
+                (
+                    DLT_TYPE_INFO_STRG,
+                    // len but no payload
+                    vec![to_endian_vec!(1u16, big_endian)],
+                    None,
+                ),
+                (
+                    DLT_TYPE_INFO_STRG,
+                    // len but no payload
+                    vec![to_endian_vec!(0xffffu16, big_endian)],
+                    None,
+                ),
+                (
+                    DLT_TYPE_INFO_STRG,
+                    // len but partial payload
+                    vec![to_endian_vec!(0xffffu16, big_endian), vec![0x0]],
+                    None,
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
+                    // zero term missing
+                    vec![to_endian_vec!(1u16, big_endian), vec![b'a']],
+                    Some(""),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
+                    // zero term ok
+                    vec![to_endian_vec!(2u16, big_endian), vec![b'a', 0]],
+                    Some("a"),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
+                    // zero term nok ok works as well
+                    vec![to_endian_vec!(2u16, big_endian), vec![b'a', b'b']],
+                    Some("a"),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
+                    // ascii non printable, todo add full <0x20,... range
+                    // \r \n should be replace by a ' ' each
+                    // \t as well
+                    // dlt doesn't seem to define the ASCII codepage.
+                    // we could use ISO-8859-1
+                    // or we reduce the printable ones to 0x20 (' ') .. 0x7e ('~')
+                    vec![
+                        to_endian_vec!(4u16, big_endian),
+                        vec![b'\n', b'\r', b'\t', 0],
+                    ],
+                    Some("   "),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
+                    // utf8 with  non utf8
+                    vec![to_endian_vec!(2u16, big_endian), vec![0x80, 0]],
+                    Some("\u{FFFD}"),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
+                    // zero term missing
+                    vec![to_endian_vec!(1u16, big_endian), vec![b'a']],
+                    Some(""),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
+                    // zero term ok
+                    vec![to_endian_vec!(2u16, big_endian), vec![b'a', 0]],
+                    Some("a"),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
+                    // zero term nok ok works as well
+                    vec![to_endian_vec!(2u16, big_endian), vec![b'a', b'b']],
+                    Some("a"),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
+                    // ascii non printable, todo add full <0x20,... range
+                    // \r \n should be replace by a ' ' each
+                    // \t as well
+                    // dlt doesn't seem to define the ASCII codepage.
+                    // we could use ISO-8859-1
+                    // or we reduce the printable ones to 0x20 (' ') .. 0x7e ('~')
+                    // todo dlt-viewer seems to replace only \n (and not \r, \t)
+                    //  dlt-console converts \n and \r but not \t
+                    vec![
+                        to_endian_vec!(4u16, big_endian),
+                        vec![b'\n', b'\r', b'\t', 0],
+                    ],
+                    Some("   "),
+                ),
+                /* we do print all of those with WINDOWS_1252 encoding (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
+                    // acsii with non printable ascii
+                    vec![to_endian_vec!(3u16, big_endian), vec![0x19, 0x80, 0]],
+                    Some("\u{FFFD}\u{FFFD}"),
+                ),*/
+            ];
+            // we test them alone to be able to test for parser errors
+            for (i, testdata) in testsdata.iter().enumerate() {
+                let noar = 1;
+                let string_expected = testdata.2;
+                let mut payload: Vec<u8> = Vec::new();
+                // push the type
+
+                let mut type_buf = to_endian_vec!(testdata.0, big_endian);
+                payload.append(&mut type_buf);
+                for b in &testdata.1 {
+                    for c in b {
+                        payload.push(*c);
+                    }
+                }
+
+                let m = get_testmsg_with_payload(big_endian, noar as u8, &payload);
+                let args: Vec<DltArg> = m.into_iter().collect();
+                assert_eq!(m.noar() as usize, noar);
+                if let Some(string_expected) = string_expected {
+                    assert_eq!(args.len(), noar, "testcase #{} args mismatch", i);
+                    assert_eq!(args[0].type_info, testdata.0);
+                    assert_eq!(m.payload_as_text().unwrap(), string_expected);
+                } else {
+                    assert_eq!(args.len(), 0);
+                }
+            }
         }
     }
 
