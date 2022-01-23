@@ -1161,9 +1161,13 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                         len = 1;
                     }
                 } else if type_info & (DLT_TYPE_INFO_SINT | DLT_TYPE_INFO_UINT) != 0 {
-                    assert!(len > 0);
+                    if len < 1 {
+                        //  see [Dlt356]
+                        return None;
+                    }
                 } else if type_info & (DLT_TYPE_INFO_FLOA) != 0 {
                     if len < 2 {
+                        // see [Dlt145]
                         // floats are only defined for 2,4,8,16 byte
                         return None;
                     }
@@ -1229,7 +1233,7 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                 self.index += len; // we incr. in any case
                 return to_ret;
             } else if self.msg.payload.len() > self.index {
-                panic!("have unhandled payload data"); // todo error/skip/ignore?
+                return None; // todo could add an error alike DltArg with payload_raw
             }
         } else {
             // non-verbose:
@@ -2218,6 +2222,7 @@ mod tests {
     fn payload_single_strg_rawd_floa() {
         for big_endian in [false, true] {
             let testsdata = [
+                (DLT_TYPE_INFO_SINT, vec![], None), // no len
                 (DLT_TYPE_INFO_FLOA, vec![], None), // no len
                 (DLT_TYPE_INFO_FLOA | DLT_TYLE_8BIT as u32, vec![], None), // len 1 not defined
                 (
