@@ -2,6 +2,30 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.4.0 - 2022-01-23
+#### Bug Fixes
+- **(dlt)** bool parsing, fail on len >1 - (9bff9ce) - Matthias Behr
+- **(dlt)** handle SINT/UINT without payload - (fdf55a7) - Matthias Behr
+#### Continuous Integration
+- **(grcov)** add rust-cache - (78f7ea6) - Matthias Behr
+- **(rust)** add rust-cache for rust build, clippy, tests as well - (c80b15c) - Matthias Behr
+#### Features
+- **(dlt)** parsing/decoding of FLOAT - (d309044) - Matthias Behr
+- **(dlt)** proper string/rawd decoding - (ab27413) - Matthias Behr
+#### Refactoring
+- **(dlt)** use consts for arguments - (b36fcff) - Matthias Behr
+#### Tests
+- **(bin)** integration test for binary (just checking version) - (7eb8739) - Matthias Behr
+- **(dlt)** parse_dlt_with_storage_header - (483a6aa) - Matthias Behr
+- **(dlt)** more tests for uint/sint. Impl. 128bit types - (2b9c31b) - Matthias Behr
+- **(dlt)** payload sint non vari - (8cf6a64) - Matthias Behr
+- **(dlt)** more header_as_text_to_write tests - (c18f0d7) - Matthias Behr
+- **(dlt)** DltMessage::to_write first test - (274fe9f) - Matthias Behr
+- **(remote)** basic connect as websocket test - (062b1e8) - Matthias Behr
+- **(remote)** test remote with invalid port - (d653b7b) - Matthias Behr
+- **(util)** hex_to_bytes negative tests - (846358f) - Matthias Behr
+- - -
+
 ## v0.3.2 - 2022-01-17
 #### Bug Fixes
 - **(convert)** remove debug output for uint args - (9c6862a) - Matthias Behr
