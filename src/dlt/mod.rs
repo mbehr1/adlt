@@ -720,7 +720,7 @@ impl DltMessage {
         if self.is_verbose() {
             for (nr_arg, arg) in args.enumerate() {
                 if nr_arg > 0 {
-                    write!(text, " ")?;
+                    text.write_char(' ')?;
                 }
                 // let _tyle = arg.type_info & 0x0f;
                 let is_bool = arg.type_info & DLT_TYPE_INFO_BOOL > 0;
@@ -734,17 +734,11 @@ impl DltMessage {
                 if is_bool {
                     let val = arg.payload_raw[0];
                     if val > 0 {
-                        write!(text, "true")?;
+                        text.write_str("true")?;
                     } else {
-                        write!(text, "false")?;
+                        text.write_str("false")?;
                     }
                 } else if is_uint {
-                    /*write!(
-                        text,
-                        "<uint {} {:?}>",
-                        arg.payload_raw.len(),
-                        arg.payload_raw
-                    )?;*/
                     match arg.payload_raw.len() {
                         1 => {
                             let val: u8 = arg.payload_raw[0];
@@ -825,7 +819,33 @@ impl DltMessage {
                         _ => (),
                     };
                 } else if is_floa {
-                    write!(text, "<floa>")?;
+                    match arg.payload_raw.len() {
+                        4 => {
+                            let val: f32 = if arg.is_big_endian {
+                                f32::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                f32::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val)?;
+                        }
+                        8 => {
+                            let val: f64 = if arg.is_big_endian {
+                                f64::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                            } else {
+                                f64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                            };
+                            write!(text, "{}", val)?;
+                        }
+                        // f16 and f128 dont exist. todo could use create half::f16 and f128::f128 but dlt-viewer doesn't support it either
+                        _ => {
+                            write!(
+                                text,
+                                "?<floa with len={} raw={:?}>",
+                                arg.payload_raw.len(),
+                                arg.payload_raw
+                            )?;
+                        }
+                    }
                 } else if is_rawd {
                     if !arg.payload_raw.is_empty() {
                         for (i, &c) in arg.payload_raw[0..arg.payload_raw.len()].iter().enumerate()
@@ -1143,14 +1163,10 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                 } else if type_info & (DLT_TYPE_INFO_SINT | DLT_TYPE_INFO_UINT) != 0 {
                     assert!(len > 0);
                 } else if type_info & (DLT_TYPE_INFO_FLOA) != 0 {
-                    assert!(
-                        len == 4 || len == 8,
-                        "unexpected len={} for FLOA type_info=0x{:x} index={}, msg={:?}",
-                        len,
-                        type_info,
-                        self.index,
-                        self.msg
-                    );
+                    if len < 2 {
+                        // floats are only defined for 2,4,8,16 byte
+                        return None;
+                    }
                 } else if type_info & (DLT_TYPE_INFO_STRG | DLT_TYPE_INFO_RAWD) != 0 {
                     // STRG bit9, rawd bit10, aray bit8, floa bit7, uint bit6, sint bit5, bool bit4, trai bit 13, stru bit 14
                     // bit 15-17 string coding (scod), 0 = ascii, 1 = utf-8, 2-7 reserved
@@ -2085,9 +2101,49 @@ mod tests {
     }
 
     #[test]
-    fn payload_int() {
+    fn payload_int_float() {
         for big_endian in [false, true] {
             let testsdata = [
+                (
+                    DLT_TYPE_INFO_FLOA | DLT_TYLE_32BIT as u32,
+                    to_endian_vec!(1.0f32, big_endian),
+                    "1",
+                ),
+                (
+                    DLT_TYPE_INFO_FLOA | DLT_TYLE_32BIT as u32,
+                    to_endian_vec!(0.0f32, big_endian),
+                    "0",
+                ),
+                (
+                    DLT_TYPE_INFO_FLOA | DLT_TYLE_32BIT as u32,
+                    to_endian_vec!(-1.1f32, big_endian),
+                    "-1.1",
+                ),
+                (
+                    DLT_TYPE_INFO_FLOA | DLT_TYLE_64BIT as u32,
+                    to_endian_vec!(1.0f64, big_endian),
+                    "1",
+                ),
+                (
+                    DLT_TYPE_INFO_FLOA | DLT_TYLE_64BIT as u32,
+                    to_endian_vec!(f64::MIN, big_endian),
+                    &format!("{}", f64::MIN),
+                ),
+                (
+                    DLT_TYPE_INFO_FLOA | DLT_TYLE_64BIT as u32,
+                    to_endian_vec!(f64::MAX, big_endian),
+                    &format!("{}", f64::MAX),
+                ),
+                (
+                    DLT_TYPE_INFO_FLOA | DLT_TYLE_16BIT as u32,
+                    vec![0, 0],
+                    "?<floa with len=2 raw=[0, 0]>",
+                ),
+                (
+                    DLT_TYPE_INFO_FLOA | DLT_TYLE_128BIT as u32,
+                    vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    "?<floa with len=16 raw=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]>",
+                ),
                 (0x41u32, vec![0xffu8], "255"),
                 (0x21u32, vec![0xffu8], "-1"),
                 (0x21u32, to_endian_vec!(-128i8, big_endian), "-128"),
@@ -2159,9 +2215,11 @@ mod tests {
     }
 
     #[test]
-    fn payload_strg_rawd() {
+    fn payload_single_strg_rawd_floa() {
         for big_endian in [false, true] {
             let testsdata = [
+                (DLT_TYPE_INFO_FLOA, vec![], None), // no len
+                (DLT_TYPE_INFO_FLOA | DLT_TYLE_8BIT as u32, vec![], None), // len 1 not defined
                 (
                     // valid but empty
                     DLT_TYPE_INFO_STRG,
@@ -2318,6 +2376,7 @@ mod tests {
 
     // todo add smaller test cases for all FLOAT, VARI, FIXP, STRING encodings,...
     // todo test invalid/missing payload for SINT, UINT, and think about proper error handling
+    // todo add SCOD_BIN and SCOD_HEX for uints see e.g. https://github.com/COVESA/dlt-viewer/blob/03baa67d3bb059458cb5b8e0ed940ea6f607f575/qdlt/qdltargument.cpp#L444
 
     use std::io::Cursor;
 
