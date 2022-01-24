@@ -1667,6 +1667,15 @@ mod tests {
 
     mod dlt_extended_header {
         use super::*;
+
+        #[test]
+        fn invalid() {
+            // too short -> invalid / None
+            let eh = DltExtendedHeader::from_buf(&[0, 0, 1, 2, 3, 4, 5, 6, 7]);
+            assert!(eh.is_none());
+            // too much data -> dont care
+        }
+
         #[test]
         fn verbose() {
             let eh = DltExtendedHeader::from_buf(&[0, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
@@ -1686,20 +1695,62 @@ mod tests {
             let eh = DltExtendedHeader::from_buf(&[1u8 << 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
             assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Fatal)); // default still
 
-            let eh = DltExtendedHeader::from_buf(&[
-                /*(0 << 1) |*/ (3 << 4) | 1,
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,
-                8,
-            ])
-            .unwrap();
+            let eh =
+                DltExtendedHeader::from_buf(&[(3 << 4) | 1, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
             assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Warn));
+
+            let eh =
+                DltExtendedHeader::from_buf(&[(2 << 4) | 1, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Error));
+            let eh =
+                DltExtendedHeader::from_buf(&[(5 << 4) | 1, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Debug));
+            let eh = // mstp 0 -> default to Log as well (unspecified)
+                DltExtendedHeader::from_buf(&[(6 << 4), 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::Log(DltMessageLogType::Verbose));
+
+            let eh =
+                DltExtendedHeader::from_buf(&[(6 << 4) | 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::NwTrace(DltMessageNwType::SomeIp));
+            let eh =
+                DltExtendedHeader::from_buf(&[(5 << 4) | 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(
+                eh.mstp(),
+                DltMessageType::NwTrace(DltMessageNwType::Ethernet)
+            );
+            let eh =
+                DltExtendedHeader::from_buf(&[(2 << 4) | 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::NwTrace(DltMessageNwType::Can));
+            let eh =
+                DltExtendedHeader::from_buf(&[(1 << 4) | 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(eh.mstp(), DltMessageType::NwTrace(DltMessageNwType::Ipc));
+            let eh =
+                DltExtendedHeader::from_buf(&[(3 << 4) | 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(
+                eh.mstp(),
+                DltMessageType::NwTrace(DltMessageNwType::Flexray)
+            );
+            assert!(!format!("{:?}", eh).is_empty()); // can debug print
+
+            let eh =
+                DltExtendedHeader::from_buf(&[(4 << 4) | 2, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(
+                eh.mstp(),
+                DltMessageType::AppTrace(DltMessageTraceType::State)
+            );
+            assert!(!format!("{:?}", eh).is_empty()); // can debug print
+            let eh =
+                DltExtendedHeader::from_buf(&[(2 << 4) | 2, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(
+                eh.mstp(),
+                DltMessageType::AppTrace(DltMessageTraceType::FunctionIn)
+            );
+            let eh =
+                DltExtendedHeader::from_buf(&[(3 << 4) | 2, 0, 1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+            assert_eq!(
+                eh.mstp(),
+                DltMessageType::AppTrace(DltMessageTraceType::FunctionOut)
+            );
 
             let eh = DltExtendedHeader::from_buf(&[(1 << 1) | (1 << 4), 0, 1, 2, 3, 4, 5, 6, 7, 8])
                 .unwrap();
