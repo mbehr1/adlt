@@ -2,7 +2,7 @@
 mod convert;
 mod remote;
 
-use clap::{App, Arg, SubCommand};
+use clap::{App, Arg};
 // todo use rayon::prelude::*;
 use std::io::{self};
 // use std::sync::mpsc::channel;
@@ -13,85 +13,20 @@ use slog::{o, Drain};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // io::Result<()> {
-    let matches = App::new("automotive dlt tool")
+    let cmd_app = App::new("automotive dlt tool")
         .version(clap::crate_version!())
         .author("Matthias Behr <mbehr+adlt@mcbehr.de>")
         .about("Tool to handle automotive diagnostic log- and trace- (DLT) files.")
-        .subcommand(SubCommand::with_name("remote").about("Provide remote server functionalities")
-            .arg(Arg::with_name("port").short("p").takes_value(true).help("websocket port to use").default_value("6665")))
-        .subcommand(
-            SubCommand::with_name("convert").about("Open DLT files and show on console or export to DLT file")
-                /* .arg(
-                    Arg::with_name("hex")
-                        .short("x")
-                        .group("style")
-                        .display_order(2)
-                        .help("print DLT file; payload as hex"),
-                )*/
-                .arg(
-                    Arg::with_name("ascii")
-                        .short("a")
-                        .group("style")
-                        .display_order(1)
-                        .help("print DLT file; payload as ASCII"),
-                )
-                /* .arg(
-                    Arg::with_name("mixed")
-                        .short("m")
-                        .group("style")
-                        .display_order(1)
-                        .help("print DLT file; payload as ASCII and hex"),
-                )*/
-                .arg(
-                    Arg::with_name("headers")
-                        .short("s")
-                        .group("style")
-                        .display_order(1)
-                        .help("print DLT file; only headers"),
-                )
-                .arg(
-                    Arg::with_name("file")
-                        .required(true)
-                        .multiple(true)
-                        .min_values(1)
-                        .help("input DLT files to process"),
-                ).arg(
-                    Arg::with_name("index_first")
-                    .short("b")
-                    .takes_value(true)
-                    .help("first message (index) to be handled. Index is from the original file before any filters are applied.")
-                ).arg(
-                    Arg::with_name("index_last")
-                    .short("e")
-                    .takes_value(true)
-                    .help("last message (index) to be handled")
-                ).arg(
-                    Arg::with_name("filter_lc_ids")
-                    .short("l")
-                    .long("lcs")
-                    .multiple(true)
-                    .min_values(1)
-                    .help("filter for the specified lifecycle ids.")
-                ).arg(
-                    Arg::with_name("output_file")
-                    .short("o")
-                    .takes_value(true)
-                    .help("output messages in new DLT file")
-                ).arg(
-                    Arg::with_name("sort")
-                    .long("sort")
-                    .takes_value(false)
-                    .help("sort by timestamp. Sorts by timestamp per lifecycle.")
-                ),
-        )
         .arg(
             Arg::with_name("verbose")
                 .global(true)
                 .short("v")
                 .multiple(true)
                 .help("verbosity level"),
-        )
-        .get_matches();
+        );
+    let cmd_app = convert::add_subcommand(cmd_app);
+    let cmd_app = remote::add_subcommand(cmd_app);
+    let matches = cmd_app.get_matches();
 
     // initialize logging
     // all log levels are
@@ -121,7 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     return match matches.subcommand() {
-        ("convert", Some(sub_m)) => convert::convert(log, sub_m).map_err(|e| e.into()),
+        ("convert", Some(sub_m)) => convert::convert(log, sub_m)
+            .map_err(|e| e.into())
+            .map(|_x| ()), // dont return anything here
         ("remote", Some(sub_m)) => remote::remote(log, sub_m),
         _ => {
             return Err(Box::new(io::Error::new(

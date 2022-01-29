@@ -1,4 +1,5 @@
 use chrono::{Local, TimeZone};
+use clap::{App, Arg, SubCommand};
 use slog::{crit, debug, error, info, warn};
 use std::fs::File;
 use std::io::prelude::*;
@@ -14,9 +15,83 @@ enum OutputStyle {
     None,
 }
 
+pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
+    app.subcommand(
+        SubCommand::with_name("convert").about("Open DLT files and show on console or export to DLT file")
+            /* .arg(
+                Arg::with_name("hex")
+                    .short("x")
+                    .group("style")
+                    .display_order(2)
+                    .help("print DLT file; payload as hex"),
+            )*/
+            .arg(
+                Arg::with_name("ascii")
+                    .short("a")
+                    .group("style")
+                    .display_order(1)
+                    .help("print DLT file; payload as ASCII"),
+            )
+            /* .arg(
+                Arg::with_name("mixed")
+                    .short("m")
+                    .group("style")
+                    .display_order(1)
+                    .help("print DLT file; payload as ASCII and hex"),
+            )*/
+            .arg(
+                Arg::with_name("headers")
+                    .short("s")
+                    .group("style")
+                    .display_order(1)
+                    .help("print DLT file; only headers"),
+            )
+            .arg(
+                Arg::with_name("file")
+                    .required(true)
+                    .multiple(true)
+                    .min_values(1)
+                    .help("input DLT files to process"),
+            ).arg(
+                Arg::with_name("index_first")
+                .short("b")
+                .takes_value(true)
+                .help("first message (index) to be handled. Index is from the original file before any filters are applied.")
+            ).arg(
+                Arg::with_name("index_last")
+                .short("e")
+                .takes_value(true)
+                .help("last message (index) to be handled")
+            ).arg(
+                Arg::with_name("filter_lc_ids")
+                .short("l")
+                .long("lcs")
+                .multiple(true)
+                .min_values(1)
+                .help("filter for the specified lifecycle ids.")
+            ).arg(
+                Arg::with_name("output_file")
+                .short("o")
+                .takes_value(true)
+                .help("output messages in new DLT file")
+            ).arg(
+                Arg::with_name("sort")
+                .long("sort")
+                .takes_value(false)
+                .help("sort by timestamp. Sorts by timestamp per lifecycle.")
+            ),
+    )
+}
+
+#[allow(dead_code)] // we currently use it only for test
+pub struct ConvertResult {
+    messages_processed: adlt::dlt::DltMessageIndexType,
+    messages_output: adlt::dlt::DltMessageIndexType,
+}
+
 /// same as genivi dlt dlt-convert binary
 /// log the files to console
-pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<()> {
+pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<ConvertResult> {
     let input_file_names: Vec<&str> = sub_m.values_of("file").unwrap().collect();
 
     let output_style: OutputStyle = if sub_m.is_present("hex") {
@@ -79,7 +154,8 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
 
     let mut bytes_processed: u64 = 0;
     let mut bytes_per_file: u64 = 0;
-    let mut number_messages: adlt::dlt::DltMessageIndexType = 0;
+    let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
+    let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
     let mut input_file_names_iter = input_file_names.iter();
     let mut last_data = false;
 
@@ -122,7 +198,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
         (None, rx2)
     };
     let t4 = std::thread::spawn(
-        move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        move || -> Result<adlt::dlt::DltMessageIndexType, Box<dyn std::error::Error + Send + Sync>> {
             let mut output_file = if let Some(s) = output_file {
                 match std::fs::File::create(s) {
                     Ok(f) => Ok(BufWriter::new(f)),
@@ -136,6 +212,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
             };
 
             let mut output_screen = std::io::stdout();
+            let mut output : adlt::dlt::DltMessageIndexType= 0;
 
             for msg in t4_input {
                 // lifecycle filtered?
@@ -165,6 +242,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                     if let Ok(ref mut file) = output_file {
                         msg.to_write(file)?;
                     }
+                    output += 1;
                 }
             }
             if let Ok(mut writer) = output_file {
@@ -172,7 +250,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                 drop(writer); // close, happens anyhow autom...
             }
 
-            Ok(())
+            Ok(output)
         },
     );
 
@@ -194,10 +272,10 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
         }
         assert!(f.is_some());
         let reader: &mut BufReader<File> = f.as_mut().unwrap();
-        match adlt::dlt::parse_dlt_with_storage_header(number_messages, &mut *reader) {
+        match adlt::dlt::parse_dlt_with_storage_header(messages_processed, &mut *reader) {
             Ok((res, msg)) => {
                 bytes_per_file += res as u64;
-                number_messages += 1;
+                messages_processed += 1;
 
                 tx.send(msg).unwrap(); // todo handle error?
 
@@ -217,7 +295,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
                     info!(log, "skipped 1 byte at {}", bytes_per_file);
                 }
                 _ => {
-                    debug!(log, "finished processing a file"; "bytes_per_file"=>bytes_per_file, "number_messages"=>number_messages);
+                    debug!(log, "finished processing a file"; "bytes_per_file"=>bytes_per_file, "messages_processed"=>messages_processed);
                     f.unwrap();
                     f = None; // check for next file on next it
                     last_data = false;
@@ -240,10 +318,15 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
 
     match t4.join() {
         Err(s) => error!(log, "t4 join got Error {:?}", s),
-        Ok(s) => debug!(log, "t2 join was Ok {:?}", s),
+        Ok(s) => {
+            debug!(log, "t2 join was Ok {:?}", s);
+            if let Ok(..) = s {
+                messages_output += s.unwrap();
+            }
+        }
     }
 
-    info!(log, "finished processing"; "bytes_processed"=>bytes_processed, "number_messages"=>number_messages);
+    info!(log, "finished processing"; "bytes_processed"=>bytes_processed, "messages_processed"=>messages_processed);
 
     // print lifecycles:
     if let OutputStyle::None = output_style {
@@ -273,5 +356,54 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<(
         }
     }
 
-    Ok(())
+    Ok(ConvertResult {
+        messages_processed,
+        messages_output,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slog::{o, Drain, Logger};
+    use tempfile::NamedTempFile;
+
+    fn new_logger() -> Logger {
+        let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        Logger::root(drain, o!())
+    }
+
+    #[test]
+    fn params1() {
+        let logger = new_logger();
+        let arg_vec = vec!["t", "convert", "foo.dlt"];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand();
+        assert_eq!("convert", c);
+        let sub_m = sub_m.expect("no matches?");
+        assert!(sub_m.is_present("file"));
+        let r = convert(logger, sub_m);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn empty1() {
+        let logger = new_logger();
+
+        let file = NamedTempFile::new().unwrap();
+        let file_path = file.path().to_str().unwrap();
+
+        let arg_vec = vec!["t", "convert", file_path];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand();
+        assert_eq!("convert", c);
+        let sub_m = sub_m.expect("no matches?");
+        assert!(sub_m.is_present("file"));
+
+        let r = convert(logger, sub_m).unwrap();
+        assert_eq!(0, r.messages_output);
+        assert_eq!(0, r.messages_processed);
+        assert!(file.close().is_ok());
+    }
 }
