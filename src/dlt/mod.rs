@@ -122,7 +122,7 @@ pub struct DltStorageHeader {
 }
 
 pub const DLT_STORAGE_HEADER_PATTERN: u32 = 0x01544c44; // DLT\01
-const DLT_STORAGE_HEADER_SIZE: usize = 16;
+const DLT_STORAGE_HEADER_SIZE: usize = 16; // DLT\0x1 + secs, micros, ecu
 const DLT_MIN_STD_HEADER_SIZE: usize = 4;
 const MIN_DLT_MSG_SIZE: usize = DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE;
 const DLT_EXT_HEADER_SIZE: usize = 10;
@@ -160,14 +160,11 @@ impl DltStorageHeader {
         let b1 = &u32::to_le_bytes(pat);
         let b2 = &u32::to_le_bytes(self.secs);
         let b3 = &u32::to_le_bytes(self.micros);
-
-        let bufs = &mut [
-            std::io::IoSlice::new(b1),
-            std::io::IoSlice::new(b2),
-            std::io::IoSlice::new(b3),
-            std::io::IoSlice::new(&self.ecu.char4),
-        ];
-        writer.write_vectored(bufs)
+        writer.write_all(b1)?;
+        writer.write_all(b2)?;
+        writer.write_all(b3)?;
+        writer.write_all(&self.ecu.char4)?;
+        Ok(DLT_STORAGE_HEADER_SIZE)
     }
 
     fn reception_time_us(&self) -> u64 {
@@ -484,13 +481,10 @@ impl DltExtendedHeader {
     /// serialize to a writer in DLT byte format
     fn to_write(&self, writer: &mut impl std::io::Write) -> Result<usize, std::io::Error> {
         let b1 = &[self.verb_mstp_mtin, self.noar];
-
-        let bufs = &mut [
-            std::io::IoSlice::new(b1),
-            std::io::IoSlice::new(&self.apid.char4),
-            std::io::IoSlice::new(&self.ctid.char4),
-        ];
-        writer.write_vectored(bufs)
+        writer.write_all(b1)?;
+        writer.write_all(&self.apid.char4)?;
+        writer.write_all(&self.ctid.char4)?;
+        Ok(DLT_EXT_HEADER_SIZE)
     }
 }
 
@@ -608,7 +602,7 @@ impl DltMessage {
         }
     }
 
-    fn from(
+    pub fn from_headers(
         index: DltMessageIndexType,
         storage_header: DltStorageHeader,
         standard_header: DltStandardHeader,
@@ -1339,7 +1333,7 @@ pub fn parse_dlt_with_storage_header(
                         let payload = Vec::from(
                             &peek_buf[payload_offset..payload_offset + payload_size as usize],
                         );
-                        let msg = DltMessage::from(
+                        let msg = DltMessage::from_headers(
                             index,
                             sh,
                             stdh,
@@ -1794,7 +1788,7 @@ mod tests {
                 mcnt: 42,
                 len: 4,
             };
-            let m = DltMessage::from(2, shdr, stdh, &[], [].to_vec());
+            let m = DltMessage::from_headers(2, shdr, stdh, &[], [].to_vec());
             assert_eq!(m.mcnt(), 42);
             assert_eq!(m.ecu, DltChar4::from_str("ECU1").unwrap()); // from storage header as no ext header
             assert_eq!(m.reception_time_us, US_PER_SEC + 2);
@@ -1919,7 +1913,7 @@ mod tests {
         };
         let stdh = DltStandardHeader::from_buf(&v).unwrap();
         let payload_offset = stdh.std_ext_header_size() as usize;
-        let m = DltMessage::from(
+        let m = DltMessage::from_headers(
             1423084,
             sh,
             stdh,
@@ -1973,7 +1967,7 @@ mod tests {
         };
         let stdh = DltStandardHeader::from_buf(&v).unwrap();
         let payload_offset = stdh.std_ext_header_size() as usize;
-        let m = DltMessage::from(
+        let m = DltMessage::from_headers(
             1423084,
             sh,
             stdh,
@@ -1997,7 +1991,7 @@ mod tests {
         assert!(!stdh2.has_session_id()); // see above
         assert_eq!(m.is_big_endian(), stdh2.is_big_endian());
 
-        let m2 = DltMessage::from(
+        let m2 = DltMessage::from_headers(
             1423084,
             sh2,
             stdh2,
@@ -2044,7 +2038,7 @@ mod tests {
         let mut add_header_buf = Vec::new();
         exth.to_write(&mut add_header_buf).unwrap();
 
-        DltMessage::from(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
+        DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
     }
 
     #[test]
