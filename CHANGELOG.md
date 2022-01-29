@@ -2,6 +2,22 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.4.1 - 2022-01-29
+#### Bug Fixes
+- **(dlt)** persist timestamp only if present - (abf5358) - Matthias Behr
+- **(dlt)** replace write_vectored with write_all - (79b405c) - Matthias Behr
+#### Documentation
+- **(readme)** add some badges - (6cd3ef7) - Matthias Behr
+#### Refactoring
+- **(bin)** refactor to support tests - (686f699) - Matthias Behr
+#### Tests
+- **(convert)** test output and sort - (6fa97d4) - Matthias Behr
+- **(convert)** more tests with test dlt file - (5535ef3) - Matthias Behr
+- **(extheader)** mstp/mtin tests - (6d63d77) - Matthias Behr
+- **(integration)** fix tests under windows - (eee30db) - Matthias Behr
+- fix static version in integr. test - (10655a7) - Matthias Behr
+- - -
+
 ## v0.4.0 - 2022-01-23
 #### Bug Fixes
 - **(dlt)** bool parsing, fail on len >1 - (9bff9ce) - Matthias Behr
