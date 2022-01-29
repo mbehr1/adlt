@@ -652,7 +652,11 @@ impl DltMessage {
             &self.extended_header,
             None, // ecu already in storageheader
             None, // session_id = None, todo
-            Some(self.timestamp_dms),
+            if self.standard_header.has_timestamp() {
+                Some(self.timestamp_dms)
+            } else {
+                None
+            },
             &self.payload,
         )?;
         Ok(())
@@ -2445,7 +2449,7 @@ mod tests {
         let (parsed, m2) = parse_dlt_with_storage_header(1, &mut reader).unwrap();
         assert_eq!(parsed, file_len);
         assert_eq!(m.ecu, m2.ecu);
-        assert_ne!(m, m2); // standard header differs
+        assert_eq!(m, m2);
         assert_eq!(m.extended_header, m2.extended_header);
         assert_eq!(m.payload, m2.payload);
 
