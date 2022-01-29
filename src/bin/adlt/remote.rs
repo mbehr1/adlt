@@ -1,3 +1,4 @@
+use clap::{App, Arg, SubCommand};
 use slog::{debug, info}; // crit, debug, info, warn, error};
 use std::fs::File;
 use std::io::prelude::*;
@@ -11,6 +12,20 @@ use tungstenite::{
 };
 
 use adlt::filter::{Filter, FilterKind, FilterKindContainer};
+
+pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
+    app.subcommand(
+        SubCommand::with_name("remote")
+            .about("Provide remote server functionalities")
+            .arg(
+                Arg::with_name("port")
+                    .short("p")
+                    .takes_value(true)
+                    .help("websocket port to use")
+                    .default_value("6665"),
+            ),
+    )
+}
 
 /// provide remote server functionalities
 pub fn remote(
