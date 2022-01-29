@@ -222,10 +222,12 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
                 // start with a simple dump of the msgs similar to dlt_message_header
                 if msg.index >= index_first && msg.index <= index_last {
                     // if print header, ascii, hex or mixed: todo
+                    let mut did_output = false;
                     match output_style {
                         OutputStyle::HeaderOnly => {
                             msg.header_as_text_to_write(&mut output_screen)?;
                             output_screen.write_all(&[b'\n'])?;
+                            did_output = true;
                         }
                         OutputStyle::Ascii => {
                             msg.header_as_text_to_write(&mut output_screen)?;
@@ -233,6 +235,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
                             writeln!(output_screen, " [{}]", msg.payload_as_text()?)?;
                             // todo change to write directly to Writer
                             // output_screen.write(&['\n' as u8])?;
+                            did_output = true;
                         }
                         _ => {
                             // todo...
@@ -241,8 +244,9 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
                     // if output to file:
                     if let Ok(ref mut file) = output_file {
                         msg.to_write(file)?;
+                        did_output = true;
                     }
-                    output += 1;
+                    if did_output{ output += 1;}
                 }
             }
             if let Ok(mut writer) = output_file {
@@ -365,6 +369,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adlt::*;
     use slog::{o, Drain, Logger};
     use tempfile::NamedTempFile;
 
@@ -404,6 +409,86 @@ mod tests {
         let r = convert(logger, sub_m).unwrap();
         assert_eq!(0, r.messages_output);
         assert_eq!(0, r.messages_processed);
+        assert!(file.close().is_ok());
+    }
+
+    #[test]
+    fn non_empty1() {
+        let logger = new_logger();
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        // persist some messages
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 10;
+        let ecu = dlt::DltChar4::from_buf(b"ECU1");
+        for i in 0..persisted_msgs {
+            let sh = adlt::dlt::DltStorageHeader {
+                secs: (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(&mut file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+
+        let arg_vec = vec!["t", "convert", file_path.as_str()];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand();
+        assert_eq!("convert", c);
+        let sub_m = sub_m.expect("no matches?");
+        assert!(sub_m.is_present("file"));
+
+        let r = convert(logger, sub_m).unwrap();
+        assert_eq!(0, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+        assert!(file.close().is_ok());
+    }
+
+    #[test]
+    fn non_empty2() {
+        let logger = new_logger();
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        // persist some messages
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 10;
+        let ecu = dlt::DltChar4::from_buf(b"ECU1");
+        for i in 0..persisted_msgs {
+            let sh = adlt::dlt::DltStorageHeader {
+                secs: (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(&mut file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+
+        let arg_vec = vec!["t", "convert", "-a", "-b2", "-e5", file_path.as_str()];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand();
+        assert_eq!("convert", c);
+        let sub_m = sub_m.expect("no matches?");
+        assert!(sub_m.is_present("file"));
+
+        let r = convert(logger, sub_m).unwrap();
+        assert_eq!(5 - 2 + 1, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
     }
 }
