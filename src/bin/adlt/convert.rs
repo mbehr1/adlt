@@ -84,14 +84,19 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
 }
 
 #[allow(dead_code)] // we currently use it only for test
-pub struct ConvertResult {
+pub struct ConvertResult<W: std::io::Write + Send + 'static> {
     messages_processed: adlt::dlt::DltMessageIndexType,
     messages_output: adlt::dlt::DltMessageIndexType,
+    writer_screen: Option<W>,
 }
 
 /// same as genivi dlt dlt-convert binary
 /// log the files to console
-pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<ConvertResult> {
+pub fn convert<W: std::io::Write + Send + 'static>(
+    log: slog::Logger,
+    sub_m: &clap::ArgMatches,
+    mut writer_screen: W,
+) -> std::io::Result<ConvertResult<W>> {
     let input_file_names: Vec<&str> = sub_m.values_of("file").unwrap().collect();
 
     let output_style: OutputStyle = if sub_m.is_present("hex") {
@@ -198,7 +203,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
         (None, rx2)
     };
     let t4 = std::thread::spawn(
-        move || -> Result<adlt::dlt::DltMessageIndexType, Box<dyn std::error::Error + Send + Sync>> {
+        move || -> Result<(adlt::dlt::DltMessageIndexType, W), Box<dyn std::error::Error + Send + Sync>> {
             let mut output_file = if let Some(s) = output_file {
                 match std::fs::File::create(s) {
                     Ok(f) => Ok(BufWriter::new(f)),
@@ -211,7 +216,6 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
                 ))
             };
 
-            let mut output_screen = std::io::stdout();
             let mut output : adlt::dlt::DltMessageIndexType= 0;
 
             for msg in t4_input {
@@ -225,14 +229,14 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
                     let mut did_output = false;
                     match output_style {
                         OutputStyle::HeaderOnly => {
-                            msg.header_as_text_to_write(&mut output_screen)?;
-                            output_screen.write_all(&[b'\n'])?;
+                            msg.header_as_text_to_write( &mut writer_screen)?;
+                            writer_screen.write_all(&[b'\n'])?;
                             did_output = true;
                         }
                         OutputStyle::Ascii => {
-                            msg.header_as_text_to_write(&mut output_screen)?;
+                            msg.header_as_text_to_write(&mut writer_screen)?;
                             // output_screen.write(&[' ' as u8])?;
-                            writeln!(output_screen, " [{}]", msg.payload_as_text()?)?;
+                            writeln!(writer_screen, " [{}]", msg.payload_as_text()?)?;
                             // todo change to write directly to Writer
                             // output_screen.write(&['\n' as u8])?;
                             did_output = true;
@@ -254,7 +258,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
                 drop(writer); // close, happens anyhow autom...
             }
 
-            Ok(output)
+            Ok((output, writer_screen))
         },
     );
 
@@ -320,42 +324,53 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
         };
     }
 
-    match t4.join() {
-        Err(s) => error!(log, "t4 join got Error {:?}", s),
+    let mut writer_screen = match t4.join() {
+        Err(s) => {
+            error!(log, "t4 join got Error {:?}", s);
+            None
+        }
         Ok(s) => {
-            debug!(log, "t2 join was Ok {:?}", s);
-            if let Ok(..) = s {
-                messages_output += s.unwrap();
+            if let Ok(s) = s {
+                debug!(log, "t4 join was Ok {:?}", s.0);
+                messages_output += s.0;
+                Some(s.1)
+            } else {
+                None
             }
         }
-    }
+    };
 
     info!(log, "finished processing"; "bytes_processed"=>bytes_processed, "messages_processed"=>messages_processed);
 
     // print lifecycles:
     if let OutputStyle::None = output_style {
-        if let Some(a) = lcs_r.read() {
-            let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
-            println!("have {} lifecycles:", sorted_lcs.len(),);
-            // output lifecycles
-            for lc in sorted_lcs {
-                println!(
-                    "LC#{:3}: {:4} {} - {} #{:8} {}",
-                    lc.id(),
-                    lc.ecu,
-                    Local
-                        .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
-                        .format("%Y/%m/%d %H:%M:%S%.6f"),
-                    Local
-                        .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time()))
-                        .format("%H:%M:%S"),
-                    lc.nr_msgs,
-                    if lc.only_control_requests() {
-                        "CTRL_REQUESTS_ONLY"
-                    } else {
-                        ""
-                    }
-                );
+        if let Some(..) = writer_screen {
+            let writer_screen = writer_screen.as_mut().unwrap();
+            if let Some(a) = lcs_r.read() {
+                let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
+                writeln!(writer_screen, "have {} lifecycles:", sorted_lcs.len(),)?;
+                // todo to output_screen!
+                // output lifecycles
+                for lc in sorted_lcs {
+                    writeln!(
+                        writer_screen,
+                        "LC#{:3}: {:4} {} - {} #{:8} {}",
+                        lc.id(),
+                        lc.ecu,
+                        Local
+                            .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
+                            .format("%Y/%m/%d %H:%M:%S%.6f"),
+                        Local
+                            .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time()))
+                            .format("%H:%M:%S"),
+                        lc.nr_msgs,
+                        if lc.only_control_requests() {
+                            "CTRL_REQUESTS_ONLY"
+                        } else {
+                            ""
+                        }
+                    )?;
+                }
             }
         }
     }
@@ -363,6 +378,7 @@ pub fn convert(log: slog::Logger, sub_m: &clap::ArgMatches) -> std::io::Result<C
     Ok(ConvertResult {
         messages_processed,
         messages_output,
+        writer_screen,
     })
 }
 
@@ -388,7 +404,7 @@ mod tests {
         assert_eq!("convert", c);
         let sub_m = sub_m.expect("no matches?");
         assert!(sub_m.is_present("file"));
-        let r = convert(logger, sub_m);
+        let r = convert(logger, sub_m, std::io::stdout());
         assert!(r.is_err());
     }
 
@@ -406,7 +422,7 @@ mod tests {
         let sub_m = sub_m.expect("no matches?");
         assert!(sub_m.is_present("file"));
 
-        let r = convert(logger, sub_m).unwrap();
+        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(0, r.messages_output);
         assert_eq!(0, r.messages_processed);
         assert!(file.close().is_ok());
@@ -446,7 +462,7 @@ mod tests {
         let sub_m = sub_m.expect("no matches?");
         assert!(sub_m.is_present("file"));
 
-        let r = convert(logger, sub_m).unwrap();
+        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(0, r.messages_output);
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
@@ -479,16 +495,73 @@ mod tests {
         }
         file.flush().unwrap();
 
-        let arg_vec = vec!["t", "convert", "-a", "-b2", "-e5", file_path.as_str()];
+        let arg_vec = vec!["t", "convert", "-s", "-b2", "-e5", file_path.as_str()];
         let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
         let (c, sub_m) = sub_c.subcommand();
         assert_eq!("convert", c);
         let sub_m = sub_m.expect("no matches?");
         assert!(sub_m.is_present("file"));
 
-        let r = convert(logger, sub_m).unwrap();
+        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(5 - 2 + 1, r.messages_output);
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
+    }
+
+    #[test]
+    fn non_empty3() {
+        let logger = new_logger();
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        // persist some messages
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 10;
+        let ecu = dlt::DltChar4::from_buf(b"ECU1");
+        for i in 0..persisted_msgs {
+            let sh = adlt::dlt::DltStorageHeader {
+                secs: (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(&mut file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+
+        let arg_vec = vec!["t", "convert", "-a", "--sort", file_path.as_str()];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand();
+        assert_eq!("convert", c);
+        let sub_m = sub_m.expect("no matches?");
+        assert!(sub_m.is_present("file"));
+
+        let output_buf = Vec::new();
+        let output = std::io::BufWriter::new(output_buf);
+
+        let r = convert(logger, sub_m, output).unwrap();
+        assert_eq!(persisted_msgs, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+        assert!(file.close().is_ok());
+        // check output but we get the output only in the integration tests...
+        assert!(r.writer_screen.is_some());
+        let output_buf = r.writer_screen.unwrap().into_inner().unwrap();
+        assert!(!output_buf.is_empty());
+        let s = String::from_utf8(output_buf).unwrap();
+        //println!("{}", s);
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(persisted_msgs as usize, lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            // in this case the output should be sorted with mcnt from 0 to 9 (as all have timestamp 0 -> stable order)
+            // mcnt is the 4th " " splitted
+            let parts: Vec<&str> = line.split_ascii_whitespace().collect();
+            assert_eq!(parts[4].parse::<u8>().unwrap(), (i % 256) as u8);
+        }
     }
 }

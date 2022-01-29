@@ -56,9 +56,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     return match matches.subcommand() {
-        ("convert", Some(sub_m)) => convert::convert(log, sub_m)
-            .map_err(|e| e.into())
-            .map(|_x| ()), // dont return anything here
+        ("convert", Some(sub_m)) => {
+            convert::convert(log, sub_m, std::io::BufWriter::new(std::io::stdout()))
+                .map_err(|e| e.into())
+                .map(|_x| ())
+        } // dont return anything here
         ("remote", Some(sub_m)) => remote::remote(log, sub_m),
         _ => {
             return Err(Box::new(io::Error::new(
