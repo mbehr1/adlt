@@ -8,6 +8,9 @@ use std::fmt::Write;
 use std::io::BufRead; // SerializeStruct
 use std::str::FromStr;
 
+/// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
+/// todo use crate itoa and ryu for int/float to str conversations (numtoa seems outdated)
+
 #[derive(Clone, PartialEq, Eq, Copy, Hash)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
     char4: [u8; 4], // String, // todo u8,4 array?
@@ -122,10 +125,10 @@ pub struct DltStorageHeader {
 }
 
 pub const DLT_STORAGE_HEADER_PATTERN: u32 = 0x01544c44; // DLT\01
-const DLT_STORAGE_HEADER_SIZE: usize = 16; // DLT\0x1 + secs, micros, ecu
-const DLT_MIN_STD_HEADER_SIZE: usize = 4;
-const MIN_DLT_MSG_SIZE: usize = DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE;
-const DLT_EXT_HEADER_SIZE: usize = 10;
+pub const DLT_STORAGE_HEADER_SIZE: usize = 16; // DLT\0x1 + secs, micros, ecu
+pub const DLT_MIN_STD_HEADER_SIZE: usize = 4;
+pub const MIN_DLT_MSG_SIZE: usize = DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE;
+pub const DLT_EXT_HEADER_SIZE: usize = 10;
 
 impl DltStorageHeader {
     fn from_buf(buf: &[u8]) -> Option<DltStorageHeader> {
@@ -193,7 +196,7 @@ pub struct DltStandardHeader {
 }
 
 impl DltStandardHeader {
-    fn from_buf(buf: &[u8]) -> Option<DltStandardHeader> {
+    pub fn from_buf(buf: &[u8]) -> Option<DltStandardHeader> {
         if buf.len() < 4 {
             return None;
         }
@@ -275,7 +278,9 @@ impl DltStandardHeader {
         Ok(())
     }
 
-    fn std_ext_header_size(&self) -> u16 {
+    /// return the size of this standard header and the expected extensions
+    /// like ecu, session_id, timestamp and extended header.
+    pub fn std_ext_header_size(&self) -> u16 {
         let mut length = DLT_MIN_STD_HEADER_SIZE as u16;
         if self.has_ecu_id() {
             length += 4;
@@ -712,8 +717,7 @@ impl DltMessage {
     }
 
     pub fn payload_as_text(&self) -> Result<String, std::fmt::Error> {
-        let mut text = String::new(); // can we guess the capacity upfront? (e.g. payload len *3?)
-
+        let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
         let mut args = self.into_iter();
         if self.is_verbose() {
             for (nr_arg, arg) in args.enumerate() {
@@ -740,7 +744,7 @@ impl DltMessage {
                     match arg.payload_raw.len() {
                         1 => {
                             let val: u8 = arg.payload_raw[0];
-                            write!(text, "{}", val)?;
+                            write!(text, "{}", val)?; // is surpringly faster than text.write_str(&val.to_string())?;
                         }
                         2 => {
                             let val: u16 = if arg.is_big_endian {

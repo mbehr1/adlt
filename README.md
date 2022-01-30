@@ -51,6 +51,35 @@ cd coverage
 open ./index.html
 ```
 
+### run benchmark tests
+
+Benchmark tests are using criterion and cargo-criterion.
+To install:
+```
+cargo install cargo-criterion
+```
+
+To run:
+```
+cargo criterion
+or
+cargo bench
+```
+The results will be printed on the console and an html report is created at 
+
+target/criterion/reports/index.html or
+target/criterion/report/index.html.
+
+To save a baseline use:
+```
+cargo bench --bench dlt_benches -- --save-baseline <name>
+```
+
+To compare against a saved baseline:
+```
+cargo bench --bench dlt_benches -- --baseline <saved_baseline_name>
+```
+
 ### perform a release
 ```
 cog bump --auto
