@@ -91,7 +91,10 @@ pub struct ConvertResult<W: std::io::Write + Send + 'static> {
 }
 
 /// same as genivi dlt dlt-convert binary
+///
 /// log the files to console
+///
+/// supports additional lifecycle detection and sort by timestamp
 pub fn convert<W: std::io::Write + Send + 'static>(
     log: slog::Logger,
     sub_m: &clap::ArgMatches,
@@ -145,7 +148,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     let output_file = sub_m.value_of("output_file").map(|s| s.to_string());
     info!(log, "convert have {} input files", input_file_names.len(); "index_first"=>index_first, "index_last"=>index_last);
-    debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids), "sort_by_time" => sort_by_time);
+    debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids), "sort_by_time" => sort_by_time, "output_file" => &output_file);
 
     // if we have multiple files we do need to sort them first by the first log reception_time!
     if input_file_names.len() > 1 {
@@ -509,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn non_empty3() {
+    fn non_empty_sort_sorted_check_mcnt() {
         let logger = new_logger();
 
         let mut file = NamedTempFile::new().unwrap();
@@ -563,5 +566,64 @@ mod tests {
             let parts: Vec<&str> = line.split_ascii_whitespace().collect();
             assert_eq!(parts[4].parse::<u8>().unwrap(), (i % 256) as u8);
         }
+    }
+
+    #[test]
+    fn output_to_file() {
+        let logger = new_logger();
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        // persist some messages
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 10;
+        let ecu = dlt::DltChar4::from_buf(b"ECU1");
+        for i in 0..persisted_msgs {
+            let sh = adlt::dlt::DltStorageHeader {
+                secs: (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(&mut file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+        let output_file_path = String::from(output_file.path().to_str().unwrap());
+
+        let arg_vec = vec![
+            "t",
+            "convert",
+            "-b2",
+            "-e5",
+            file_path.as_str(),
+            "-o",
+            &output_file_path,
+        ];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+
+        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
+        assert_eq!(5 - 2 + 1, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+        assert!(file.close().is_ok());
+
+        // check that output file has now the expected (number of) msgs:
+        let arg_vec = vec!["t", "convert", &output_file_path];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+        let logger = new_logger(); // todo replace with reference!
+        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
+        assert_eq!(5 - 2 + 1, r.messages_processed);
+        assert!(output_file.close().is_ok());
     }
 }
