@@ -96,7 +96,7 @@ pub struct ConvertResult<W: std::io::Write + Send + 'static> {
 ///
 /// supports additional lifecycle detection and sort by timestamp
 pub fn convert<W: std::io::Write + Send + 'static>(
-    log: slog::Logger,
+    log: &slog::Logger,
     sub_m: &clap::ArgMatches,
     mut writer_screen: W,
 ) -> std::io::Result<ConvertResult<W>> {
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!("convert", c);
         let sub_m = sub_m.expect("no matches?");
         assert!(sub_m.is_present("file"));
-        let r = convert(logger, sub_m, std::io::stdout());
+        let r = convert(&logger, sub_m, std::io::stdout());
         assert!(r.is_err());
     }
 
@@ -425,7 +425,7 @@ mod tests {
         let sub_m = sub_m.expect("no matches?");
         assert!(sub_m.is_present("file"));
 
-        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(0, r.messages_output);
         assert_eq!(0, r.messages_processed);
         assert!(file.close().is_ok());
@@ -465,7 +465,7 @@ mod tests {
         let sub_m = sub_m.expect("no matches?");
         assert!(sub_m.is_present("file"));
 
-        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(0, r.messages_output);
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
@@ -505,7 +505,7 @@ mod tests {
         let sub_m = sub_m.expect("no matches?");
         assert!(sub_m.is_present("file"));
 
-        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(5 - 2 + 1, r.messages_output);
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
@@ -548,7 +548,7 @@ mod tests {
         let output_buf = Vec::new();
         let output = std::io::BufWriter::new(output_buf);
 
-        let r = convert(logger, sub_m, output).unwrap();
+        let r = convert(&logger, sub_m, output).unwrap();
         assert_eq!(persisted_msgs, r.messages_output);
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
@@ -611,7 +611,7 @@ mod tests {
         let (_, sub_m) = sub_c.subcommand();
         let sub_m = sub_m.expect("no matches?");
 
-        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(5 - 2 + 1, r.messages_output);
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
@@ -621,8 +621,7 @@ mod tests {
         let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
         let (_, sub_m) = sub_c.subcommand();
         let sub_m = sub_m.expect("no matches?");
-        let logger = new_logger(); // todo replace with reference!
-        let r = convert(logger, sub_m, std::io::stdout()).unwrap();
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(5 - 2 + 1, r.messages_processed);
         assert!(output_file.close().is_ok());
     }
