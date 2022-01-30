@@ -29,7 +29,7 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
 
 /// provide remote server functionalities
 pub fn remote(
-    log: slog::Logger,
+    log: &slog::Logger,
     sub_m: &clap::ArgMatches,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // we do use log only if for local websocket related issues
