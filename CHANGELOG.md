@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.4.2 - 2022-01-30
+#### Performance Improvements
+- use itoa crate for ints - (755ca69) - Matthias Behr
+- use criterion and first optimization - (669e957) - Matthias Behr
+#### Refactoring
+- pass slog reference - (852bde1) - Matthias Behr
+#### Tests
+- **(convert)** add some (not) random data - (2039ce8) - Matthias Behr
+- **(convert)** check output to file - (bd42a98) - Matthias Behr
+- - -
+
 ## v0.4.1 - 2022-01-29
 #### Bug Fixes
 - **(dlt)** persist timestamp only if present - (abf5358) - Matthias Behr
