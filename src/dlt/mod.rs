@@ -9,7 +9,7 @@ use std::io::BufRead; // SerializeStruct
 use std::str::FromStr;
 
 /// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
-/// todo use crate itoa and ryu for int/float to str conversations (numtoa seems outdated)
+/// todo use crate ryu for float to str conversations (numtoa seems outdated)
 
 #[derive(Clone, PartialEq, Eq, Copy, Hash)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
@@ -720,6 +720,7 @@ impl DltMessage {
         let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
         let mut args = self.into_iter();
         if self.is_verbose() {
+            let mut itoa_buf = itoa::Buffer::new(); // even though cheap, we do reuse
             for (nr_arg, arg) in args.enumerate() {
                 if nr_arg > 0 {
                     text.write_char(' ')?;
@@ -744,7 +745,8 @@ impl DltMessage {
                     match arg.payload_raw.len() {
                         1 => {
                             let val: u8 = arg.payload_raw[0];
-                            write!(text, "{}", val)?; // is surpringly faster than text.write_str(&val.to_string())?;
+                            text.write_str(itoa_buf.format(val))?;
+                            // itoa_buf is faster than write!(text, "{}", val)?; // is surpringly faster than text.write_str(&val.to_string())?;
                         }
                         2 => {
                             let val: u16 = if arg.is_big_endian {
@@ -752,7 +754,7 @@ impl DltMessage {
                             } else {
                                 u16::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         4 => {
                             let val: u32 = if arg.is_big_endian {
@@ -760,7 +762,7 @@ impl DltMessage {
                             } else {
                                 u32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         8 => {
                             let val: u64 = if arg.is_big_endian {
@@ -768,7 +770,7 @@ impl DltMessage {
                             } else {
                                 u64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         16 => {
                             let val: u128 = if arg.is_big_endian {
@@ -776,7 +778,7 @@ impl DltMessage {
                             } else {
                                 u128::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         _ => (),
                     };
@@ -784,7 +786,7 @@ impl DltMessage {
                     match arg.payload_raw.len() {
                         1 => {
                             let val: i8 = arg.payload_raw[0] as i8;
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         2 => {
                             let val: i16 = if arg.is_big_endian {
@@ -792,7 +794,7 @@ impl DltMessage {
                             } else {
                                 i16::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         4 => {
                             let val: i32 = if arg.is_big_endian {
@@ -800,7 +802,7 @@ impl DltMessage {
                             } else {
                                 i32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         8 => {
                             let val: i64 = if arg.is_big_endian {
@@ -808,7 +810,7 @@ impl DltMessage {
                             } else {
                                 i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         16 => {
                             let val: i128 = if arg.is_big_endian {
@@ -816,7 +818,7 @@ impl DltMessage {
                             } else {
                                 i128::from_le_bytes(arg.payload_raw.try_into().unwrap())
                             };
-                            write!(text, "{}", val)?;
+                            text.write_str(itoa_buf.format(val))?;
                         }
                         _ => (),
                     };
