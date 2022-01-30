@@ -283,8 +283,12 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         }
         assert!(f.is_some());
         let reader: &mut BufReader<File> = f.as_mut().unwrap();
-        match adlt::dlt::parse_dlt_with_storage_header(messages_processed, &mut *reader) {
+        match adlt::dlt::parse_dlt_with_storage_header(
+            messages_processed,
+            reader.fill_buf().unwrap(),
+        ) {
             Ok((res, msg)) => {
+                reader.consume(res);
                 bytes_per_file += res as u64;
                 messages_processed += 1;
 

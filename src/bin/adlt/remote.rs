@@ -596,8 +596,12 @@ fn create_parser_thread(log: slog::Logger, mut f: Option<BufReader<File>>) -> Pa
                         break;
                     }
                     let reader: &mut BufReader<File> = f.as_mut().unwrap();
-                    match adlt::dlt::parse_dlt_with_storage_header(number_messages, &mut *reader) {
+                    match adlt::dlt::parse_dlt_with_storage_header(
+                        number_messages,
+                        reader.fill_buf().unwrap(),
+                    ) {
                         Ok((res, msg)) => {
+                            reader.consume(res);
                             bytes_per_file += res as u64;
                             number_messages += 1;
 
