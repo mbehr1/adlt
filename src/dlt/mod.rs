@@ -5,7 +5,6 @@ use serde::ser::{Serialize, Serializer};
 use std::convert::TryInto;
 use std::fmt;
 use std::fmt::Write;
-use std::io::BufRead; // SerializeStruct
 use std::str::FromStr;
 
 /// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
@@ -1315,21 +1314,15 @@ pub enum ErrorKind {
 
 pub fn parse_dlt_with_storage_header(
     index: DltMessageIndexType,
-    data: &mut impl BufRead,
+    data: &[u8],
 ) -> Result<(usize, DltMessage), Error> {
-    let peek_buf = data.fill_buf().unwrap(); // todo err handling
-                                             // eprintln!(
-                                             //     "parse_dlt_with_storage_header peekBuf.len()={} data={:?}",
-                                             //     peek_buf.len(),
-                                             //     &peek_buf[0..16]
-                                             // );
-    let mut remaining = peek_buf.len();
+    let mut remaining = data.len();
 
     if remaining >= MIN_DLT_MSG_SIZE {
-        match DltStorageHeader::from_buf(peek_buf) {
+        match DltStorageHeader::from_buf(data) {
             Some(sh) => {
                 remaining -= DLT_STORAGE_HEADER_SIZE;
-                let stdh = DltStandardHeader::from_buf(&peek_buf[DLT_STORAGE_HEADER_SIZE..])
+                let stdh = DltStandardHeader::from_buf(&data[DLT_STORAGE_HEADER_SIZE..])
                     .expect("no valid stdheader!");
                 let std_ext_header_size = stdh.std_ext_header_size();
                 if stdh.len >= std_ext_header_size {
@@ -1339,19 +1332,18 @@ pub fn parse_dlt_with_storage_header(
                         let payload_offset = DLT_STORAGE_HEADER_SIZE + std_ext_header_size as usize;
                         let payload_size = stdh.len - std_ext_header_size as u16;
                         remaining -= payload_size as usize;
-                        let to_consume = peek_buf.len() - remaining;
+                        let to_consume = data.len() - remaining;
                         let payload = Vec::from(
-                            &peek_buf[payload_offset..payload_offset + payload_size as usize],
+                            &data[payload_offset..payload_offset + payload_size as usize],
                         );
                         let msg = DltMessage::from_headers(
                             index,
                             sh,
                             stdh,
-                            &peek_buf
+                            &data
                                 [DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE..payload_offset],
                             payload,
                         );
-                        data.consume(to_consume);
                         Ok((to_consume, msg))
                     } else {
                         Err(Error::new(ErrorKind::NotEnoughData(
@@ -2436,8 +2428,6 @@ mod tests {
     // todo test invalid/missing payload for SINT, UINT, and think about proper error handling
     // todo add SCOD_BIN and SCOD_HEX for uints see e.g. https://github.com/COVESA/dlt-viewer/blob/03baa67d3bb059458cb5b8e0ed940ea6f607f575/qdlt/qdltargument.cpp#L444
 
-    use std::io::Cursor;
-
     #[test]
     fn parse_storage() {
         let m = get_testmsg_with_payload(
@@ -2451,8 +2441,7 @@ mod tests {
         let mut file = Vec::new();
         m.to_write(&mut file).unwrap();
         let file_len = file.len();
-        let mut reader = Cursor::new(file);
-        let (parsed, m2) = parse_dlt_with_storage_header(1, &mut reader).unwrap();
+        let (parsed, m2) = parse_dlt_with_storage_header(1, &file).unwrap();
         assert_eq!(parsed, file_len);
         assert_eq!(m.ecu, m2.ecu);
         assert_eq!(m, m2);
@@ -2462,21 +2451,20 @@ mod tests {
         // incomplete (no storage header)
         let mut file = Vec::new();
         m.to_write(&mut file).unwrap();
-        let mut reader = Cursor::new(&file[1..]);
-        assert!(parse_dlt_with_storage_header(1, &mut reader).is_err());
+        assert!(parse_dlt_with_storage_header(1, &file[1..]).is_err());
 
         // incomplete (1 byte missing at end)
         let mut file = Vec::new();
         m.to_write(&mut file).unwrap();
-        let mut reader = Cursor::new(&file[0..file.len() - 1]);
-        assert!(parse_dlt_with_storage_header(1, &mut reader).is_err());
+        assert!(parse_dlt_with_storage_header(1, &file[0..file.len() - 1]).is_err());
 
         // incomplete (only storage, std but not full ext header)
         let mut file = Vec::new();
         m.to_write(&mut file).unwrap();
-        let mut reader = Cursor::new(
-            &file[0..DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE - 1],
-        );
-        assert!(parse_dlt_with_storage_header(1, &mut reader).is_err());
+        assert!(parse_dlt_with_storage_header(
+            1,
+            &file[0..DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE - 1]
+        )
+        .is_err());
     }
 }
