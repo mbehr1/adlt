@@ -472,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn non_empty2() {
+    fn non_empty_invalid_bytes() {
         let logger = new_logger();
 
         let mut file = NamedTempFile::new().unwrap();
@@ -481,7 +481,16 @@ mod tests {
         // persist some messages
         let persisted_msgs: adlt::dlt::DltMessageIndexType = 10;
         let ecu = dlt::DltChar4::from_buf(b"ECU1");
+
+        // random bytes buffer:
+        // todo needs better parsing heuristics let invalid_data = [b'D', b'L', b'T', 0x1];
+        let invalid_data = [b'D', b'L', b'T', 0x2];
+
         for i in 0..persisted_msgs {
+            // put some random bytes between (in front) of messages:
+            file.write_all(&invalid_data[0..i as usize % (invalid_data.len() + 1)])
+                .unwrap();
+
             let sh = adlt::dlt::DltStorageHeader {
                 secs: (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
                 micros: 0,
