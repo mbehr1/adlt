@@ -17,8 +17,13 @@ categories = ["command-line-utilities", "development-tools", "encoding", "parsin
 name = "adlt"
 path = "src/lib.rs"
 
+[[bench]]
+name = "dlt_benches"
+harness = false
+
 [dev-dependencies]
 ntest = "*"
+criterion = "0.3"
 
 [dependencies]
 slog = "2.7.0"
