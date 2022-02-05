@@ -125,6 +125,10 @@ pub struct DltStorageHeader {
 
 pub const DLT_STORAGE_HEADER_PATTERN: u32 = 0x01544c44; // DLT\01
 pub const DLT_STORAGE_HEADER_SIZE: usize = 16; // DLT\0x1 + secs, micros, ecu
+
+/// maximum size of a DLT message with a storage header:
+pub const DLT_MAX_STORAGE_MSG_SIZE: usize = DLT_STORAGE_HEADER_SIZE + u16::MAX as usize;
+
 pub const DLT_MIN_STD_HEADER_SIZE: usize = 4;
 pub const MIN_DLT_MSG_SIZE: usize = DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE;
 pub const DLT_EXT_HEADER_SIZE: usize = 10;
