@@ -3,8 +3,11 @@ use clap::{App, Arg, SubCommand};
 use slog::{crit, debug, error, info, warn};
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::{BufRead, BufReader, BufWriter, Seek};
+use std::io::{BufRead, BufWriter};
 use std::sync::mpsc::channel;
+
+use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
+use adlt::utils::LowMarkBufReader;
 
 #[derive(Clone, Copy)]
 enum OutputStyle {
@@ -158,14 +161,13 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         );
     }
 
-    let mut f: Option<BufReader<File>> = None;
+    let mut f: Option<LowMarkBufReader<File>> = None;
 
     let mut bytes_processed: u64 = 0;
     let mut bytes_per_file: u64 = 0;
     let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
     let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
     let mut input_file_names_iter = input_file_names.iter();
-    let mut last_data = false;
 
     // setup (thread) filter chain:
     let (tx, rx) = channel(); // msg -> parse_lifecycles (t2)
@@ -264,6 +266,11 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             Ok((output, writer_screen))
         },
     );
+    const BUFREADER_CAPACITY: usize = 512 * 1024;
+    // we use a relatively small 512kb chunk size as we're processing
+    // the data multithreaded reader in bigger chunks slows is in total slower
+
+    //assert!(BUFREADER_CAPACITY > DLT_MAX_STORAGE_MSG_SIZE);
 
     loop {
         if f.is_none() {
@@ -276,13 +283,14 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 Some(input_file_name) => {
                     let fi = File::open(input_file_name)?;
                     info!(log, "opened file {} {:?}", &input_file_name, &fi);
-                    const BUFREADER_CAPACITY: usize = 0x10000 * 50;
-                    f = Some(BufReader::with_capacity(BUFREADER_CAPACITY, fi));
+                    let buf_reader =
+                        LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
+                    f = Some(buf_reader);
                 }
             }
         }
         assert!(f.is_some());
-        let reader: &mut BufReader<File> = f.as_mut().unwrap();
+        let reader: &mut LowMarkBufReader<File> = f.as_mut().unwrap();
         match adlt::dlt::parse_dlt_with_storage_header(
             messages_processed,
             reader.fill_buf().unwrap(),
@@ -293,15 +301,6 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 messages_processed += 1;
 
                 tx.send(msg).unwrap(); // todo handle error?
-
-                // get more data from BufReader:
-                if !last_data && (reader.buffer().len() < 0x10000) {
-                    // read more data
-                    let pos = std::io::SeekFrom::Start(bytes_per_file);
-                    reader.seek(pos).unwrap();
-                    reader.fill_buf().expect("fill_buf 2 failed!");
-                    last_data = reader.buffer().len() < 0x10000;
-                }
             }
             Err(error) => match error.kind() {
                 adlt::dlt::ErrorKind::InvalidData(_str) => {
@@ -313,7 +312,6 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     debug!(log, "finished processing a file"; "bytes_per_file"=>bytes_per_file, "messages_processed"=>messages_processed);
                     f.unwrap();
                     f = None; // check for next file on next it
-                    last_data = false;
                     bytes_processed += bytes_per_file;
                     bytes_per_file = 0;
                     info!(log, "got Error {}", error);
@@ -442,8 +440,8 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         let file_path = String::from(file.path().to_str().unwrap());
 
-        // persist some messages
-        let persisted_msgs: adlt::dlt::DltMessageIndexType = 10;
+        // persist some messages (more than the 512kb chunk size -> 20 byte per msg)
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 1024 * 1024 / 20;
         let ecu = dlt::DltChar4::from_buf(b"ECU1");
         for i in 0..persisted_msgs {
             let sh = adlt::dlt::DltStorageHeader {
