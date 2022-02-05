@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.4.3 - 2022-02-05
+#### Refactoring
+- **(convert)** introduce LowMarkBufReader - (b13070a) - Matthias Behr
+- parse_dlt_with_storage_header no reader - (d97d287) - Matthias Behr
+- - -
+
 ## v0.4.2 - 2022-01-30
 #### Performance Improvements
 - use itoa crate for ints - (755ca69) - Matthias Behr
