@@ -1,7 +1,12 @@
-use criterion::{/*black_box,*/ criterion_group, criterion_main, Criterion};
+use criterion::{
+    /*black_box,*/ criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
+};
+use std::fs::File;
+use std::io::prelude::*;
+use tempfile::NamedTempFile;
 
 use adlt::dlt::*;
-use adlt::utils::hex_to_bytes;
+use adlt::utils::*;
 
 pub fn dlt_bench1(c: &mut Criterion) {
     let v = hex_to_bytes("3d 0a 00 af 4d 4d 4d 41 00 00 03 48 00 75 7d 16 41 08 4c 52 4d 46 55 44 53 00 00 82 00 00 1c 00 46 69 6e 61 6c 20 61 6e 73 77 65 72 20 61 72 72 69 76 65 64 20 61 66 74 65 72 20 00 23 00 00 00 93 01 00 00 00 82 00 00 21 00 75 73 20 66 72 6f 6d 20 74 68 65 20 6a 6f 62 20 68 61 6e 64 6c 65 72 20 5b 73 74 61 74 65 3a 20 00 00 82 00 00 0a 00 41 6e 73 77 65 72 69 6e 67 00 00 82 00 00 0b 00 2c 20 61 6e 73 77 65 72 3a 20 00 10 00 00 00 01 00 82 00 00 10 00 5d 20 66 6f 72 20 72 65 71 75 65 73 74 20 23 00 43 00 00 00 dc 05 00 00").unwrap();
@@ -27,5 +32,83 @@ pub fn dlt_bench1(c: &mut Criterion) {
         }));
 }
 
-criterion_group!(dlt_benches, dlt_bench1);
+pub fn dlt_bench2(c: &mut Criterion) {
+    // create a test file with 1M DLT messages:
+    let mut file = NamedTempFile::new().unwrap();
+    let file_path = String::from(file.path().to_str().unwrap());
+
+    let persisted_msgs: adlt::dlt::DltMessageIndexType = 1_000_000;
+    let ecu = DltChar4::from_buf(b"ECU1");
+    for i in 0..persisted_msgs {
+        let sh = adlt::dlt::DltStorageHeader {
+            secs: (1640995200000000 / US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+            micros: 0,
+            ecu,
+        };
+        let standard_header = adlt::dlt::DltStandardHeader {
+            htyp: 1 << 5, // vers 1
+            mcnt: (i % 256) as u8,
+            len: 4,
+        };
+
+        let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+        m.to_write(&mut file).unwrap(); // will persist with timestamp
+    }
+    file.flush().unwrap();
+    let file_size = std::fs::metadata(&file_path).unwrap().len();
+
+    // benchmark opening the file, reading the content and parsing the header:
+    let mut group = c.benchmark_group("dlt_parse");
+    // group.measurement_time(dur)
+    group.sample_size(10);
+    for buf_capacity in [
+        DLT_MAX_STORAGE_MSG_SIZE + 1,
+        128 * 1024,
+        256 * 1024,
+        512 * 1024,
+        1024 * 1024,
+        2 * 1024 * 1024,
+        4 * 1024 * 1024,
+    ]
+    .iter()
+    {
+        group.throughput(Throughput::Bytes(file_size));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(buf_capacity),
+            buf_capacity,
+            |b, &buf_capacity| {
+                b.iter(|| {
+                    let fi = File::open(&file_path).unwrap();
+                    let mut buf_reader =
+                        LowMarkBufReader::new(fi, buf_capacity, DLT_MAX_STORAGE_MSG_SIZE);
+                    let mut messages_processed = 0;
+                    loop {
+                        match parse_dlt_with_storage_header(
+                            messages_processed,
+                            buf_reader.fill_buf().unwrap(),
+                        ) {
+                            Ok((res, msg)) => {
+                                buf_reader.consume(res);
+                                messages_processed += 1;
+                                drop(msg);
+                            }
+                            Err(error) => match error.kind() {
+                                ErrorKind::InvalidData(_str) => {
+                                    buf_reader.consume(1);
+                                }
+                                _ => {
+                                    break;
+                                }
+                            },
+                        }
+                    }
+                    assert_eq!(persisted_msgs, messages_processed);
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(dlt_benches, dlt_bench1, dlt_bench2);
 criterion_main!(dlt_benches);
