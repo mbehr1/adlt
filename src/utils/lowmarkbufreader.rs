@@ -14,9 +14,11 @@ pub struct LowMarkBufReader<R> {
     empty_last_read: bool,
 }
 
+const CACHE_LINE_SIZE: usize = 4096;
+
 impl<R: Read> LowMarkBufReader<R> {
     pub fn new(inner: R, capacity: usize, low_mark: usize) -> LowMarkBufReader<R> {
-        assert!(low_mark < capacity);
+        assert!(low_mark + CACHE_LINE_SIZE <= capacity);
         assert!(low_mark > 0);
 
         let buf = vec![0u8; capacity].into_boxed_slice();
@@ -56,36 +58,42 @@ impl<R: Read> BufRead for LowMarkBufReader<R> {
     /// It handles read returning often less than wanted.
     fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
         // if we have less than low_mark in the buf read more:
-        loop {
-            // read might return less than we requested:
-            let in_buf = self.cap - self.pos;
-            if in_buf < self.low_mark {
-                // move remaining data to the front:
-                if self.pos > 0 && !self.empty_last_read {
-                    //println!("moving {} bytes", in_buf);
-                    self.buf.copy_within(self.pos..self.cap, 0);
-                    self.cap -= self.pos;
-                    self.pos = 0;
-                }
-                // and add more from inner:
-                let read = self.inner.read(&mut self.buf[self.cap..])?;
-                if read == 0 {
-                    if !self.empty_last_read {
-                        self.empty_last_read = true;
-                        //println!(" read 0 bytes -> empty_last_read={}", self.empty_last_read);
+        if !self.empty_last_read {
+            // read might return less than we requested so loop
+            loop {
+                let in_buf = self.cap - self.pos;
+                if in_buf < self.low_mark {
+                    // move remaining data to the front so that the new end
+                    // is CACHE_LINE_SIZE aligned.
+                    if self.pos >= CACHE_LINE_SIZE {
+                        let new_cap = self.cap - self.pos;
+                        let mut offset = CACHE_LINE_SIZE - (new_cap % CACHE_LINE_SIZE);
+                        if offset == CACHE_LINE_SIZE {
+                            offset = 0;
+                        }
+                        let new_cap = new_cap + offset;
+                        //assert!(new_cap % CACHE_LINE_SIZE == 0);
+                        //println!("moving {} bytes", in_buf);
+                        self.buf.copy_within(self.pos..self.cap, offset);
+                        self.cap = new_cap;
+                        self.pos = offset;
                     }
-                    break;
-                } else {
-                    //println!(" read {} bytes", read);
-                    let max_read = self.buf.len() - self.cap;
-                    self.cap += read;
-                    self.empty_last_read = false;
-                    if read == max_read {
+                    // and add more from inner:
+                    let read = self.inner.read(&mut self.buf[self.cap..])?;
+                    if read == 0 {
+                        self.empty_last_read = true;
                         break;
-                    } // else check again if either we're below low mark or read is last/empty/eof
+                    } else {
+                        //println!(" read {} bytes", read);
+                        let max_read = self.buf.len() - self.cap;
+                        self.cap += read;
+                        if read == max_read {
+                            break;
+                        } // else check again if either we're below low mark or read is last/empty/eof
+                    }
+                } else {
+                    break;
                 }
-            } else {
-                break;
             }
         }
         Ok(&self.buf[self.pos..self.cap])
