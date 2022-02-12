@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.5.0 - 2022-02-12
+#### Features
+- **(convert)** sort multiple input files - (6da3e6d) - Matthias Behr
+#### Performance Improvements
+- LowMarkBufReader read cache aligned - (0af34e2) - Matthias Behr
+- measure read times for 1mio msgs - (3121948) - Matthias Behr
+- - -
+
 ## v0.4.3 - 2022-02-05
 #### Refactoring
 - **(convert)** introduce LowMarkBufReader - (b13070a) - Matthias Behr
