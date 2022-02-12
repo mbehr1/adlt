@@ -1,3 +1,5 @@
+extern crate lazy_static;
+
 pub mod dlt;
 pub mod filter;
 pub mod lifecycle;
