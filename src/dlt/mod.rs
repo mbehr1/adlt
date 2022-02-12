@@ -1,6 +1,6 @@
 use chrono::{Local, TimeZone};
-use cow_utils::CowUtils;
 use encoding_rs::WINDOWS_1252;
+use lazy_static::lazy_static;
 use serde::ser::{Serialize, Serializer};
 use std::convert::TryInto;
 use std::fmt;
@@ -866,6 +866,9 @@ impl DltMessage {
                     }
                 } else if is_strg {
                     let scod = arg.type_info & DLT_TYPE_INFO_MASK_SCOD;
+                    lazy_static! {
+                        static ref RE: regex::Regex = regex::Regex::new(r"[\r\n\t]").unwrap();
+                    }
 
                     match scod {
                         DLT_SCOD_UTF8 => {
@@ -875,10 +878,13 @@ impl DltMessage {
                                 let s = String::from_utf8_lossy(
                                     &arg.payload_raw[0..arg.payload_raw.len() - 1],
                                 );
-                                // todo use a replace in one shot (e.g. RegexSet with COW behaviour)
-                                let s = s.cow_replace("\n", " ");
-                                let s = s.cow_replace("\r", " ");
-                                let s = s.cow_replace("\t", " ");
+                                /* todo or ? let s = match s {
+                                    std::borrow::Cow::Borrowed(s) => RE.replace_all(s, " "),
+                                    std::borrow::Cow::Owned(s) => std::borrow::Cow::Owned(
+                                        RE.replace_all(&s, " ").into_owned(),
+                                    ),
+                                };*/
+                                let s = RE.replace_all(&s, " ");
                                 text.write_str(&s)?;
                             }
                         }
@@ -893,10 +899,7 @@ impl DltMessage {
                                 let (s, _) = WINDOWS_1252.decode_without_bom_handling(
                                     &arg.payload_raw[0..arg.payload_raw.len() - 1],
                                 );
-                                // todo use a replace in one shot (e.g. RegexSet with COW behaviour)
-                                let s = s.cow_replace("\n", " ");
-                                let s = s.cow_replace("\r", " ");
-                                let s = s.cow_replace("\t", " ");
+                                let s = RE.replace_all(&s, " ");
                                 text.write_str(&s)?;
 
                                 /* instead of WINDOWS-1252 we could use for printable ones only:
