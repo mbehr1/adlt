@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.6.0 - 2022-02-12
+#### Features
+- **(parse)** heuristic to detect corrupt messages - (4bf2a74) - Matthias Behr
+#### Performance Improvements
+- use regex replace_all instead of 3 replaces - (2f1d075) - Matthias Behr
+- - -
+
 ## v0.5.0 - 2022-02-12
 #### Features
 - **(convert)** sort multiple input files - (6da3e6d) - Matthias Behr
