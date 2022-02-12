@@ -1309,6 +1309,21 @@ impl fmt::Display for Error {
     }
 }
 
+#[inline]
+/// return whether the start of the buffer contains the DLT storage header pattern
+/// DLT\x1
+///
+/// returns false if buffer is too small (<4 bytes)
+pub fn is_storage_header_pattern(buf: &[u8]) -> bool {
+    if buf.len() < 4 {
+        return false;
+    }
+
+    let pat = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    pat == DLT_STORAGE_HEADER_PATTERN
+    // that's significantly slower: buf[0] == b'D' && buf[1] == b'L' && buf[2] == b'T' && buf[3] == 0x1u8
+}
+
 #[derive(Debug)]
 pub enum ErrorKind {
     InvalidData(String),
@@ -1336,7 +1351,30 @@ pub fn parse_dlt_with_storage_header(
                         let payload_offset = DLT_STORAGE_HEADER_SIZE + std_ext_header_size as usize;
                         let payload_size = stdh.len - std_ext_header_size as u16;
                         remaining -= payload_size as usize;
+                        // sanity check for corrupt msgs (sadly dlt has no crc or end of msg tag)
+                        // we check whether the next data starts with proper storage header.
+                        // if so -> we assume this one is correct.
+                        // If not
+                        //  - no more data remaining -> treat as ok
+                        //  - check whether there is a 2nd storage header
+                        //    - if so -> skip to the new one
+                        //    - if not -> use the current msg
                         let to_consume = data.len() - remaining;
+
+                        if remaining >= 4 && !is_storage_header_pattern(&data[to_consume..]) {
+                            // the new msg would be from [0..to_consume]
+                            // is a 2nd storage header within data[5]..data[to_consume+3]?
+                            for i in 5..to_consume {
+                                if is_storage_header_pattern(&data[i..]) {
+                                    // yes, lets use that.
+                                    // we simply return an error here and let the usual skip logic apply
+                                    return Err(Error::new(ErrorKind::InvalidData(
+                                                String::from("skipped probably corrupt msg due to storage header pattern heuristic"),
+                                            )));
+                                }
+                            }
+                        }
+
                         let payload = Vec::from(
                             &data[payload_offset..payload_offset + payload_size as usize],
                         );
@@ -2470,5 +2508,31 @@ mod tests {
             &file[0..DLT_STORAGE_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE - 1]
         )
         .is_err());
+    }
+    #[test]
+    fn skip_corrupt_msgs() {
+        let mut m = get_testmsg_with_payload(
+            true,
+            5,
+            &[
+                0, 0, 0, 0x11, 0, 0, 0, 0, 0x11, 1, 0, 0, 0, 0x11, 2, 0, 0, 0, 0x10, 1, 0, 0, 0,
+                0x10, 0,
+            ],
+        );
+        let mut file = Vec::new();
+        m.to_write(&mut file).unwrap();
+
+        // incomplete (1 byte missing at end) then a proper msg
+        let mut file = Vec::new();
+        m.to_write(&mut file).unwrap();
+        file.pop(); // remove 1 byte (so this one is corrupt)
+        let correct_msg_offset = file.len();
+        m.standard_header.mcnt += 1;
+        m.to_write(&mut file).unwrap();
+
+        let r = parse_dlt_with_storage_header(1, &file[0..]);
+        assert!(matches!(r.err().unwrap().kind(), ErrorKind::InvalidData(_)));
+        let (_res, m2) = parse_dlt_with_storage_header(1, &file[correct_msg_offset..]).unwrap();
+        assert_eq!(m2.mcnt(), m.mcnt());
     }
 }
