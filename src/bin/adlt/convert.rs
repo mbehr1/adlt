@@ -54,7 +54,7 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
                     .required(true)
                     .multiple(true)
                     .min_values(1)
-                    .help("input DLT files to process"),
+                    .help("input DLT files to process. If multiple files are provided they are sorted by their first DLT message reception time."),
             ).arg(
                 Arg::with_name("index_first")
                 .short("b")
@@ -103,7 +103,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     sub_m: &clap::ArgMatches,
     mut writer_screen: W,
 ) -> std::io::Result<ConvertResult<W>> {
-    let input_file_names: Vec<&str> = sub_m.values_of("file").unwrap().collect();
+    let mut input_file_names: Vec<&str> = sub_m.values_of("file").unwrap().collect();
 
     let output_style: OutputStyle = if sub_m.is_present("hex") {
         OutputStyle::Hex
@@ -155,10 +155,32 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     // if we have multiple files we do need to sort them first by the first log reception_time!
     if input_file_names.len() > 1 {
-        warn!(
-            log,
-            "input files wont be sorted yet by timestamp but will be read in the order specified!"
-        );
+        // map input_file_names to name/first msg
+        let file_msgs = input_file_names.iter().map(|&f_name| {
+            let fi = File::open(f_name);
+            match fi {
+                Ok(mut f) => {
+                    let m1 = adlt::utils::get_first_message_from_file(&mut f, 512 * 1024);
+                    if m1.is_none() {
+                        warn!(log, "file {} doesn't contain a DLT message in first 0.5MB. Skipping!", f_name;);
+                    }
+                    (f_name, m1)
+                }
+                _ => {
+                    warn!(log, "couldn't open {}. Skipping!", f_name;);
+                    (f_name, None)
+                }
+            }
+        });
+        let mut file_msgs: Vec<_> = file_msgs.filter(|(_a, b)| b.is_some()).collect();
+        file_msgs.sort_by(|a, b| {
+            a.1.as_ref()
+                .unwrap()
+                .reception_time_us
+                .cmp(&b.1.as_ref().unwrap().reception_time_us)
+        });
+        input_file_names = file_msgs.iter().map(|(a, _b)| *a).collect();
+        debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
     }
 
     let mut f: Option<LowMarkBufReader<File>> = None;
@@ -290,6 +312,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             }
         }
         assert!(f.is_some());
+        // todo Change to use DltMessageIterator
         let reader: &mut LowMarkBufReader<File> = f.as_mut().unwrap();
         match adlt::dlt::parse_dlt_with_storage_header(
             messages_processed,
@@ -563,6 +586,90 @@ mod tests {
         assert_eq!(persisted_msgs, r.messages_output);
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
+        // check output but we get the output only in the integration tests...
+        assert!(r.writer_screen.is_some());
+        let output_buf = r.writer_screen.unwrap().into_inner().unwrap();
+        assert!(!output_buf.is_empty());
+        let s = String::from_utf8(output_buf).unwrap();
+        //println!("{}", s);
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(persisted_msgs as usize, lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            // in this case the output should be sorted with mcnt from 0 to 9 (as all have timestamp 0 -> stable order)
+            // mcnt is the 4th " " splitted
+            let parts: Vec<&str> = line.split_ascii_whitespace().collect();
+            assert_eq!(parts[4].parse::<u8>().unwrap(), (i % 256) as u8);
+        }
+    }
+
+    #[test]
+    fn non_empty_sort_sorted_check_mcnt_multiple() {
+        // create two files and provide them in wrong order:
+
+        let logger = new_logger();
+
+        let mut file1 = NamedTempFile::new().unwrap();
+        let file1_path = String::from(file1.path().to_str().unwrap());
+        let mut file2 = NamedTempFile::new().unwrap();
+        let file2_path = String::from(file2.path().to_str().unwrap());
+
+        // provide a 3rd existing file that contains no dlt
+        let mut file3 = NamedTempFile::new().unwrap();
+        let file3_path = String::from(file3.path().to_str().unwrap());
+        file3.write_all(b"this is a text only file").unwrap();
+        file3.flush().unwrap();
+
+        let file4_path = file3_path.clone() + "invalid";
+
+        // persist some messages (15 each per file)
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 30;
+        let ecu = dlt::DltChar4::from_buf(b"ECU1");
+        for i in 0..persisted_msgs {
+            let sh = adlt::dlt::DltStorageHeader {
+                secs: i as u32 + (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(if i < persisted_msgs / 2 {
+                &mut file1
+            } else {
+                &mut file2
+            })
+            .unwrap(); // will persist with timestamp
+        }
+        file1.flush().unwrap();
+        file2.flush().unwrap();
+
+        let arg_vec = vec![
+            "t",
+            "convert",
+            "-a",
+            "--sort",
+            file2_path.as_str(),
+            file4_path.as_str(),
+            file3_path.as_str(),
+            file1_path.as_str(),
+        ];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+
+        let output_buf = Vec::new();
+        let output = std::io::BufWriter::new(output_buf);
+
+        let r = convert(&logger, sub_m, output).unwrap();
+        assert_eq!(persisted_msgs, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+        assert!(file1.close().is_ok());
+        assert!(file2.close().is_ok());
+
         // check output but we get the output only in the integration tests...
         assert!(r.writer_screen.is_some());
         let output_buf = r.writer_screen.unwrap().into_inner().unwrap();
