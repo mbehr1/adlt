@@ -62,7 +62,6 @@ pub fn dlt_bench2(c: &mut Criterion) {
     // group.measurement_time(dur)
     group.sample_size(10);
     for buf_capacity in [
-        DLT_MAX_STORAGE_MSG_SIZE + 1,
         128 * 1024,
         256 * 1024,
         512 * 1024,
