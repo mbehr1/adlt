@@ -503,7 +503,7 @@ pub type DltMessageIndexType = u32;
 #[derive(Debug, PartialEq)]
 pub struct DltMessage {
     pub index: DltMessageIndexType,
-    pub(super) reception_time_us: u64, // from storage header, ms would be sufficent but needs same 64 bit
+    pub reception_time_us: u64, // from storage header, ms would be sufficent but needs same 64 bit
     pub ecu: DltChar4,
     // sessionId: u32 todo
     pub timestamp_dms: u32, // orig in 0.1ms (deci-ms)
