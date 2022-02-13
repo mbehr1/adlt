@@ -39,6 +39,25 @@ pub fn buf_as_hex_to_write(
     Ok(())
 }
 
+/// same as buf_as_hex_to_write but with a
+/// std::io::Write.
+/// todo needs refactoring!
+pub fn buf_as_hex_to_io_write(
+    writer: &mut impl std::io::Write,
+    buf: &[u8],
+) -> Result<(), std::io::Error> {
+    //for i in 0..buf.len() {
+    for (i, item) in buf.iter().enumerate() {
+        if i > 0 {
+            write!(writer, " {:02x}", item)?;
+        } else {
+            write!(writer, "{:02x}", item)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Convert a hex encoded string like "3d 0a 00..."
 /// to a Vec of u8.
 ///
@@ -419,6 +438,10 @@ mod tests {
         let mut s = String::new();
         buf_as_hex_to_write(&mut s, &[0x0f_u8, 0x00_u8, 0xff_u8]).unwrap();
         assert_eq!(s, "0f 00 ff");
+
+        let mut v = Vec::<u8>::new();
+        buf_as_hex_to_io_write(&mut v, &[0x0f_u8, 0x00_u8, 0xff_u8]).unwrap();
+        assert_eq!(std::str::from_utf8(v.as_slice()).unwrap(), "0f 00 ff");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::io::BufWriter;
 use std::sync::mpsc::channel;
 
 use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
-use adlt::utils::{DltMessageIterator, LowMarkBufReader};
+use adlt::utils::{buf_as_hex_to_io_write, DltMessageIterator, LowMarkBufReader};
 
 #[derive(Clone, Copy)]
 enum OutputStyle {
@@ -21,13 +21,13 @@ enum OutputStyle {
 pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
     app.subcommand(
         SubCommand::with_name("convert").about("Open DLT files and show on console or export to DLT file")
-            /* .arg(
+             .arg(
                 Arg::with_name("hex")
                     .short("x")
                     .group("style")
                     .display_order(2)
                     .help("print DLT file; payload as hex"),
-            )*/
+            )
             .arg(
                 Arg::with_name("ascii")
                     .short("a")
@@ -260,8 +260,15 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                             // output_screen.write(&['\n' as u8])?;
                             did_output = true;
                         }
+                        OutputStyle::Hex => {
+                            msg.header_as_text_to_write(&mut writer_screen)?;
+                            writer_screen.write_all(&[b' ',b'['])?;
+                            buf_as_hex_to_io_write(&mut writer_screen, &msg.payload)?;
+                            writer_screen.write_all(&[b']',b'\n'])?;
+                            did_output = true;
+                        }
                         _ => {
-                            // todo...
+                            // todo... mixed? (the dlt-convert output is not nicely readable...)
                         }
                     }
                     // if output to file:
@@ -511,6 +518,68 @@ mod tests {
         assert_eq!(5 - 2 + 1, r.messages_output);
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
+    }
+
+    #[test]
+    fn hex_output() {
+        let logger = new_logger();
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        // persist some messages
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 2;
+        let ecu = dlt::DltChar4::from_buf(b"ECU1");
+
+        for i in 0..persisted_msgs {
+            let sh = adlt::dlt::DltStorageHeader {
+                secs: i + (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(
+                i,
+                sh,
+                standard_header,
+                &[],
+                vec![(i % 256) as u8, ((i + 1) % 256) as u8],
+            );
+            m.to_write(&mut file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+
+        let arg_vec = vec!["t", "convert", "-x", "-e2", file_path.as_str()];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+
+        let output_buf = Vec::new();
+        let output = std::io::BufWriter::new(output_buf);
+        let r = convert(&logger, sub_m, output).unwrap();
+        assert_eq!(2, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+        file.close().unwrap();
+        assert!(r.writer_screen.is_some());
+        let output_buf = r.writer_screen.unwrap().into_inner().unwrap();
+        assert!(!output_buf.is_empty());
+        let s = String::from_utf8(output_buf).unwrap();
+        //println!("{}", s);
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(persisted_msgs as usize, lines.len());
+        assert_eq!(
+            ":00.000000          0 000 ECU1 ---- ---- --- --- N - 0 [00 01]",
+            &lines[0][18..] // time is in local format. so ignore here
+        );
+        assert_eq!(
+            ":01.000000          0 001 ECU1 ---- ---- --- --- N - 0 [01 02]",
+            &lines[1][18..]
+        );
     }
 
     #[test]

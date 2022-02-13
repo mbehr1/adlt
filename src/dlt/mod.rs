@@ -509,7 +509,7 @@ pub struct DltMessage {
     pub timestamp_dms: u32, // orig in 0.1ms (deci-ms)
     pub(super) standard_header: DltStandardHeader,
     pub(super) extended_header: Option<DltExtendedHeader>, // todo optimize ecu, apid, ctid into one map<u32>
-    pub(super) payload: Vec<u8>,
+    pub payload: Vec<u8>,
     pub lifecycle: crate::lifecycle::LifecycleId, // 0 = none, otherwise the id of an lifecycle
 }
 
