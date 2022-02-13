@@ -19,7 +19,14 @@ pub fn utc_time_from_us(time_us: u64) -> chrono::NaiveDateTime {
     .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp(0, 0))
 }
 
-/// output a buffer as hex dump to a Writer.
+static U8_HEX_LOW: [u8; 16] = [
+    b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f',
+];
+static CHARS_HEX_LOW: [char; 16] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+];
+
+/// output a buffer as hex dump to a (char) writer.
 /// Each byte is output as two lower-case digits.
 /// A space is output between each byte.
 /// e.g. "0f 00"
@@ -27,34 +34,38 @@ pub fn buf_as_hex_to_write(
     writer: &mut impl std::fmt::Write,
     buf: &[u8],
 ) -> Result<(), std::fmt::Error> {
-    //for i in 0..buf.len() {
     for (i, item) in buf.iter().enumerate() {
+        let c1 = CHARS_HEX_LOW[(item >> 4) as usize];
+        let c2 = CHARS_HEX_LOW[(item & 0x0f) as usize];
         if i > 0 {
-            write!(writer, " {:02x}", item)?;
-        } else {
-            write!(writer, "{:02x}", item)?;
+            writer.write_char(' ')?;
         }
+        writer.write_char(c1)?;
+        writer.write_char(c2)?;
     }
 
     Ok(())
 }
 
 /// same as buf_as_hex_to_write but with a
-/// std::io::Write.
-/// todo needs refactoring!
+/// std::io::Write as a byte stream.
+///
+/// Each byte is output as two lower-case digits.
+/// A space is output between each byte.
+/// e.g. "0f 00"
 pub fn buf_as_hex_to_io_write(
     writer: &mut impl std::io::Write,
     buf: &[u8],
 ) -> Result<(), std::io::Error> {
-    //for i in 0..buf.len() {
     for (i, item) in buf.iter().enumerate() {
+        let c1 = U8_HEX_LOW[(item >> 4) as usize];
+        let c2 = U8_HEX_LOW[(item & 0x0f) as usize];
         if i > 0 {
-            write!(writer, " {:02x}", item)?;
+            writer.write_all(&[b' ', c1, c2])?
         } else {
-            write!(writer, "{:02x}", item)?;
+            writer.write_all(&[c1, c2])?
         }
     }
-
     Ok(())
 }
 
