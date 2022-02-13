@@ -82,13 +82,18 @@ pub fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
     if s.len() < 2 || (s.len() - 2) % 3 != 0 {
         None
     } else {
-        (0..s.len())
-            .step_by(3)
-            .map(|i| {
-                s.get(i..i + 2)
-                    .and_then(|sub| u8::from_str_radix(sub, 16).ok())
-            })
-            .collect()
+        // we can alloc the Vec size upfront:
+        let mut v: Vec<u8> = Vec::with_capacity((s.len() + 1) / 3);
+
+        for i in (0..s.len()).step_by(3) {
+            let s = u8::from_str_radix(&s[i..i + 2], 16);
+            if let Ok(s) = s {
+                v.push(s);
+            } else {
+                return None;
+            }
+        }
+        Some(v)
     }
 }
 
