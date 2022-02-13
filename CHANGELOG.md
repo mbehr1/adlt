@@ -2,6 +2,21 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.7.0 - 2022-02-13
+#### Features
+- **(convert)** add hex output - (96840a0) - Matthias Behr
+#### Performance Improvements
+- **(util)** optimize hex_to_bytes - (ac557af) - Matthias Behr
+- **(util)** optimize buf_as_hex_to... - (d468022) - Matthias Behr
+- add buf_as_hex and hex_to_bytes test - (99627c9) - Matthias Behr
+#### Refactoring
+- **(convert)** make the two loops more explicit - (c1bc40a) - Matthias Behr
+- **(convert)** use DltMessageIterator - (8c7422f) - Matthias Behr
+- **(remote)** use DltMessageIterator - (c1c9078) - Matthias Behr
+#### Tests
+- **(remote)** add more tests - (2212c7e) - Matthias Behr
+- - -
+
 ## v0.6.0 - 2022-02-12
 #### Features
 - **(parse)** heuristic to detect corrupt messages - (4bf2a74) - Matthias Behr
