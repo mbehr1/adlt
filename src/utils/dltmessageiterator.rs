@@ -1,14 +1,28 @@
 use crate::dlt::{parse_dlt_with_storage_header, DltMessage, DltMessageIndexType};
+use slog::info;
 use std::io::{BufRead, BufReader, Read};
 
-pub struct DltMessageIterator<R> {
+pub struct DltMessageIterator<'a, R> {
     reader: R,
-    index: DltMessageIndexType,
-    bytes_processed: usize,
-    bytes_skipped: usize,
+    pub index: DltMessageIndexType,
+    pub bytes_processed: usize,
+    pub bytes_skipped: usize,
+    pub log: Option<&'a slog::Logger>,
 }
 
-impl<R> Iterator for DltMessageIterator<R>
+impl<'a, R> DltMessageIterator<'a, R> {
+    pub fn new(start_index: DltMessageIndexType, reader: R) -> DltMessageIterator<'a, R> {
+        DltMessageIterator {
+            reader,
+            index: start_index,
+            bytes_processed: 0,
+            bytes_skipped: 0,
+            log: None,
+        }
+    }
+}
+
+impl<'a, R> Iterator for DltMessageIterator<'a, R>
 where
     R: BufRead,
 {
@@ -27,11 +41,12 @@ where
                         self.bytes_processed += 1;
                         self.bytes_skipped += 1;
                         self.reader.consume(1);
-                        // todo info!(log, "skipped 1 byte at {}", self.bytes_processed-1);
+                        if let Some(log) = self.log {
+                            info!(log, "skipped 1 byte at {}", self.bytes_processed - 1);
+                        }
                         // we loop here again
                     }
                     _ => {
-                        // debug!(log, "finished processing a file"; "bytes_per_file"=>bytes_per_file, "messages_processed"=>messages_processed);
                         break;
                     }
                 },
@@ -47,6 +62,7 @@ pub fn get_first_message(reader: impl BufRead) -> Option<DltMessage> {
         bytes_processed: 0,
         bytes_skipped: 0,
         reader,
+        log: None,
     };
     it.next()
 }
@@ -104,12 +120,10 @@ mod tests {
 
         let fi = File::open(&file_path).unwrap();
         let start_index = 1000;
-        let mut it = DltMessageIterator {
-            index: start_index,
-            reader: LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
-            bytes_processed: 0,
-            bytes_skipped: 0,
-        };
+        let mut it = DltMessageIterator::new(
+            start_index,
+            LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
+        );
         let mut iterated_msgs = 0;
         for m in &mut it {
             assert_eq!(m.index, start_index + iterated_msgs);

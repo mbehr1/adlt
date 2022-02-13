@@ -3,11 +3,11 @@ use clap::{App, Arg, SubCommand};
 use slog::{crit, debug, error, info, warn};
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::{BufRead, BufWriter};
+use std::io::BufWriter;
 use std::sync::mpsc::channel;
 
 use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
-use adlt::utils::LowMarkBufReader;
+use adlt::utils::{DltMessageIterator, LowMarkBufReader};
 
 #[derive(Clone, Copy)]
 enum OutputStyle {
@@ -183,10 +183,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
     }
 
-    let mut f: Option<LowMarkBufReader<File>> = None;
+    let mut msg_it: Option<DltMessageIterator<LowMarkBufReader<File>>> = None;
 
     let mut bytes_processed: u64 = 0;
-    let mut bytes_per_file: u64 = 0;
     let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
     let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
     let mut input_file_names_iter = input_file_names.iter();
@@ -295,7 +294,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     //assert!(BUFREADER_CAPACITY > DLT_MAX_STORAGE_MSG_SIZE);
 
     loop {
-        if f.is_none() {
+        if msg_it.is_none() {
             // load next file
             let input_file_name = input_file_names_iter.next();
             match input_file_name {
@@ -307,39 +306,25 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     info!(log, "opened file {} {:?}", &input_file_name, &fi);
                     let buf_reader =
                         LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
-                    f = Some(buf_reader);
+
+                    let mut it =
+                        adlt::utils::DltMessageIterator::new(messages_processed, buf_reader);
+                    it.log = Some(log);
+                    msg_it = Some(it);
                 }
             }
         }
-        assert!(f.is_some());
-        // todo Change to use DltMessageIterator
-        let reader: &mut LowMarkBufReader<File> = f.as_mut().unwrap();
-        match adlt::dlt::parse_dlt_with_storage_header(
-            messages_processed,
-            reader.fill_buf().unwrap(),
-        ) {
-            Ok((res, msg)) => {
-                reader.consume(res);
-                bytes_per_file += res as u64;
-                messages_processed += 1;
-
-                tx.send(msg).unwrap(); // todo handle error?
+        let it = msg_it.as_mut().unwrap();
+        match it.next() {
+            Some(msg) => {
+                tx.send(msg).unwrap(); // todo handle error
             }
-            Err(error) => match error.kind() {
-                adlt::dlt::ErrorKind::InvalidData(_str) => {
-                    bytes_per_file += 1;
-                    reader.consume(1); // skip 1 byte and check for new valid storage_header
-                    info!(log, "skipped 1 byte at {}", bytes_per_file);
-                }
-                _ => {
-                    debug!(log, "finished processing a file"; "bytes_per_file"=>bytes_per_file, "messages_processed"=>messages_processed);
-                    f.unwrap();
-                    f = None; // check for next file on next it
-                    bytes_processed += bytes_per_file;
-                    bytes_per_file = 0;
-                    info!(log, "got Error {}", error);
-                }
-            },
+            None => {
+                messages_processed = it.index;
+                debug!(log, "finished processing a file"; "bytes_processed"=>it.bytes_processed, "bytes_skipped"=>it.bytes_skipped, "messages_processed"=>messages_processed);
+                bytes_processed += (it.bytes_processed + it.bytes_skipped) as u64;
+                msg_it = None;
+            }
         }
     }
     drop(tx);
