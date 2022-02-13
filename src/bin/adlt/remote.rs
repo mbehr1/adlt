@@ -264,8 +264,15 @@ impl FileContext {
                 .reception_time_us
                 .cmp(&b.1.as_ref().unwrap().reception_time_us)
         });
-        let file_names = file_msgs.iter_mut().map(|(a, _b)| (*a).into()).collect();
+        let file_names: Vec<_> = file_msgs.iter_mut().map(|(a, _b)| (*a).into()).collect();
         //debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
+
+        if file_names.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "cannot open files or files contain no DLT messages",
+            ));
+        }
 
         Ok(FileContext {
             file_names,
@@ -630,4 +637,116 @@ fn create_parser_thread(log: slog::Logger, input_file_names: Vec<String>) -> Par
         ),
         rx,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adlt::*;
+    use slog::{o, Drain, Logger};
+    use tempfile::NamedTempFile;
+
+    fn new_logger() -> Logger {
+        let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        Logger::root(drain, o!())
+    }
+
+    fn write_msgs(
+        file: &mut impl std::io::Write,
+        nr_msgs: dlt::DltMessageIndexType,
+        start_index: u32,
+    ) {
+        let ecu = dlt::DltChar4::from_buf(b"ECUR");
+        for i in start_index..start_index + nr_msgs {
+            let sh = dlt::DltStorageHeader {
+                secs: i + (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+    }
+
+    #[test]
+    fn file_context_1() {
+        assert!(FileContext::from(vec![]).is_err());
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = file.path().to_str().unwrap().to_owned();
+        let invalid_file_path = file_path.clone() + "foo";
+
+        // empty file -> err as well
+        assert!(FileContext::from(vec![file_path.clone()]).is_err());
+        // invalid file -> err
+        assert!(FileContext::from(vec![invalid_file_path]).is_err());
+
+        // now write one messsage into file_path:
+        write_msgs(&mut file, 1, 0);
+        assert!(FileContext::from(vec![file_path.clone()]).is_ok());
+
+        // now two files:
+        let mut file2 = NamedTempFile::new().unwrap();
+        write_msgs(&mut file2, 1, 1);
+
+        let fc = FileContext::from(vec![
+            file2.path().to_str().unwrap().to_owned(),
+            file_path.clone(),
+        ]);
+        assert!(fc.is_ok());
+        let fc = fc.unwrap();
+        assert_eq!(fc.file_names.len(), 2);
+        // files should be sorted now!
+        assert_eq!(
+            fc.file_names,
+            vec![file_path, file2.path().to_str().unwrap().to_owned()]
+        );
+        println!("fc with 2 files sorted={:?}", fc); // we can debug print it
+    }
+
+    #[test]
+    fn stream_context_1() {
+        let log = new_logger();
+        let sc = StreamContext::from(&log, "");
+        assert!(sc.is_err()); // not a json object
+                              // valid one with defaults:
+        let sc = StreamContext::from(&log, "{}").unwrap();
+        assert!(!sc.filters_active);
+
+        // with empty filters:
+        let sc = StreamContext::from(&log, r#"{"filters":[]}"#).unwrap();
+        assert!(!sc.filters_active);
+        assert_eq!(sc.filters[FilterKind::Positive].len(), 0);
+        assert_eq!(sc.filters[FilterKind::Negative].len(), 0);
+        assert_eq!(sc.filters[FilterKind::Marker].len(), 0);
+        assert_eq!(sc.filters[FilterKind::Event].len(), 0);
+
+        // with a neg filters:
+        let sc = StreamContext::from(&log, r#"{"filters":[{"type":1}]}"#).unwrap();
+        assert!(sc.filters_active);
+        assert_eq!(sc.filters[FilterKind::Positive].len(), 0);
+        assert_eq!(sc.filters[FilterKind::Negative].len(), 1);
+        assert_eq!(sc.filters[FilterKind::Marker].len(), 0);
+        assert_eq!(sc.filters[FilterKind::Event].len(), 0);
+
+        // with a window (but empty -> invalid)
+        assert!(StreamContext::from(&log, r#"{"window":[]}"#).is_err());
+        // with a window (but 1 value -> invalid)
+        assert!(StreamContext::from(&log, r#"{"window":[1]}"#).is_err());
+        // with a window (but 3 values -> invalid)
+        assert!(StreamContext::from(&log, r#"{"window":[1,2,3]}"#).is_err());
+        // with a valid window (todo order, wrong types.... to be added)
+        let sc = StreamContext::from(&log, r#"{"window":[1,2]}"#).unwrap();
+        println!("sc with windows={:?}", sc); // we can debug print it
+        assert_eq!(sc.msgs_to_send.start, 1);
+        assert_eq!(sc.msgs_to_send.end, 2);
+    }
 }
