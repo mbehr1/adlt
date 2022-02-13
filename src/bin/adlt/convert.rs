@@ -183,13 +183,6 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
     }
 
-    let mut msg_it: Option<DltMessageIterator<LowMarkBufReader<File>>> = None;
-
-    let mut bytes_processed: u64 = 0;
-    let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
-    let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
-    let mut input_file_names_iter = input_file_names.iter();
-
     // setup (thread) filter chain:
     let (tx, rx) = channel(); // msg -> parse_lifecycles (t2)
     let (tx2, rx2) = channel(); // parse_lifecycles -> buffer_sort_messages (t3)
@@ -293,37 +286,27 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     //assert!(BUFREADER_CAPACITY > DLT_MAX_STORAGE_MSG_SIZE);
 
-    loop {
-        if msg_it.is_none() {
-            // load next file
-            let input_file_name = input_file_names_iter.next();
-            match input_file_name {
+    let mut bytes_processed: u64 = 0;
+    let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
+    let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
+
+    for input_file_name in input_file_names {
+        let fi = File::open(input_file_name)?;
+        info!(log, "opened file {} {:?}", &input_file_name, &fi);
+        let buf_reader = LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
+        let mut it = DltMessageIterator::new(messages_processed, buf_reader);
+        it.log = Some(log);
+        loop {
+            match it.next() {
+                Some(msg) => {
+                    tx.send(msg).unwrap(); // todo handle error
+                }
                 None => {
+                    messages_processed = it.index;
+                    debug!(log, "finished processing a file"; "bytes_processed"=>it.bytes_processed, "bytes_skipped"=>it.bytes_skipped, "messages_processed"=>messages_processed);
+                    bytes_processed += (it.bytes_processed + it.bytes_skipped) as u64;
                     break;
                 }
-                Some(input_file_name) => {
-                    let fi = File::open(input_file_name)?;
-                    info!(log, "opened file {} {:?}", &input_file_name, &fi);
-                    let buf_reader =
-                        LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
-
-                    let mut it =
-                        adlt::utils::DltMessageIterator::new(messages_processed, buf_reader);
-                    it.log = Some(log);
-                    msg_it = Some(it);
-                }
-            }
-        }
-        let it = msg_it.as_mut().unwrap();
-        match it.next() {
-            Some(msg) => {
-                tx.send(msg).unwrap(); // todo handle error
-            }
-            None => {
-                messages_processed = it.index;
-                debug!(log, "finished processing a file"; "bytes_processed"=>it.bytes_processed, "bytes_skipped"=>it.bytes_skipped, "messages_processed"=>messages_processed);
-                bytes_processed += (it.bytes_processed + it.bytes_skipped) as u64;
-                msg_it = None;
             }
         }
     }
