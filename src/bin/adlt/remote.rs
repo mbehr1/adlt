@@ -1,8 +1,9 @@
+use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
+use adlt::utils::{get_first_message_from_file, DltMessageIterator, LowMarkBufReader};
 use clap::{App, Arg, SubCommand};
 use slog::{debug, info}; // crit, debug, info, warn, error};
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::BufReader;
 use std::net::TcpListener;
 
 use tungstenite::{
@@ -223,8 +224,6 @@ impl StreamContext {
 #[derive(Debug)]
 struct FileContext {
     file_names: Vec<String>,
-    file_names_index: usize,
-    f: Option<BufReader<File>>,
     parsing_thread: Option<ParserThreadType>,
 
     all_msgs: Vec<adlt::dlt::DltMessage>,
@@ -241,16 +240,35 @@ impl FileContext {
                 "at least one file name needed",
             ));
         }
-
-        let fi = File::open(&file_names[0])?;
-        // info!(log, "opened file {} {:?}", &input_file_name, &fi);
-        const BUFREADER_CAPACITY: usize = 0x10000 * 50;
-        let f = Some(BufReader::with_capacity(BUFREADER_CAPACITY, fi));
+        // map input_file_names to name/first msg
+        let file_msgs = file_names.iter().map(|f_name| {
+            let fi = File::open(f_name);
+            match fi {
+                Ok(mut f) => {
+                    let m1 = get_first_message_from_file(&mut f, 512 * 1024);
+                    if m1.is_none() {
+                        //warn!(log, "file {} doesn't contain a DLT message in first 0.5MB. Skipping!", f_name;);
+                    }
+                    (f_name, m1)
+                }
+                _ => {
+                    //warn!(log, "couldn't open {}. Skipping!", f_name;);
+                    (f_name, None)
+                }
+            }
+        });
+        let mut file_msgs: Vec<_> = file_msgs.filter(|(_a, b)| b.is_some()).collect();
+        file_msgs.sort_by(|a, b| {
+            a.1.as_ref()
+                .unwrap()
+                .reception_time_us
+                .cmp(&b.1.as_ref().unwrap().reception_time_us)
+        });
+        let file_names = file_msgs.iter_mut().map(|(a, _b)| (*a).into()).collect();
+        //debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
 
         Ok(FileContext {
             file_names,
-            file_names_index: 0,
-            f,
             parsing_thread: None,
             all_msgs: Vec::new(),
             streams: Vec::new(),
@@ -311,17 +329,9 @@ fn process_incoming_text_message<T: Read + Write>(
             } else {
                 match FileContext::from(vec![params.to_string()]) {
                     Ok(mut s) => {
-                        assert_eq!(0, s.file_names_index); // todo support multiple
-                        let f: Option<BufReader<File>> = s.f;
-                        s.f = None;
-
-                        /*let (lcs_r, lcs_w) = evmap::new::<
-                            adlt::lifecycle::LifecycleId,
-                            adlt::lifecycle::LifecycleItem,
-                        >();*/
                         // setup parsing thread
-                        //let f: Option<BufReader<File>> = (&file_context).as_mut().unwrap().f;
-                        s.parsing_thread = Some(create_parser_thread(log.clone(), f));
+                        s.parsing_thread =
+                            Some(create_parser_thread(log.clone(), s.file_names.clone()));
                         file_context.replace(s);
 
                         // lifecycle detection thread
@@ -579,59 +589,39 @@ type ParserThreadType = (
 /// The thread reads data from the BufReader, parses the DLT messages via `parse_dlt_with_storage_header`
 /// and forwards the DLT messages to the mpsc channel.
 /// Returns the thread handle and the channel receiver where the parsed messages will be send to.
-fn create_parser_thread(log: slog::Logger, mut f: Option<BufReader<File>>) -> ParserThreadType {
+fn create_parser_thread(log: slog::Logger, input_file_names: Vec<String>) -> ParserThreadType {
     let (tx, rx) = std::sync::mpsc::channel();
     (
         std::thread::spawn(
             move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 info!(log, "parser_thread started");
                 let mut bytes_processed: u64 = 0;
-                let mut bytes_per_file: u64 = 0;
-                let mut number_messages: adlt::dlt::DltMessageIndexType = 0;
-                let mut last_data = false;
+                let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
 
-                loop {
-                    if f.is_none() {
-                        // todo load next file
-                        break;
-                    }
-                    let reader: &mut BufReader<File> = f.as_mut().unwrap();
-                    match adlt::dlt::parse_dlt_with_storage_header(
-                        number_messages,
-                        reader.fill_buf().unwrap(),
-                    ) {
-                        Ok((res, msg)) => {
-                            reader.consume(res);
-                            bytes_per_file += res as u64;
-                            number_messages += 1;
+                const BUFREADER_CAPACITY: usize = 512 * 1024;
+                // we use a relatively small 512kb chunk size as we're processing
+                // the data multithreaded reader in bigger chunks slows is in total slower
 
-                            tx.send(msg)?; // todo handle error?
-                                           // get more data from BufReader:
-                            if !last_data && (reader.buffer().len() < 0x10000) {
-                                // read more data
-                                let pos = std::io::SeekFrom::Start(bytes_per_file);
-                                reader.seek(pos).unwrap();
-                                reader.fill_buf().expect("fill_buf 2 failed!");
-                                last_data = reader.buffer().len() < 0x10000;
+                for ref input_file_name in input_file_names {
+                    let fi = File::open(input_file_name)?;
+                    info!(log, "opened file {} {:?}", input_file_name, &fi);
+                    let buf_reader =
+                        LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
+                    let mut it = DltMessageIterator::new(messages_processed, buf_reader);
+                    it.log = Some(&log);
+                    loop {
+                        match it.next() {
+                            Some(msg) => {
+                                tx.send(msg).unwrap(); // todo handle error
+                            }
+                            None => {
+                                messages_processed = it.index;
+                                debug!(log, "finished processing a file"; "bytes_processed"=>it.bytes_processed, "bytes_skipped"=>it.bytes_skipped, "messages_processed"=>messages_processed);
+                                bytes_processed += (it.bytes_processed + it.bytes_skipped) as u64;
+                                break;
                             }
                         }
-                        Err(error) => match error.kind() {
-                            adlt::dlt::ErrorKind::InvalidData(_str) => {
-                                bytes_per_file += 1;
-                                reader.consume(1); // skip 1 byte and check for new valid storage_header
-                                info!(log, "skipped 1 byte at {}", bytes_per_file);
-                            }
-                            _ => {
-                                debug!(log, "finished processing a file"; "bytes_per_file"=>bytes_per_file, "number_messages"=>number_messages);
-                                f.unwrap();
-                                f = None; // check for next file on next it
-                                last_data = false;
-                                bytes_processed += bytes_per_file;
-                                bytes_per_file = 0;
-                                info!(log, "got Error {}", error);
-                            }
-                        },
-                    };
+                    }
                 }
                 drop(tx);
                 info!(log, "parser_thread stopped"; "bytes_processed" => bytes_processed);
