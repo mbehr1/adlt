@@ -236,8 +236,17 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             };
 
             let mut output : adlt::dlt::DltMessageIndexType= 0;
+            let mut writer_screen_flush_pending = false;
 
             for msg in t4_input {
+
+                // from time to time (all ~0.5mio msgs) we flush the writer_screen to get a fast output 
+                // and not at the end only the last chunk:
+                if writer_screen_flush_pending && (msg.index & 0x7ffff == 0) {
+                    writer_screen.flush()?;
+                    writer_screen_flush_pending = false;
+                }
+
                 // lifecycle filtered?
                 if !filter_lc_ids.is_empty() && !filter_lc_ids.contains(&msg.lifecycle) {
                     continue;
@@ -254,10 +263,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                         }
                         OutputStyle::Ascii => {
                             msg.header_as_text_to_write(&mut writer_screen)?;
-                            // output_screen.write(&[' ' as u8])?;
                             writeln!(writer_screen, " [{}]", msg.payload_as_text()?)?;
-                            // todo change to write directly to Writer
-                            // output_screen.write(&['\n' as u8])?;
                             did_output = true;
                         }
                         OutputStyle::Hex => {
@@ -270,6 +276,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                         _ => {
                             // todo... mixed? (the dlt-convert output is not nicely readable...)
                         }
+                    }
+                     if did_output {
+                        writer_screen_flush_pending = true;
                     }
                     // if output to file:
                     if let Ok(ref mut file) = output_file {
