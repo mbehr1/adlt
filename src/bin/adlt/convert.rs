@@ -7,6 +7,7 @@ use std::io::BufWriter;
 use std::sync::mpsc::channel;
 
 use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
+use adlt::filter::functions::{filters_from_convert_format, filters_from_dlf};
 use adlt::utils::{buf_as_hex_to_io_write, DltMessageIterator, LowMarkBufReader};
 
 #[derive(Clone, Copy)]
@@ -48,6 +49,12 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
                     .group("style")
                     .display_order(1)
                     .help("print DLT file; only headers"),
+            )
+            .arg(
+                Arg::with_name("filter_file")
+                .short("f")
+                .takes_value(true)
+                .help("file with filters to apply. Can be in dlt-convert format or dlt-viewer dlf format.")
             )
             .arg(
                 Arg::with_name("file")
@@ -149,9 +156,35 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             .collect(),
     };
 
+    // parse filter file if provided:
+    let filter_file = sub_m.value_of("filter_file");
+    let filters = if let Some(filter_file) = filter_file {
+        // try to open the file in either dlf/xml format or dlt-convert "APID CTID " format.
+        let file = File::open(filter_file)?;
+        let reader = std::io::BufReader::new(file);
+        let filters = filters_from_dlf(reader);
+        if let Ok(filters) = filters {
+            info!(log, "parsed dlf format file with {} filters", filters.len());
+            filters
+        } else {
+            // parse as dlt-convert format
+            let file = File::open(filter_file)?;
+            let reader = std::io::BufReader::new(file);
+
+            let filters = filters_from_convert_format(reader)?;
+            info!(
+                log,
+                "parsed dlt-convert format file with {:?} filters", filters
+            );
+            filters
+        }
+    } else {
+        vec![]
+    };
+
     let output_file = sub_m.value_of("output_file").map(|s| s.to_string());
     info!(log, "convert have {} input files", input_file_names.len(); "index_first"=>index_first, "index_last"=>index_last);
-    debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids), "sort_by_time" => sort_by_time, "output_file" => &output_file);
+    debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids), "sort_by_time" => sort_by_time, "output_file" => &output_file, "filter_file" => &filter_file, "filters" =>  format!("{:?}",&filters) );
 
     // if we have multiple files we do need to sort them first by the first log reception_time!
     if input_file_names.len() > 1 {
@@ -221,6 +254,20 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     } else {
         (None, rx2)
     };
+
+    // if we have filters we use a filter thread:
+    let (thread_filter, t4_input) = if !filters.is_empty() {
+        let (tx_filter, rx_filter) = channel();
+        (
+            Some(std::thread::spawn(move || {
+                adlt::filter::functions::filter_as_streams(&filters, &t4_input, &tx_filter)
+            })),
+            rx_filter,
+        )
+    } else {
+        (None, t4_input)
+    };
+
     let t4 = std::thread::spawn(
         move || -> Result<(adlt::dlt::DltMessageIndexType, W), Box<dyn std::error::Error + Send + Sync>> {
             let mut output_file = if let Some(s) = output_file {
@@ -333,6 +380,13 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         match t.join() {
             Err(s) => error!(log, "t3 join got Error {:?}", s),
             Ok(s) => debug!(log, "t3 join was Ok {:?}", s),
+        };
+    }
+
+    if let Some(t) = thread_filter {
+        match t.join() {
+            Err(s) => error!(log, "thread_filter join got Error {:?}", s),
+            Ok(s) => debug!(log, "thread_filter join was Ok {:?}", s),
         };
     }
 
@@ -789,4 +843,6 @@ mod tests {
         assert_eq!(5 - 2 + 1, r.messages_processed);
         assert!(output_file.close().is_ok());
     }
+
+    // todo add tests for filter_file
 }

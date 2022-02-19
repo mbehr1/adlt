@@ -1,6 +1,7 @@
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 
+use crate::dlt::DltChar4;
 use crate::dlt::DltMessage;
 use crate::dlt::Error;
 use crate::dlt::ErrorKind;
@@ -62,11 +63,215 @@ pub fn filter_as_streams(
     Ok((passed, filtered))
 }
 
+/// parse filters from a dlt-viewer compatible dlf file
+///
+/// The dlf file has to contain a 'dltfilter' element otherwise an error is returned.
+pub fn filters_from_dlf<B: std::io::BufRead>(reader: B) -> Result<Vec<Filter>, quick_xml::Error> {
+    let mut filters = Vec::new();
+    let mut reader = quick_xml::Reader::from_reader(reader);
+    reader.trim_text(false); // we dont want whitespace to be trimmed
+
+    let mut found_dltfilter_start = false;
+    let mut found_dltfilter_end = false;
+
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event(&mut buf) {
+            Ok(quick_xml::events::Event::Start(ref e)) => match e.local_name() {
+                b"dltfilter" => {
+                    found_dltfilter_start = true;
+                    found_dltfilter_end = false;
+                }
+                b"filter" => {
+                    if found_dltfilter_start && !found_dltfilter_end {
+                        let filter = Filter::from_quick_xml_reader(&mut reader);
+                        filters.push(filter?);
+                    } else {
+                        // we ignore those
+                        //println!("ignoring filter as outside dltfilter!");
+                    }
+                }
+                _ => {
+                    // println!("ignoring start '{:?}'", e.local_name())
+                }
+            },
+            Ok(quick_xml::events::Event::End(ref e)) => {
+                if let b"dltfilter" = e.local_name() {
+                    found_dltfilter_end = true;
+                }
+            }
+            Ok(quick_xml::events::Event::Text(_)) => {}
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(e) => return Err(e),
+            _ => {} // CData, Decl, PI, Empty, Comment
+        }
+        buf.clear();
+    }
+
+    if !found_dltfilter_start || !found_dltfilter_end {
+        return Err(quick_xml::Error::TextNotFound);
+    }
+
+    Ok(filters)
+}
+
+/// parse filters from dlt-convert filter file format
+///
+/// format consists of:
+/// \<apid> \<ctid> ...
+/// each apid/ctid is exactly 4 bytes (filled with -).
+/// first char '-' indicated apid/ctid end
+pub fn filters_from_convert_format<B: std::io::BufRead>(
+    mut reader: B,
+) -> Result<Vec<Filter>, std::io::Error> {
+    let mut filters: Vec<Filter> = Vec::new();
+    let mut buf = Vec::<u8>::with_capacity(8 * 1024);
+    let res = reader.read_to_end(&mut buf)?;
+    let mut offset = 0;
+    while offset + 10 <= res {
+        let mut char4_buf = [0u8, 0, 0, 0];
+        let mut char4_len = 0;
+        while char4_len < 4 && buf[offset + char4_len] != b'-' {
+            char4_buf[char4_len] = buf[offset + char4_len];
+            char4_len += 1;
+        }
+        let apid = DltChar4::from_buf(&char4_buf);
+        offset += 5;
+        let mut char4_buf = [0u8, 0, 0, 0];
+        let mut char4_len = 0;
+        while char4_len < 4 && buf[offset + char4_len] != b'-' {
+            char4_buf[char4_len] = buf[offset + char4_len];
+            char4_len += 1;
+        }
+        let ctid = DltChar4::from_buf(&char4_buf);
+        offset += 5;
+        let mut f = Filter::new(FilterKind::Positive);
+        f.apid = Some(apid);
+        f.ctid = Some(ctid);
+        filters.push(f);
+    }
+
+    Ok(filters)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dlt::DltChar4;
     use std::sync::mpsc::channel;
+
+    mod filters_from_dlt {
+        use super::*;
+
+        #[test]
+        fn empty() {
+            let r = filters_from_dlf(r#""#.as_bytes());
+            assert!(r.is_err());
+        }
+        #[test]
+        fn no_dltfilter() {
+            let r = filters_from_dlf(r#"<?xml version="1.0" encoding="UTF-8"?>"#.as_bytes());
+            assert!(r.is_err());
+        }
+        #[test]
+        fn empty_dltfilter() {
+            let r = filters_from_dlf(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+            <dltfilter>
+            "#
+                .as_bytes(),
+            );
+            assert!(r.is_err());
+
+            let r = filters_from_dlf(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+            <dltfilter></dltfilter>
+            "#
+                .as_bytes(),
+            );
+            assert!(r.is_ok());
+            assert!(r.unwrap().is_empty());
+        }
+
+        #[test]
+        fn filter1() {
+            // invalid filter
+            let r = filters_from_dlf(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+            <dltfilter>
+                <filter>
+            </dltfilter>
+            "#
+                .as_bytes(),
+            );
+            assert!(r.is_err());
+
+            // one proper filter
+            let r = filters_from_dlf(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+            <dltfilter>
+                <filter></filter>
+            </dltfilter>
+            "#
+                .as_bytes(),
+            );
+            assert!(r.is_ok());
+            assert_eq!(r.unwrap().len(), 1);
+
+            // two filter
+            let r = filters_from_dlf(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+            <dltfilter>
+                <filter></filter>
+                <filter></filter>
+            </dltfilter>
+            "#
+                .as_bytes(),
+            );
+            assert!(r.is_ok());
+            assert_eq!(r.unwrap().len(), 2);
+        }
+    }
+
+    mod filters_from_convert_format {
+        use super::*;
+        use std::str::FromStr;
+
+        #[test]
+        fn empty() {
+            let r = filters_from_convert_format(r#""#.as_bytes());
+            assert!(r.is_ok());
+            assert!(r.unwrap().is_empty());
+        }
+
+        #[test]
+        fn invalid() {
+            // too short (we expect exactly 10 chars per pair/filter)
+            let r = filters_from_convert_format(r#"APID CTID"#.as_bytes());
+            assert!(r.is_ok());
+            assert!(r.unwrap().is_empty());
+
+            // too short (we expect exactly 10 chars per pair/filter) (but dlt-convert accepts those... but persists differently todo)
+            let r = filters_from_convert_format(r#"SYS JOUR "#.as_bytes());
+            assert!(r.is_ok());
+            assert!(r.unwrap().is_empty());
+        }
+        #[test]
+        fn valid() {
+            // too short (we expect exactly 10 chars per pair/filter)
+            let r = filters_from_convert_format(r#"APID CTID "#.as_bytes()).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r[0].apid, DltChar4::from_str("APID").ok());
+            assert_eq!(r[0].ctid, DltChar4::from_str("CTID").ok());
+
+            let r = filters_from_convert_format(r#"APID CTID SYS- JOUR "#.as_bytes()).unwrap();
+            assert_eq!(r.len(), 2);
+            assert_eq!(r[0].apid, DltChar4::from_str("APID").ok());
+            assert_eq!(r[0].ctid, DltChar4::from_str("CTID").ok());
+            assert_eq!(r[1].apid, DltChar4::from_str("SYS").ok()); // this get's shortened! (- ignored)
+            assert_eq!(r[1].ctid, DltChar4::from_str("JOUR").ok());
+        }
+    }
 
     mod filter_as_streams {
         use super::*;
