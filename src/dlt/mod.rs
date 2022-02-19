@@ -711,7 +711,7 @@ impl DltMessage {
                 writer.write_all(&[b' ', b'N'])?;
             }
         } else {
-            write!(writer, "--- --- N -")?;
+            writer.write_all(b"--- --- N -")?;
         }
 
         write!(writer, " {}", self.noar())?;
