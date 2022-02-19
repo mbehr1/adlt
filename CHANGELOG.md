@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.7.1 - 2022-02-19
+#### Bug Fixes
+- **(convert)** flush output more often - (3d2d396) - Matthias Behr
+#### Performance Improvements
+- header_as_text_to_write - (04b60f5) - Matthias Behr
+- - -
+
 ## v0.7.0 - 2022-02-13
 #### Features
 - **(convert)** add hex output - (96840a0) - Matthias Behr
