@@ -5,7 +5,7 @@
 
 This Rust crate provides a library and tools to help you to handle automotive DLT (diagnostic log and trace, see [GENIVI](https://at.projects.genivi.org/wiki/display/PROJ/Diagnostic+Log+and+Trace) or [AUTOSAR](https://www.autosar.org/fileadmin/user_upload/standards/foundation/1-0/AUTOSAR_PRS_DiagnosticLogAndTraceProtocol.pdf)) files.
 
-**Note:** This is a very early version and it's my first Rust project. It's not intended/ready yet for any kind of use. The interfaces will most likely change frequently!
+**Note:** This is a very early version and it's my first Rust project. There might be lots of bugs or restrictions/partial implementations yet. The interfaces will most likely change frequently!
 
 ## Features
 
@@ -13,6 +13,40 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 - **Lifecycle detection** feature.
 - **Sorting by timestamp** taking the lifecycles into account.
 - **Filter**...
+
+## Usage examples
+
+### command line tool
+
+Show help for convert command:
+```sh
+adlt convert -h
+```
+Print ascii representation of a DLT file:
+```sh
+adlt convert -a <dlt_file>
+```
+Show all lifecycles (ecu, time range and number of messages) of a DLT file:
+```
+adlt convert <dlt_file>
+...
+have 3 lifecycles:
+LC#  1: ECU1 2021/06/24 08:50:58.529663 - 08:53:51 #   26523
+LC#  2: ECU1 2021/06/24 08:54:29.957936 - 08:55:08 #  181337
+LC#  3: DLOG 2021/06/24 08:54:44.945600 - 08:54:44 #       1
+```
+Output/extract a specific lifecycle into file sorted by timestamps per lifecycle:
+```sh
+adlt convert <dlt_file> # to see the lifecycle ids. here e.g. LC#  1: ... and LC#  2: ...
+adlt convert -l 1 2 -o <new_file> --sort <dlt_file> # export LC #1 and #2 sorted into new_file
+```
+Output only messages fitting to a filter into a new file:
+```sh
+# filter_file can be in dlt-convert format as a list of APID CTIDs. E.g. echo "API1 CTI1  API2 CTI2 " > filter_file
+# or it can be in dlt-viewer dlf format (xml file with <?xml...><dltfilter><filter>... )
+adlt convert -f <filter_file> -o <new_file> <dlt_file> # export all messages fitting to filter_file sorted into new_file
+# lifecycle filters -l ... or sorting --sort can be applied as well!
+```
 
 ## Known Issues
 
