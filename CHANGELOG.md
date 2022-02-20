@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.8.0 - 2022-02-20
+#### Documentation
+- **(readme)** usage examples - (2bfb335) - Matthias Behr
+#### Features
+- **(convert)** filter file support - (17120fa) - Matthias Behr
+#### Tests
+- **(convert)** add filter_file test - (15ce43d) - Matthias Behr
+- - -
+
 ## v0.7.1 - 2022-02-19
 #### Bug Fixes
 - **(convert)** flush output more often - (3d2d396) - Matthias Behr
