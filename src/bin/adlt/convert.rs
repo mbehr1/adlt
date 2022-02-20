@@ -844,5 +844,77 @@ mod tests {
         assert!(output_file.close().is_ok());
     }
 
-    // todo add tests for filter_file
+    #[test]
+    fn filter_file() {
+        let logger = new_logger();
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 100;
+        let ecu = dlt::DltChar4::from_buf(b"ECU1");
+        for i in 0..persisted_msgs {
+            let sh = adlt::dlt::DltStorageHeader {
+                secs: (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(&mut file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+
+        // create a filter file with dlt-convert format:
+        let mut filter_file = NamedTempFile::new().unwrap();
+        let filter_file_path = String::from(filter_file.path().to_str().unwrap());
+        filter_file.write_all(b"APID CTID ").unwrap();
+
+        let arg_vec = vec![
+            "t",
+            "convert",
+            "-a",
+            "-f",
+            filter_file_path.as_str(),
+            file_path.as_str(),
+        ];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
+        assert_eq!(0, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+        filter_file.close().unwrap();
+
+        // create a filter file with dlf format:
+        let mut filter_file = NamedTempFile::new().unwrap();
+        let filter_file_path = String::from(filter_file.path().to_str().unwrap());
+        filter_file
+            .write_all(b"<dltfilter><filter><type>1</type><ecuid>ECU1</ecuid><enableecuid>1</enableecuid><enablefilter>1</enablefilter></filter></dltfilter>")
+            .unwrap();
+
+        let arg_vec = vec![
+            "t",
+            "convert",
+            "-a",
+            "-f",
+            filter_file_path.as_str(),
+            file_path.as_str(),
+        ];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
+        assert_eq!(0, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+        assert!(file.close().is_ok());
+        filter_file.close().unwrap();
+    }
 }
