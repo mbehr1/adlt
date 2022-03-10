@@ -69,6 +69,8 @@ pub struct Filter {
     pub ctid: Option<DltChar4>,
     pub payload: Option<String>,
     pub payload_regex: Option<Regex>,
+    // filter on lifecycles. This is not the lifecycle.id but the persistentId
+    pub lifecycles: Option<Vec<u32>>,
 }
 
 impl Filter {
@@ -137,6 +139,14 @@ impl Filter {
             payload = Some(s.to_string());
         }
 
+        let lifecycles = v["lifecycles"].as_array().map(|lcs| {
+            lcs.iter()
+                .map(|l| l.as_u64())
+                .filter(|l| l.is_some())
+                .map(|l| l.unwrap() as u32)
+                .collect()
+        });
+
         Ok(Filter {
             kind,
             enabled,
@@ -147,6 +157,7 @@ impl Filter {
             ctid,
             payload,
             payload_regex,
+            lifecycles,
         })
     }
 
@@ -251,6 +262,7 @@ impl Filter {
             ctid: None,
             payload: None,
             payload_regex: None,
+            lifecycles: None,
         }
     }
 
@@ -305,6 +317,12 @@ impl Filter {
             }
         }
 
+        if let Some(lcs) = &self.lifecycles {
+            if !lcs.is_empty() && !lcs.contains(&msg.lifecycle) {
+                return negated;
+            }
+        }
+
         !negated
     }
 }
@@ -341,7 +359,9 @@ impl Serialize for Filter {
         } else if let Some(s) = &self.payload {
             state.serialize_field("payload", &s)?;
         }
-
+        if let Some(lcs) = &self.lifecycles {
+            state.serialize_field("lifecycles", &lcs)?;
+        }
         state.end()
     }
 }
@@ -481,6 +501,53 @@ mod tests {
         assert!(f.payload_regex.is_some());
         assert!(f.matches(&m));
     }
+
+    #[test]
+    fn match_lifecycle() {
+        let mut f = Filter::new(FilterKind::Positive);
+
+        // empty one should match all
+        f.lifecycles = Some(vec![]);
+
+        // no lifecycle -> should match
+        let mut m = DltMessage::for_test();
+        assert!(f.matches(&m));
+
+        m.lifecycle = 1;
+        assert!(f.matches(&m));
+
+        // real match
+        f.lifecycles = Some(vec![1]);
+        assert!(f.matches(&m));
+
+        // array supported as well (non sorted)
+        f.lifecycles = Some(vec![2, 1]);
+        assert!(f.matches(&m));
+
+        // mismatch
+        f.lifecycles = Some(vec![2, 3]);
+        assert!(!f.matches(&m));
+
+        // msg without lifecycle should match as well?
+        m.lifecycle = 0;
+        f.lifecycles = Some(vec![1]);
+        assert!(!f.matches(&m)); // todo??? (dlt-logs does treat the msgs without as matching)
+
+        // typical use case
+        let mut f = Filter::new(FilterKind::Negative);
+        f.negate_match = true;
+
+        f.lifecycles = Some(vec![]);
+        m.lifecycle = 1;
+        assert!(!f.matches(&m)); // should not remove this msg as no lifecycle is chosen
+
+        f.lifecycles = Some(vec![1]);
+        m.lifecycle = 1;
+        assert!(!f.matches(&m)); // should not remove this msg as lifecycle fits
+
+        f.lifecycles = Some(vec![1]);
+        m.lifecycle = 2;
+        assert!(f.matches(&m)); // should remove this msg as lifecycle not fitting
     }
 
     #[test]
@@ -523,6 +590,26 @@ mod tests {
             Filter::from_json(r#"{"type": 0, "payload":"fOo", "payloadRegex":"^fOo"}"#).unwrap();
         assert!(f.payload.is_none());
         assert_eq!(f.payload_regex.unwrap().as_str(), "^fOo");
+
+        assert!(f.lifecycles.is_none());
+
+        // lifecycles
+        let f = Filter::from_json(r#"{"type": 1, "lifecycles":[]}"#).unwrap();
+        assert!(f.lifecycles.is_some());
+        assert_eq!(f.lifecycles, Some(vec![]));
+
+        let f = Filter::from_json(r#"{"type": 1, "lifecycles":[47,11]}"#).unwrap();
+        assert!(f.lifecycles.is_some());
+        assert_eq!(f.lifecycles, Some(vec![47, 11]));
+
+        // invalid one (no array)
+        let f = Filter::from_json(r#"{"type": 1, "lifecycles":1}"#).unwrap();
+        assert!(f.lifecycles.is_none());
+
+        // invalid one (array of strings and not numbers)
+        let f = Filter::from_json(r#"{"type": 1, "lifecycles":["1"]}"#).unwrap();
+        assert!(f.lifecycles.is_some());
+        assert_eq!(f.lifecycles, Some(vec![]));
     }
 
     #[test]
@@ -584,6 +671,20 @@ mod tests {
         assert!(
             s.contains(r#""payloadRegex":"^fOo""#),
             "payloadRegex wrong in {}",
+            &s
+        );
+        assert!(
+            !s.contains(r#""lifecycles""#),
+            "lifecycles not expected in {}",
+            &s
+        );
+
+        // field lifecycles
+        let f = Filter::from_json(r#"{"type": 1, "lifecycles":[47,11]}"#).unwrap();
+        let s = f.to_json();
+        assert!(
+            s.contains(r#""lifecycles":[47,11]"#),
+            "lifecycles unexpected in {}",
             &s
         );
     }
