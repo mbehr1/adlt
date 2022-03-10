@@ -129,7 +129,10 @@ impl Filter {
         let mut payload = None;
         let mut payload_regex = None;
         if let Some(s) = v["payloadRegex"].as_str() {
-            payload_regex = Regex::new(s).ok();
+            // sadly this regex is python syntax and not ecmascript
+            // so convert ecmascript capture groups to python ones
+            let s = s.replace("(?<", "(?P<");
+            payload_regex = Regex::new(&s).ok();
         } else if let Some(s) = v["payload"].as_str() {
             payload = Some(s.to_string());
         }
@@ -467,8 +470,17 @@ mod tests {
         assert!(f.matches(&m));
         f.payload_regex = Regex::from_str("^Final answer").ok(); // starts with
         assert!(f.matches(&m));
+        f.payload_regex = Regex::from_str("^(?P<state>Final) answer").ok(); // starts with
+        assert!(f.matches(&m));
         f.payload_regex = Regex::from_str("^answer").ok(); // doesn't start with
         assert!(!f.matches(&m));
+
+        // ecmascript capture groups (?<name>...) instead of (?P<name>...) from json only:
+        let f =
+            Filter::from_json(r#"{"type": 0, "payloadRegex":"^(?<state>Final) answer"}"#).unwrap();
+        assert!(f.payload_regex.is_some());
+        assert!(f.matches(&m));
+    }
     }
 
     #[test]
