@@ -41,6 +41,17 @@ impl DltChar4 {
             char4: [buf[0], buf[1], buf[2], buf[3]],
         }
     }
+
+    pub fn as_buf(&self) -> &[u8; 4] {
+        &self.char4
+    }
+
+    /// hack to return the DltChar4 as a little endianess u32
+    /// this is mainly for an efficient serialization as long as
+    /// bincode-typescript doesn't support [u8;4]
+    pub fn as_u32le(&self) -> u32 {
+        u32::from_le_bytes(self.char4)
+    }
 }
 
 impl FromStr for DltChar4 {
@@ -447,7 +458,7 @@ pub enum DltMessageType {
 
 #[derive(Debug, PartialEq)]
 pub struct DltExtendedHeader {
-    pub(super) verb_mstp_mtin: u8,
+    pub verb_mstp_mtin: u8,
     pub(super) noar: u8,
     pub(super) apid: DltChar4,
     pub(super) ctid: DltChar4,
@@ -507,8 +518,8 @@ pub struct DltMessage {
     pub ecu: DltChar4,
     // sessionId: u32 todo
     pub timestamp_dms: u32, // orig in 0.1ms (deci-ms)
-    pub(super) standard_header: DltStandardHeader,
-    pub(super) extended_header: Option<DltExtendedHeader>, // todo optimize ecu, apid, ctid into one map<u32>
+    pub standard_header: DltStandardHeader,
+    pub extended_header: Option<DltExtendedHeader>, // todo optimize ecu, apid, ctid into one map<u32>
     pub payload: Vec<u8>,
     pub lifecycle: crate::lifecycle::LifecycleId, // 0 = none, otherwise the id of an lifecycle
 }
