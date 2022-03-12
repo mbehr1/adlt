@@ -72,6 +72,7 @@ impl Lifecycle {
     /// `0` is never used. And is / can be used as "no lifecycle".
     ///
     /// Take care: lifecycle ids are unique above the overall process run time. So don't rely on the first one being 1.
+    /// but we dont support a "persisted" id for filters as this would need a more complex logic for lookup.
     pub fn id(&self) -> u32 {
         self.id
     }
