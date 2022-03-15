@@ -1,5 +1,5 @@
 use crate::dlt::{parse_dlt_with_storage_header, DltMessage, DltMessageIndexType};
-use slog::info;
+use slog::debug;
 use std::io::{BufRead, BufReader, Read};
 
 pub struct DltMessageIterator<'a, R> {
@@ -42,7 +42,7 @@ where
                         self.bytes_skipped += 1;
                         self.reader.consume(1);
                         if let Some(log) = self.log {
-                            info!(log, "skipped 1 byte at {}", self.bytes_processed - 1);
+                            debug!(log, "skipped 1 byte at {}", self.bytes_processed - 1);
                         }
                         // we loop here again
                     }
