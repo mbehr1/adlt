@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.9.0 - 2022-03-15
+#### Documentation
+- add comment regarding persisted ids - (39d3520) - Matthias Behr
+#### Features
+- **(filter)** add lifecycles support - (96c5952) - Matthias Behr
+- **(filter)** try to support ecmascript regex syntax - (11e407b) - Matthias Behr
+- **(remote)** first poc/somewhat useable version - (51f8234) - Matthias Behr
+#### Refactoring
+- add as_buf and as_u32le for DltChar4 - (c79f91e) - Matthias Behr
+- - -
+
 ## v0.8.0 - 2022-02-20
 #### Documentation
 - **(readme)** usage examples - (2bfb335) - Matthias Behr
