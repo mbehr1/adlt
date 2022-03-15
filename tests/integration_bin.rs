@@ -97,7 +97,7 @@ fn bin_remote_validport_connect() {
             "remote server listening on 127.0.0.1:{}",
             port
         )))
-        .stderr(predicate::str::contains("got text message \"close\""))
+        .stderr(predicate::str::contains("err: close failed"))
         .failure(); // fails on windows: .interrupted();
     println!("{:?}", assert.get_output());
     t.join().unwrap();

@@ -4,6 +4,7 @@ pub use self::lowmarkbufreader::LowMarkBufReader;
 mod dltmessageiterator;
 pub use self::dltmessageiterator::get_first_message_from_file;
 pub use self::dltmessageiterator::DltMessageIterator;
+pub mod remote_types;
 
 // const MS_PER_SEC:u32 = 1_000;
 
