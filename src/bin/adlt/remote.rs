@@ -910,6 +910,7 @@ fn create_parser_thread(
 mod tests {
     use super::*;
     use adlt::*;
+    // use serde_json::ser::to_string;
     use slog::{o, Drain, Logger};
     use tempfile::NamedTempFile;
 
@@ -956,14 +957,22 @@ mod tests {
         assert!(FileContext::from(
             &log,
             "open",
-            format!(r#"{{"files":["{}"]}}"#, file_path).as_str()
+            format!(
+                r#"{{"files":[{}]}}"#,
+                serde_json::json!(file_path).to_string()
+            )
+            .as_str()
         )
         .is_err());
         // invalid file -> err
         assert!(FileContext::from(
             &log,
             "open",
-            format!(r#"{{"files":["{}"]}}"#, invalid_file_path).as_str()
+            format!(
+                r#"{{"files":[{}]}}"#,
+                serde_json::json!(invalid_file_path).to_string()
+            )
+            .as_str()
         )
         .is_err());
 
@@ -972,7 +981,11 @@ mod tests {
         let fc = FileContext::from(
             &log,
             "open",
-            format!(r#"{{"sort": true, "files":["{}"]}}"#, file_path).as_str(),
+            format!(
+                r#"{{"sort": true, "files":[{}]}}"#,
+                serde_json::json!(file_path).to_string()
+            )
+            .as_str(),
         )
         .unwrap();
         assert!(fc.sort_by_time);
@@ -985,9 +998,9 @@ mod tests {
             &log,
             "open",
             format!(
-                r#"{{"files":["{}","{}"]}}"#,
-                file2.path().to_str().unwrap(),
-                file_path
+                r#"{{"files":[{},{}]}}"#,
+                serde_json::json!(file2.path().to_str().unwrap()).to_string(),
+                serde_json::json!(file_path).to_string()
             )
             .as_str(),
         );
