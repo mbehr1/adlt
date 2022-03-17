@@ -1161,12 +1161,14 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                 // vari info? (for STRG it's after the str len...)
                 if type_info & DLT_TYPE_INFO_VARI != 0 {
                     // todo e.g. [Dlt369] unsigned 16-bit int. following as first payload, then the name, then the bool!
-                    panic!("type_info VARI not supported yet!");
+                    //panic!("type_info VARI not supported yet!");
+                    return None;
                 }
                 // fixp set?
                 if type_info & DLT_TYPE_INFO_FIXP != 0 {
                     // todo e.g. [Dlt386] 32-bit float, then tyle signed int as offset.
-                    panic!("type_info FIXP not supported yet!");
+                    // panic!("type_info FIXP not supported yet!");
+                    return None;
                 }
 
                 if type_info & DLT_TYPE_INFO_BOOL != 0 {
@@ -1233,11 +1235,12 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
                     return to_ret;
                 } else {
                     let _ = DLT_TYPE_INFO_ARAY | DLT_TYPE_INFO_TRAI | DLT_TYPE_INFO_STRU;
-
+                    /*
                     panic!(
                         "type_info=0x{:x} unhandled! is_big_endian={}, index={}, msg={:?}",
                         type_info, self.is_big_endian, self.index, self.msg
-                    );
+                    );*/
+                    return None; // todo
                 }
                 let to_ret = if len > 0 && self.msg.payload.len() >= self.index + len {
                     Some(DltArg {
