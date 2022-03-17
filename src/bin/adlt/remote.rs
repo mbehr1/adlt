@@ -53,6 +53,8 @@ pub fn remote(
     let server = TcpListener::bind(server_addr)?;
     // server.set_nonblocking(true).expect("Cannot set non-blocking");
     info!(log, "remote server listening on 127.0.0.1:{}", port; "port" => port);
+    // output on stdout as well to help identify a proper startup even with verbose options:
+    println!("remote server listening on 127.0.0.1:{}", port);
 
     for stream in server.incoming() {
         let logc = log.clone();
