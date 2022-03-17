@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.9.1 - 2022-03-17
+#### Bug Fixes
+- **(parser)** dont panic on not yet supported types - (9ea6144) - Matthias Behr
+- **(remote)** properly escape win path in tests - (8fb7239) - Matthias Behr
+- **(remote)** print listening info on stdout as well - (3470ea7) - Matthias Behr
+- - -
+
 ## v0.9.0 - 2022-03-15
 #### Documentation
 - add comment regarding persisted ids - (39d3520) - Matthias Behr
