@@ -959,22 +959,14 @@ mod tests {
         assert!(FileContext::from(
             &log,
             "open",
-            format!(
-                r#"{{"files":[{}]}}"#,
-                serde_json::json!(file_path).to_string()
-            )
-            .as_str()
+            format!(r#"{{"files":[{}]}}"#, serde_json::json!(file_path)).as_str()
         )
         .is_err());
         // invalid file -> err
         assert!(FileContext::from(
             &log,
             "open",
-            format!(
-                r#"{{"files":[{}]}}"#,
-                serde_json::json!(invalid_file_path).to_string()
-            )
-            .as_str()
+            format!(r#"{{"files":[{}]}}"#, serde_json::json!(invalid_file_path)).as_str()
         )
         .is_err());
 
@@ -985,7 +977,7 @@ mod tests {
             "open",
             format!(
                 r#"{{"sort": true, "files":[{}]}}"#,
-                serde_json::json!(file_path).to_string()
+                serde_json::json!(file_path)
             )
             .as_str(),
         )
@@ -1001,8 +993,8 @@ mod tests {
             "open",
             format!(
                 r#"{{"files":[{},{}]}}"#,
-                serde_json::json!(file2.path().to_str().unwrap()).to_string(),
-                serde_json::json!(file_path).to_string()
+                serde_json::json!(file2.path().to_str().unwrap()),
+                serde_json::json!(file_path)
             )
             .as_str(),
         );
