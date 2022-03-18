@@ -475,7 +475,10 @@ where
                                         lcs_w.refresh();
                                         lcs_w_needs_refresh = false;
                                     }
-                                    outflow.send(msg).unwrap();
+                                    if let Err(e) = outflow.send(msg) {
+                                        println!("parse_lifecycles_buffered_from_stream .send 1 got err={}", e);
+                                        break; // exit. the receiver has stopped
+                                    }
                                 } else if !buffered_lcs.contains(&msg_lc) {
                                     prune_lc_id = msg_lc;
                                     // and we can delete right away
@@ -484,7 +487,10 @@ where
                                         lcs_w.refresh();
                                         lcs_w_needs_refresh = false;
                                     }
-                                    outflow.send(msg).unwrap();
+                                    if let Err(e) = outflow.send(msg) {
+                                        println!("parse_lifecycles_buffered_from_stream .send 2 got err={}", e);
+                                        break;
+                                    }
                                 } else {
                                     break;
                                 }
@@ -505,7 +511,13 @@ where
                 lcs_w.refresh();
                 lcs_w_needs_refresh = false;
             }
-            outflow.send(msg).unwrap(); // todo how handle errors?
+            if let Err(e) = outflow.send(msg) {
+                println!(
+                    "parse_lifecycles_buffered_from_stream .send 3 got err={}",
+                    e
+                );
+                break;
+            }
         }
     }
 
@@ -527,7 +539,13 @@ where
     // if we have buffered msgs we have to output them now:
     for m in buffered_msgs.into_iter() {
         // println!("sending buffered_msg {:?}", m);
-        outflow.send(m).unwrap();
+        if let Err(e) = outflow.send(m) {
+            println!(
+                "parse_lifecycles_buffered_from_stream .send 4 got err={}",
+                e
+            );
+            break;
+        }
     }
 
     /*

@@ -886,7 +886,10 @@ fn create_parser_thread(
                     loop {
                         match it.next() {
                             Some(msg) => {
-                                tx.send(msg).unwrap(); // todo handle error
+                                if let Err(e) = tx.send(msg) {
+                                    info!(log, "parser_thread aborted on err={}", e; "bytes_processed" => bytes_processed, "msgs_processed" => messages_processed);
+                                    return Err(Box::new(e));
+                                }
                             }
                             None => {
                                 messages_processed = it.index;
