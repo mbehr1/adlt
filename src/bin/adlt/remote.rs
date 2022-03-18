@@ -94,7 +94,7 @@ pub fn remote(
                 if let Some(ref mut fc) = file_context {
                     let r = process_file_context(&log, fc, &mut websocket);
                     if r.is_err() {
-                        info!(log, "ws process_file_context returned err {:?}", r);
+                        warn!(log, "ws process_file_context returned err {:?}", r);
                         break;
                     }
                 }
@@ -103,7 +103,8 @@ pub fn remote(
                 if let Err(err) = msg {
                     match err {
                         tungstenite::Error::Io(ref e)
-                            if e.kind() == std::io::ErrorKind::WouldBlock =>
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::TimedOut =>
                         {
                             let all_msgs_len = if file_context.is_some() {
                                 file_context.as_ref().unwrap().all_msgs.len()
@@ -121,7 +122,7 @@ pub fn remote(
                             continue;
                         }
                         _ => {
-                            info!(log, "ws read_message returned {:?}", err);
+                            warn!(log, "ws read_message returned err {:?}", err);
                             break;
                         }
                     }
@@ -135,13 +136,14 @@ pub fn remote(
                         info!(log, "got binary message with len {}", b.len());
                     }
                     Message::Close(cf) => {
-                        info!(log, "got close message with {:?}", cf);
+                        warn!(log, "got close message with {:?}", cf);
                         break;
                     }
                     Message::Ping(_) | Message::Pong(_) => {}
                 }
             }
             let _ = websocket.write_pending(); // ignore error
+            warn!(log, "websocket thread done");
         });
     }
 
@@ -415,8 +417,7 @@ fn process_incoming_text_message<T: Read + Write>(
                         params,
                         file_context.as_ref().unwrap().file_names
                     )))
-                    .unwrap();
-            // todo
+                    .unwrap(); // todo
             } else {
                 match FileContext::from(log, command, params) {
                     Ok(mut s) => {
