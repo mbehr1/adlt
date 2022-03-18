@@ -85,7 +85,7 @@ impl Filter {
             ))));
         }
         let v: Value = v.unwrap();
-        println!("Filter::from_json got {:?}", v);
+        //println!("Filter::from_json got {:?}", v);
         let kind: FilterKind = match v["type"].as_u64() {
             Some(0) => FilterKind::Positive,
             Some(1) => FilterKind::Negative,

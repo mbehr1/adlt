@@ -240,7 +240,7 @@ where
                     None => 0,
                 };
                 lc_map.insert(*x, start_time);
-                println!("added lc_map {} {}", x, start_time);
+                // println!("added lc_map {} {}", x, start_time);
                 start_time
             }
         }
@@ -354,11 +354,11 @@ where
                         x.1 .2
                     }
                 };
-                if new_max_buffer_time_us != max_buffer_time_us
+                /* if new_max_buffer_time_us != max_buffer_time_us
                     && new_max_buffer_time_us > min_buffer_delay_us * 2
                 {
                     println!("max_buffer_time_us={}", new_max_buffer_time_us);
-                }
+                } */
                 new_max_buffer_time_us
             } else {
                 max_buffer_time_us
