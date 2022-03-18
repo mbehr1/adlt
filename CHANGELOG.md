@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.9.3 - 2022-03-18
+#### Bug Fixes
+- **(remote)** handle timedout as well - (ce4fe48) - Matthias Behr
+- less verbose output - (a8bab23) - Matthias Behr
+- - -
+
 ## v0.9.2 - 2022-03-18
 #### Bug Fixes
 - no panic if reception side closes earlier than sender - (f2b9e6f) - Matthias Behr
