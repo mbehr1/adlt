@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.9.2 - 2022-03-18
+#### Bug Fixes
+- no panic if reception side closes earlier than sender - (f2b9e6f) - Matthias Behr
+#### Tests
+- fix clippy warnings - (158dd50) - Matthias Behr
+- - -
+
 ## v0.9.1 - 2022-03-17
 #### Bug Fixes
 - **(parser)** dont panic on not yet supported types - (9ea6144) - Matthias Behr
