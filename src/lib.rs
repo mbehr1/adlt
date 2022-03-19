@@ -3,6 +3,7 @@ extern crate lazy_static;
 pub mod dlt;
 pub mod filter;
 pub mod lifecycle;
+pub mod plugins;
 pub mod utils;
 
 pub fn name() -> &'static str {

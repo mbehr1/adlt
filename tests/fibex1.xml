@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fx:FIBEX xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:fx="http://www.asam.net/xml/fbx" xmlns:ho="http://www.asam.net/xml" VERSION="4.1.2">
+    <fx:PROJECT ID="CURRENT_PROJECT">
+        <ho:SHORT-NAME>CURRENT_PROJECT</ho:SHORT-NAME>
+    </fx:PROJECT>
+    <fx:ELEMENTS>
+        <fx:CHANNELS>
+        </fx:CHANNELS>
+        <fx:ECUS>
+        </fx:ECUS>
+        <fx:SERVICE-INTERFACES>
+            <fx:SERVICE-INTERFACE xsi:type="service:SERVICE-INTERFACE-TYPE" ID="de_mbehr_testservices_TestService1API">
+                <ho:SHORT-NAME>TestService1API</ho:SHORT-NAME>
+                <ho:DESC>Interface to &quot;test service 1&quot;</ho:DESC>
+                <fx:SERVICE-IDENTIFIER>64098</fx:SERVICE-IDENTIFIER>
+                <!-- not yet fc:PACKAGE-REF ID-REF ... -->
+                <service:API-VERSION>
+                    <service:MAJOR>1</service:MAJOR>
+                    <service:MINOR>2</service:MINOR>
+                </service:API-VERSION>
+                <service:METHODS>
+                    <service:METHOD ID="de_mbehr_testservices_TestService1API_submitPar1">
+                        <ho:SHORT-NAME>submitPar1</ho:SHORT-NAME>
+                        <ho:DESC>Called by clients to submit parameter 1.
+
+                3rd (2nd was empty) line of description.</ho:DESC>
+                        <service:METHOD-IDENTIFIER>1000</service:METHOD-IDENTIFIER>
+                        <service:INPUT-PARAMETERS>
+                            <service:INPUT-PARAMETER ID="de_mbehr_testservices_TestService1API_submitPar1_param1">
+                                <ho:SHORT-NAME>Param1</ho:SHORT-NAME>
+                                <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_UInt8"/>
+                                <fx:UTILIZATION>
+                                    <fx:CODING-REF ID-REF="CURRENT_PROJECT_UInt8_invalidValue255_coding"/>
+                                </fx:UTILIZATION>
+                                <service:POSITION>0</service:POSITION>
+                                <service:MANDATORY>true</service:MANDATORY>
+                            </service:INPUT-PARAMETER>
+                        </service:INPUT-PARAMETERS>
+                        <service:RETURN-PARAMETERS>
+                            <service:RETURN-PARAMETER ID="de_mbehr_testservices_TestService1API_submitPar1_param1_TestService1Error">
+                                <ho:SHORT-NAME>TestService1Error</ho:SHORT-NAME>
+                                <fx:DATATYPE-REF ID-REF="de_mbehr_testservices_TestService1API_TestService1Error"/>
+                                <service:POSITION>0</service:POSITION>
+                                <service:MANDATORY>true</service:MANDATORY>
+                            </service:RETURN-PARAMETER>
+                        </service:RETURN-PARAMETERS>
+                    </service:METHOD>
+                </service:METHODS>
+                <service:FIELDS>
+                </service:FIELDS>
+                <service:EVENT-GROUPS>
+                </service:EVENT-GROUPS>
+            </fx:SERVICE-INTERFACE>
+        </fx:SERVICE-INTERFACES>
+        <fx:DATATYPES>
+            <fx:DATATYPE xsi:type="fx:COMMON-DATATYPE-TYPE" ID="CURRENT_PROJECT_UInt8">
+                <ho:SHORT-NAME>UInt8</ho:SHORT-NAME>
+                <fx:PACKAGE-REF ID-REF="ID_P_de_1"/>
+                <fx:CODING-REF ID-REF="CURRENT_PROJECT_UInt8_coding"/>
+            </fx:DATATYPE>
+            <fx:DATATYPE xsi:type="fx:ENUM-DATATYPE-TYPE" ID="de_mbehr_testservices_TestService1API_TestService1Error">
+                <ho:SHORT-NAME>TestService1Error</ho:SHORT-NAME>
+                <ho:DESC>Reason of possible failures when using test service 1.</ho:DESC>
+                <fx:CODING-REF ID-REF="CURRENT_PROJECT_UInt8_coding"/>
+                <fx:ENUMERATION-ELEMENTS>
+                <fx:ENUM-ELEMENT>
+                    <fx:VALUE>0</fx:VALUE>
+                    <fx:SYNONYM>OK</fx:SYNONYM>
+                </fx:ENUM-ELEMENT>
+                <fx:ENUM-ELEMENT>
+                    <fx:VALUE>1</fx:VALUE>
+                    <fx:SYNONYM>BUSY</fx:SYNONYM>
+                </fx:ENUM-ELEMENT>
+                <fx:ENUM-ELEMENT>
+                    <fx:VALUE>2</fx:VALUE>
+                    <fx:SYNONYM>FAILED</fx:SYNONYM>
+                </fx:ENUM-ELEMENT>
+                </fx:ENUMERATION-ELEMENTS>
+            </fx:DATATYPE>
+            <fx:DATATYPE xsi:type="fx:COMPLEX-DATATYPE-TYPE" ID="de_mbehr_testservices_TestService1API_DataUnion">
+                <ho:SHORT-NAME>DataUnion</ho:SHORT-NAME>
+                <ho:DESC>Example for a union</ho:DESC>
+                <fx:COMPLEX-DATATYPE-CLASS>UNION</fx:COMPLEX-DATATYPE-CLASS>
+                <fx:MEMBERS>
+                    <fx:MEMBER ID="de_mbehr_testservices_TestService1API_DataUnion_dataUInt8">
+                        <ho:SHORT-NAME>dataUInt8</ho:SHORT-NAME>
+                        <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_UInt8"/>
+                        <fx:POSITION>0</fx:POSITION>
+                    </fx:MEMBER>
+                    <fx:MEMBER ID="de_mbehr_testservices_TestService1API_DataUnion_dataSInt8">
+                        <ho:SHORT-NAME>dataSInt8</ho:SHORT-NAME>
+                        <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_Int8"/>
+                        <fx:POSITION>1</fx:POSITION>
+                    </fx:MEMBER>
+                    <fx:MEMBER ID="de_mbehr_testservices_TestService1API_DataUnion_dataUInt16">
+                        <ho:SHORT-NAME>dataUInt16</ho:SHORT-NAME>
+                        <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_UInt16"/>
+                        <fx:POSITION>2</fx:POSITION>
+                    </fx:MEMBER>
+                    <fx:MEMBER ID="de_mbehr_testservices_TestService1API_DataUnion_dataSInt16">
+                        <ho:SHORT-NAME>dataSInt16</ho:SHORT-NAME>
+                        <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_Int16"/>
+                        <fx:POSITION>3</fx:POSITION>
+                    </fx:MEMBER>
+                    <fx:MEMBER ID="de_mbehr_testservices_TestService1API_DataUnion_dataUInt32">
+                        <ho:SHORT-NAME>dataUInt32</ho:SHORT-NAME>
+                        <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_UInt32"/>
+                        <fx:POSITION>4</fx:POSITION>
+                    </fx:MEMBER>
+                    <fx:MEMBER ID="de_mbehr_testservices_TestService1API_DataUnion_dataSInt32">
+                        <ho:SHORT-NAME>dataSInt32</ho:SHORT-NAME>
+                        <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_Int32"/>
+                        <fx:POSITION>5</fx:POSITION>
+                    </fx:MEMBER>
+                </fx:MEMBERS>
+            </fx:DATATYPE>
+            <fx:DATATYPE xsi:type="fx:COMPLEX-DATATYPE-TYPE" ID="de_mbehr_testservices_TestService1API_DataStruct">
+                <ho:SHORT-NAME>DataStruct</ho:SHORT-NAME>
+                <fx:COMPLEX-DATATYPE-CLASS>STRUCTURE</fx:COMPLEX-DATATYPE-CLASS>
+                <fx:MEMBERS>
+                <fx:MEMBER ID="de_mbehr_testservices_TestService1API_DataStruct_member1">
+                    <ho:SHORT-NAME>member1</ho:SHORT-NAME>
+                    <ho:DESC>Description for member 1.</ho:DESC>
+                    <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_UInt16"/>
+                    <fx:POSITION>0</fx:POSITION>
+                </fx:MEMBER>
+                <fx:MEMBER ID="de_mbehr_testservices_TestService1API_DataStruct_member2">
+                    <ho:SHORT-NAME>member2</ho:SHORT-NAME>
+                    <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_UInt8"/>
+                    <fx:ARRAY-DECLARATION>
+                    <fx:ARRAY-DIMENSION>
+                        <fx:DIMENSION>1</fx:DIMENSION>
+                    </fx:ARRAY-DIMENSION>
+                    </fx:ARRAY-DECLARATION>
+                    <fx:POSITION>1</fx:POSITION>
+                </fx:MEMBER>
+                </fx:MEMBERS>
+            </fx:DATATYPE>
+            <fx:DATATYPE xsi:type="fx:COMPLEX-DATATYPE-TYPE" ID="de_mbehr_testservices_TestService1API_Typedef">
+                <ho:SHORT-NAME>DataTypedef</ho:SHORT-NAME>
+                <fx:COMPLEX-DATATYPE-CLASS>TYPEDEF</fx:COMPLEX-DATATYPE-CLASS>
+                <fx:MEMBERS>
+                <fx:MEMBER ID="de_mbehr_testservices_TestService1API_Typedef_HandleType">
+                    <ho:SHORT-NAME>HandleType</ho:SHORT-NAME>
+                    <fx:DATATYPE-REF ID-REF="CURRENT_PROJECT_UInt32"/>
+                    <fx:POSITION>0</fx:POSITION>
+                </fx:MEMBER>
+                </fx:MEMBERS>
+            </fx:DATATYPE>
+        </fx:DATATYPES>
+    </fx:ELEMENTS>
+    <fx:PROCESSING-INFORMATION>
+        <fx:CODINGS>
+            <fx:CODING ID="CURRENT_PROJECT_Boolean_coding">
+                <ho:SHORT-NAME>CODING_Boolean</ho:SHORT-NAME>
+                <ho:CODED-TYPE ho:BASE-DATA-TYPE="A_UINT8" CATEGORY="STANDARD-LENGTH-TYPE"/>
+            </fx:CODING>
+            <fx:CODING ID="CURRENT_PROJECT_UInt8_coding">
+                <ho:SHORT-NAME>CODING_UInt8</ho:SHORT-NAME>
+                <ho:CODED-TYPE ho:BASE-DATA-TYPE="A_UINT8" CATEGORY="STANDARD-LENGTH-TYPE"/>
+            </fx:CODING>
+            <fx:CODING ID="CURRENT_PROJECT_UInt8_invalidValue255_coding">
+                <ho:SHORT-NAME>CODING_UInt8_invalidValue255</ho:SHORT-NAME>
+                <ho:CODED-TYPE ho:BASE-DATA-TYPE="A_UINT8" CATEGORY="STANDARD-LENGTH-TYPE"/>
+                <ho:COMPU-METHODS>
+                <ho:COMPU-METHOD>
+                    <ho:SHORT-NAME>COMPUMETHOD_UInt8_invalidValue255</ho:SHORT-NAME>
+                    <ho:CATEGORY>IDENTICAL</ho:CATEGORY>
+                    <ho:INTERNAL-CONSTRS>
+                    <ho:SCALE-CONSTR VALIDITY="NOT-VALID">
+                        <ho:LOWER-LIMIT INTERVAL-TYPE="CLOSED">255.0</ho:LOWER-LIMIT>
+                        <ho:UPPER-LIMIT INTERVAL-TYPE="CLOSED">255.0</ho:UPPER-LIMIT>
+                    </ho:SCALE-CONSTR>
+                    </ho:INTERNAL-CONSTRS>
+                </ho:COMPU-METHOD>
+                </ho:COMPU-METHODS>
+            </fx:CODING>
+        </fx:CODINGS>
+    </fx:PROCESSING-INFORMATION>
+</fx:FIBEX>
