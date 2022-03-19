@@ -1,4 +1,5 @@
 use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
+use adlt::plugins::{factory::get_plugin, plugin::Plugin};
 use adlt::utils::{
     get_first_message_from_file, remote_types, DltMessageIterator, LowMarkBufReader,
 };
@@ -287,6 +288,7 @@ impl StreamContext {
 struct FileContext {
     file_names: Vec<String>,
     sort_by_time: bool, // sort by timestamp
+    plugins_active: Vec<Box<dyn Plugin + Send>>,
     parsing_thread: Option<ParserThreadType>,
     all_msgs: Vec<adlt::dlt::DltMessage>,
     streams: Vec<StreamContext>,
@@ -373,9 +375,38 @@ impl FileContext {
             ));
         }
 
+        // plugins
+        let mut plugins_active: Vec<Box<dyn Plugin + Send>> = vec![];
+        match &v["plugins"] {
+            serde_json::Value::Array(a) => {
+                for plugin in a {
+                    if plugin.is_object() {
+                        info!(log, "FileContext plugins got '{:?}'", plugin.as_object());
+                        let p = get_plugin(plugin.as_object().unwrap());
+                        if let Some(p) = p {
+                            plugins_active.push(p);
+                        }
+                    } else {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "wrong type for 'plugins'",
+                        ));
+                    }
+                }
+            }
+            serde_json::Value::Null => {} // no file (leads to an error later)
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "wrong type for 'plugins'",
+                ));
+            }
+        }
+
         Ok(FileContext {
             file_names,
             sort_by_time,
+            plugins_active,
             parsing_thread: None,
             all_msgs: Vec::new(),
             streams: Vec::new(),
@@ -433,12 +464,23 @@ fn process_incoming_text_message<T: Read + Write>(
             } else {
                 match FileContext::from(log, command, params) {
                     Ok(mut s) => {
+                        let plugins_active_str = serde_json::json!(s
+                            .plugins_active
+                            .iter()
+                            .map(|p| p.name())
+                            .collect::<Vec<&str>>());
+
                         // setup parsing thread
+                        // todo think about it. we do need to move the plugins now out as we pass them to a different thread
+                        // and they are not + Sync (but only +Send)
+                        let plugins_active = std::mem::take(&mut s.plugins_active);
                         s.parsing_thread = Some(create_parser_thread(
                             log.clone(),
                             s.file_names.clone(),
                             s.sort_by_time,
+                            plugins_active,
                         ));
+
                         file_context.replace(s);
 
                         // lifecycle detection thread
@@ -446,7 +488,10 @@ fn process_incoming_text_message<T: Read + Write>(
                         // and send the messages via mpsc back to here (FileContext.all_msgs)
 
                         websocket
-                            .write_message(Message::Text(format!("ok: open '{}'", params)))
+                            .write_message(Message::Text(format!(
+                                "ok: open {{\"plugins_active\":{}}}",
+                                plugins_active_str
+                            )))
                             .unwrap(); // todo
                     }
                     Err(e) => {
@@ -840,6 +885,28 @@ struct ParserThreadType {
     rx: std::sync::mpsc::Receiver<adlt::dlt::DltMessage>,
 }
 
+fn plugin_thread(
+    inflow: std::sync::mpsc::Receiver<adlt::dlt::DltMessage>,
+    outflow: std::sync::mpsc::Sender<adlt::dlt::DltMessage>,
+    mut plugins_active: Vec<Box<dyn Plugin + Send>>,
+) -> Result<Vec<Box<dyn Plugin + Send>>, std::sync::mpsc::SendError<adlt::dlt::DltMessage>> {
+    for mut msg in inflow {
+        // pass the message through the plugins (sequentially, not parallel)
+        let mut forward_msg = true;
+        for plugin in &mut plugins_active {
+            let plugin = plugin.as_mut();
+            if !plugin.process_msg(&mut msg) {
+                forward_msg = false;
+                break;
+            }
+        }
+        if forward_msg {
+            outflow.send(msg)?;
+        }
+    }
+    Ok(plugins_active)
+}
+
 /// create a parser thread including a channel
 ///
 /// The thread reads data from the BufReader, parses the DLT messages via `parse_dlt_with_storage_header`
@@ -849,32 +916,53 @@ fn create_parser_thread(
     log: slog::Logger,
     input_file_names: Vec<String>,
     sort_by_time: bool,
+    plugins_active: Vec<Box<dyn Plugin + Send>>,
 ) -> ParserThreadType {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let (tx2, rx2) = std::sync::mpsc::channel();
+    let (tx_for_parse_thread, rx_from_parse_thread) = std::sync::mpsc::channel();
+    let (tx_for_lc_thread, rx_from_lc_thread) = std::sync::mpsc::channel();
     let (lcs_r, lcs_w) =
         evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
+
+    // the message flow is:
+    // generated by parser_thread  -> lc_thread -> plugin_thread (if plugins_active) -> sort_thread
+
     let lc_thread = std::thread::spawn(move || {
-        adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2)
+        adlt::lifecycle::parse_lifecycles_buffered_from_stream(
+            lcs_w,
+            rx_from_parse_thread,
+            tx_for_lc_thread,
+        )
     });
+
+    let (_plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
+        let (tx_for_plugin_thread, rx_from_plugin_thread) = std::sync::mpsc::channel();
+        (
+            Some(std::thread::spawn(move || {
+                plugin_thread(rx_from_lc_thread, tx_for_plugin_thread, plugins_active)
+            })),
+            rx_from_plugin_thread,
+        )
+    } else {
+        (None, rx_from_lc_thread)
+    };
 
     let sort_thread_lcs_r = lcs_r.clone();
     let (sort_thread, rx_final) = if sort_by_time {
-        let (tx3, rx3) = std::sync::mpsc::channel();
+        let (tx_for_sort_thread, rx_from_sort_thread) = std::sync::mpsc::channel();
         (
             Some(std::thread::spawn(move || {
                 adlt::utils::buffer_sort_messages(
-                    rx2,
-                    tx3,
+                    rx_from_plugin_thread,
+                    tx_for_sort_thread,
                     &sort_thread_lcs_r,
                     3,
                     2 * adlt::utils::US_PER_SEC,
                 )
             })),
-            rx3,
+            rx_from_sort_thread,
         )
     } else {
-        (None, rx2)
+        (None, rx_from_plugin_thread)
     };
 
     ParserThreadType {
@@ -899,7 +987,7 @@ fn create_parser_thread(
                     loop {
                         match it.next() {
                             Some(msg) => {
-                                if let Err(e) = tx.send(msg) {
+                                if let Err(e) = tx_for_parse_thread.send(msg) {
                                     info!(log, "parser_thread aborted on err={}", e; "bytes_processed" => bytes_processed, "msgs_processed" => messages_processed);
                                     return Err(Box::new(e));
                                 }
@@ -913,7 +1001,7 @@ fn create_parser_thread(
                         }
                     }
                 }
-                drop(tx);
+                drop(tx_for_parse_thread);
                 info!(log, "parser_thread stopped"; "bytes_processed" => bytes_processed);
                 Ok(())
             },

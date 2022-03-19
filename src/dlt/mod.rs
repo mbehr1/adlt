@@ -521,6 +521,7 @@ pub struct DltMessage {
     pub standard_header: DltStandardHeader,
     pub extended_header: Option<DltExtendedHeader>, // todo optimize ecu, apid, ctid into one map<u32>
     pub payload: Vec<u8>,
+    pub payload_text: Option<String>,
     pub lifecycle: crate::lifecycle::LifecycleId, // 0 = none, otherwise the id of an lifecycle
 }
 
@@ -650,6 +651,7 @@ impl DltMessage {
             standard_header,
             extended_header,
             payload,
+            payload_text: None,
             lifecycle: 0,
         }
     }
@@ -695,8 +697,8 @@ impl DltMessage {
             timestamp_dms = self.timestamp_dms,
             mcnt = self.mcnt(),
             ecu = self.ecu,
-            apid = self.apid().unwrap_or(&DEFAULT_APID_CTID).to_string(),
-            ctid = self.ctid().unwrap_or(&DEFAULT_APID_CTID).to_string(),
+            apid = self.apid().unwrap_or(&DEFAULT_APID_CTID),
+            ctid = self.ctid().unwrap_or(&DEFAULT_APID_CTID),
         )?;
         if self.extended_header.is_some() {
             match self.mstp() {
@@ -730,7 +732,19 @@ impl DltMessage {
         Ok(())
     }
 
+    /// overwrite the payload text
+    ///
+    /// this is intended to be used by e.g. plugins to modify the payload text
+    /// for now we use a 2nd variable but we could as well simply modify the payload
+    /// todo think about better ways (pros/cons)
+    pub fn set_payload_text(&mut self, text: String) {
+        self.payload_text = Some(text);
+    }
+
     pub fn payload_as_text(&self) -> Result<String, std::fmt::Error> {
+        if let Some(text) = &self.payload_text {
+            return Ok(text.clone());
+        }
         let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
         let mut args = self.into_iter();
         if self.is_verbose() {
@@ -1022,6 +1036,7 @@ impl DltMessage {
             },
             extended_header: None,
             payload: [].to_vec(),
+            payload_text: None,
             lifecycle: 0,
         }
     }
@@ -1040,6 +1055,7 @@ impl DltMessage {
             },
             extended_header: None,
             payload: [].to_vec(),
+            payload_text: None,
             lifecycle: 0,
         }
     }
@@ -1106,9 +1122,9 @@ const DLT_SCOD_BIN: u32 = 0x00018000;
 
 #[derive(Debug, PartialEq)]
 pub struct DltArg<'a> {
-    type_info: u32,        // in host endianess already
-    is_big_endian: bool,   // for the payload raw
-    payload_raw: &'a [u8], // data within is
+    type_info: u32,            // in host endianess already
+    is_big_endian: bool,       // for the payload raw
+    pub payload_raw: &'a [u8], // data within is
 }
 
 impl<'a> IntoIterator for &'a DltMessage {
@@ -1895,6 +1911,7 @@ mod tests {
                 }),
                 lifecycle: 0,
                 payload: vec![1, 2, 3, 4, 5],
+                payload_text: None,
             };
             let args_iter = m.into_iter();
             assert_eq!(args_iter.count(), 2);
@@ -1923,6 +1940,7 @@ mod tests {
                 }),
                 lifecycle: 0,
                 payload: vec![1, 2, 3, 4],
+                payload_text: None,
             };
             let args_iter = m.into_iter();
             assert_eq!(args_iter.count(), 1);
@@ -1949,6 +1967,7 @@ mod tests {
                 }),
                 lifecycle: 0,
                 payload: vec![0x11, 0, 0, 0, 1, 0x11, 0, 0, 0, 0], // two bools
+                payload_text: None,
             };
             assert_eq!(u32::from_be_bytes([0, 0, 0, 0x10]), 0x10);
             assert_eq!(u32::from_le_bytes([0x10, 0, 0, 0]), 0x10); // least sign. byte first

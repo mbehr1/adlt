@@ -653,7 +653,7 @@ mod tests {
             "Time elapsed reading/verifying {}msgs is: {:?}",
             NUMBER_ITERATIONS, duration
         );
-        assert!(!rx2.recv().is_ok());
+        assert!(rx2.recv().is_err());
         // and lifecycle info be available
         for a in lcs_r.read().iter() {
             println!("lcs_r content {:?}", a);
@@ -791,7 +791,7 @@ mod tests {
         let t = std::thread::spawn(move || {
             for _ in 0..4 {
                 // 4 messages can be received. two from first and the two from second lc
-                assert!(!rx.recv().is_err()); // one msg can be received
+                assert!(rx.recv().is_ok()); // one msg can be received
             }
             drop(tx);
             rx
@@ -1054,6 +1054,7 @@ mod tests {
                         },
                         extended_header: None,
                         payload: [].to_vec(),
+                        payload_text: None,
                     });
                 }
             }
