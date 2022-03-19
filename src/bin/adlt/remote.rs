@@ -3,13 +3,13 @@ use adlt::utils::{
     get_first_message_from_file, remote_types, DltMessageIterator, LowMarkBufReader,
 };
 use clap::{App, Arg, SubCommand};
-use slog::{debug, error, info, warn}; // crit, debug, info
+use slog::{debug, error, info, warn};
 use std::fs::File;
 use std::io::prelude::*;
 use std::net::TcpListener;
 
 use tungstenite::{
-    accept_hdr,
+    accept_hdr_with_config,
     handshake::server::{Request, Response},
     Message, WebSocket,
 };
@@ -74,11 +74,23 @@ pub fn remote(
 
                 Ok(response)
             };
+
+            let web_socket_config = tungstenite::protocol::WebSocketConfig {
+                max_message_size: Some(1_000_000_000),
+                max_send_queue: None,
+                max_frame_size: None,
+                accept_unmasked_frames: false,
+            };
+
             let a_stream = stream.unwrap();
             a_stream
                 .set_read_timeout(Some(std::time::Duration::from_millis(100)))
                 .expect("failed to set_read_timeout"); // panic on failure
-            let mut websocket = accept_hdr(a_stream, callback).unwrap();
+            a_stream
+                .set_write_timeout(None)
+                .expect("failed to set_write_timeout");
+            let mut websocket =
+                accept_hdr_with_config(a_stream, callback, Some(web_socket_config)).unwrap();
 
             let mut file_context: Option<FileContext> = None;
 
