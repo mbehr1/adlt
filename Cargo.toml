@@ -48,5 +48,5 @@ lazy_static = "1.4.0"
 regex = "1.5.4"
 quick-xml = "0.22.0"
 bincode = { git = "https://github.com/bincode-org/bincode", tag="v2.0.0-rc.1" }
-bitvec = "1"
-funty = "2.0.0"
+afibex = "0.1.0"
+asomeip = "0.1.0"

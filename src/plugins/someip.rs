@@ -5,12 +5,10 @@
 
 use crate::{
     dlt::{DltChar4, DltMessage, DltMessageNwType, DltMessageType},
-    plugins::{
-        fibex::{get_all_fibex_in_dir, load_all_fibex, FibexData},
-        plugin::Plugin,
-        someip_utils::decode_someip_header_and_payload,
-    },
+    plugins::plugin::Plugin,
 };
+use afibex::fibex::{get_all_fibex_in_dir, load_all_fibex, FibexData};
+use asomeip::utils::decode_someip_header_and_payload;
 use std::{error::Error, fmt, path::Path};
 
 #[derive(Debug)]
