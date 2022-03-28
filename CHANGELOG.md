@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.10.0 - 2022-03-28
+#### Features
+- **(plugins)** basic plugin infrastructure - (c827bc8) - Matthias Behr
+#### Miscellaneous Chores
+- use afibex and asomeip crate - (5eed378) - Matthias Behr
+- - -
+
 ## v0.9.4 - 2022-03-19
 #### Bug Fixes
 - **(remote)** max_message_size and write_timeout - (285b8b8) - Matthias Behr
