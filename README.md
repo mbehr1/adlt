@@ -14,6 +14,9 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 - **Sorting by timestamp** taking the lifecycles into account.
 - **Filter**...
 
+- **remote** server support: serve requests via wss. E.g. used with [DLT-Logs Visual Studio Code Extension](https://marketplace.visualstudio.com/items?itemName=mbehr1.dlt-logs).
+- builtin **plugins** e.g. for SOME/IP payload decoding (currently only for remote server)
+
 ## Usage examples
 
 ### command line tool
