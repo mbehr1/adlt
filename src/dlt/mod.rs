@@ -1115,16 +1115,30 @@ const DLT_TYLE_32BIT: u8 = 3;
 const DLT_TYLE_64BIT: u8 = 4;
 const DLT_TYLE_128BIT: u8 = 5;
 
-const DLT_SCOD_ASCII: u32 = 0x00000000;
-const DLT_SCOD_UTF8: u32 = 0x00008000;
-const DLT_SCOD_HEX: u32 = 0x00010000;
-const DLT_SCOD_BIN: u32 = 0x00018000;
+pub const DLT_SCOD_ASCII: u32 = 0x00000000;
+pub const DLT_SCOD_UTF8: u32 = 0x00008000;
+pub const DLT_SCOD_HEX: u32 = 0x00010000;
+pub const DLT_SCOD_BIN: u32 = 0x00018000;
 
 #[derive(Debug, PartialEq)]
 pub struct DltArg<'a> {
     type_info: u32,            // in host endianess already
-    is_big_endian: bool,       // for the payload raw
+    pub is_big_endian: bool,   // for the payload raw
     pub payload_raw: &'a [u8], // data within is
+}
+
+impl<'a> DltArg<'a> {
+    pub fn is_string(&self) -> bool {
+        self.type_info & DLT_TYPE_INFO_STRG > 0
+    }
+    pub fn is_raw(&self) -> bool {
+        self.type_info & DLT_TYPE_INFO_RAWD > 0
+    }
+
+    /// return the scod encoding bits (DLT_SCOD_...)
+    pub fn scod(&self) -> u32 {
+        self.type_info & DLT_TYPE_INFO_MASK_SCOD
+    }
 }
 
 impl<'a> IntoIterator for &'a DltMessage {
