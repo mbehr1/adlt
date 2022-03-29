@@ -2,6 +2,20 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.11.0 - 2022-03-29
+#### Bug Fixes
+- updated asomeip, afibex deps - (4b278d7) - Matthias Behr
+#### Documentation
+- readme mention remote feature - (b5ba696) - Matthias Behr
+#### Features
+- **(someip)** segmented msgs support - (36ccbec) - Matthias Behr
+#### Miscellaneous Chores
+- **(version)** v0.10.0 - (9bd3919) - Matthias Behr
+- change to rust 2021 edition - (c0e4db7) - Matthias Behr
+#### Refactoring
+- make some DltArg members pub - (5964d2c) - Matthias Behr
+- - -
+
 ## v0.10.0 - 2022-03-28
 #### Features
 - **(plugins)** basic plugin infrastructure - (c827bc8) - Matthias Behr
