@@ -21,7 +21,7 @@ fn new_lifecycle_item(lc: Lifecycle) -> LifecycleItem {
     //std::sync::Arc::new(std::cell::Cell::from(lc))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Lifecycle {
     /// unique id
     id: LifecycleId,
@@ -43,11 +43,15 @@ pub struct Lifecycle {
     initial_start_time: u64,
     max_timestamp_us: u64, // max. timestamp of the messages assigned to this lifecycle. Used to determine end_time()
     last_reception_time: u64, // last (should be max.) reception_time (i.e. from last message)
+
+    /// sw version detected for this lifecycle
+    /// this is parsed from the control messages GET_SW_VERSION
+    pub sw_version: Option<String>,
 }
 
 impl evmap::ShallowCopy for Lifecycle {
     unsafe fn shallow_copy(&self) -> std::mem::ManuallyDrop<Self> {
-        std::mem::ManuallyDrop::new(*self)
+        std::mem::ManuallyDrop::new(self.clone())
     }
 }
 
@@ -122,6 +126,7 @@ impl Lifecycle {
             initial_start_time: msg.reception_time_us - timestamp_us,
             max_timestamp_us: timestamp_us,
             last_reception_time: msg.reception_time_us,
+            sw_version: None, // might be wrongif the first message is a GET_SW_VERSION but we ignore this case
         };
         msg.lifecycle = alc.id;
         alc
@@ -290,9 +295,9 @@ where
             match ecu_map.get_mut(&lc.ecu) {
                 None => {
                     //ecu_map.insert(lc.ecu.clone(), [lc.id].to_vec());
-                    ecu_map.insert(lc.ecu, [*lc].to_vec());
+                    ecu_map.insert(lc.ecu, [lc.clone()].to_vec());
                 }
-                Some(v) => v.push(*lc),
+                Some(v) => v.push(lc.clone()),
             }
         }
     }
@@ -404,7 +409,7 @@ where
                         // this assert is met. so we can ignore the above prev_lc merge part assert!(!buffered_lcs.contains(&lc2.id));
                         // and prev_lc is still buffered as well to as well not contained.
                         // to update nr of msgs in lifecycle and end time:
-                        lcs_w.update(lc2.id, *lc2);
+                        lcs_w.update(lc2.id, lc2.clone());
                         lcs_w_needs_refresh = true;
                     }
                     // todo refresh logic needed, e.g. by option every x sec or every x msgs
@@ -461,7 +466,7 @@ where
                             for lc in &buffered_lcs {
                                 println!(" buffered_lc={}", lc);
                             }*/
-                            lcs_w.insert(lc.id, new_lifecycle_item(*lc));
+                            lcs_w.insert(lc.id, new_lifecycle_item(lc.clone()));
                             lcs_w_needs_refresh = true;
 
                             // if the first msg in buffered_msgs belongs to this confirmed lc
@@ -527,7 +532,7 @@ where
         'outer: for vs in ecu_map.values() {
             for v in vs {
                 if v.id == lc_id {
-                    lcs_w.insert(lc_id, new_lifecycle_item(*v));
+                    lcs_w.insert(lc_id, new_lifecycle_item(v.clone()));
                     // println!("lcs_w content added at end id={:?} lc={:?}", lc_id, *v);
                     break 'outer;
                 }
