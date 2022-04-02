@@ -29,13 +29,13 @@ Print ascii representation of a DLT file:
 ```sh
 adlt convert -a <dlt_file>
 ```
-Show all lifecycles (ecu, time range and number of messages) of a DLT file:
+Show all lifecycles (ecu, time range, number of messages and SW verion) of a DLT file:
 ```
 adlt convert <dlt_file>
 ...
 have 3 lifecycles:
-LC#  1: ECU1 2021/06/24 08:50:58.529663 - 08:53:51 #   26523
-LC#  2: ECU1 2021/06/24 08:54:29.957936 - 08:55:08 #  181337
+LC#  1: ECU1 2021/06/24 08:50:58.529663 - 08:53:51 #   26523 <sw version if contained as GET_SW_VERSION response>
+LC#  2: ECU1 2021/06/24 08:54:29.957936 - 08:55:08 #  181337 <sw version>
 LC#  3: DLOG 2021/06/24 08:54:44.945600 - 08:54:44 #       1
 ```
 Output/extract a specific lifecycle into file sorted by timestamps per lifecycle:

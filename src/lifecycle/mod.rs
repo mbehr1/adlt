@@ -4,7 +4,7 @@
 // https://lib.rs/crates/arccstr or https://lib.rs/crates/arcstr
 // once_cell for one time inits.
 // use chrono::{Local, TimeZone};
-use crate::dlt::{DltChar4, DltMessage};
+use crate::dlt::{DltChar4, DltMessage, SERVICE_ID_GET_SOFTWARE_VERSION};
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -153,6 +153,11 @@ impl Lifecycle {
         // we mark this in the merged lc as max_timestamp_dms <- id
         lc_to_merge.max_timestamp_us = self.id as u64;
         lc_to_merge.start_time = u64::MAX;
+
+        // if the lc_to_merge has a sw_version and we not, we do use that one:
+        if self.sw_version.is_none() && lc_to_merge.sw_version.is_some() {
+            self.sw_version = lc_to_merge.sw_version.take();
+        }
     }
 
     /// returns whether this lifecycled was merged (so is not valid any longer) into a different lifecycle.
@@ -224,6 +229,37 @@ impl Lifecycle {
             msg.lifecycle = self.id;
             self.nr_msgs += 1;
             // println!("update: lifecycle updated by {:?} to LC:{:?}", msg, &self);
+
+            // sw-version contained?
+            if self.sw_version.is_none() && msg.is_ctrl_response() {
+                let mut args = msg.into_iter();
+                let message_id_arg = args.next();
+                let message_id = match message_id_arg {
+                    Some(a) => {
+                        if a.is_big_endian {
+                            u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
+                        } else {
+                            u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
+                        }
+                    }
+                    None => 0,
+                };
+                if message_id == SERVICE_ID_GET_SOFTWARE_VERSION {
+                    let payload_arg = args.next();
+                    let (payload, is_big_endian) = match payload_arg {
+                        Some(a) => (a.payload_raw, a.is_big_endian),
+                        None => (&[] as &[u8], false),
+                    };
+                    if payload.len() >= 5 {
+                        if let Some(sw_vers) =
+                            DltMessage::parse_ctrl_sw_version_payload(is_big_endian, &payload[1..])
+                        {
+                            self.sw_version = Some(sw_vers);
+                        }
+                    }
+                }
+            }
+
             None
         } else {
             /*println!(
@@ -600,8 +636,10 @@ where
 #[cfg(test)]
 mod tests {
     //use super::*;
+    use crate::dlt::*;
     use crate::lifecycle::*;
     use ntest::timeout;
+    use std::str::FromStr;
     use std::sync::mpsc::channel;
     use std::time::Instant;
     extern crate nohash_hasher;
@@ -832,7 +870,7 @@ mod tests {
         let t = std::thread::spawn(move || {
             for _ in 0..2 {
                 // 2 messages can be received. one from first and one from second lc
-                assert!(!rx.recv().is_err()); // one msg can be received
+                assert!(rx.recv().is_ok()); // one msg can be received
             }
             drop(tx);
             rx
@@ -881,7 +919,7 @@ mod tests {
         let t = std::thread::spawn(move || {
             for _ in 0..6 {
                 // 4 messages can be received. two from first LC and two from 2nd lc and two from 3rd
-                assert!(!rx.recv().is_err()); // one msg can be received
+                assert!(rx.recv().is_ok()); // one msg can be received
             }
             assert!(rx
                 .recv_timeout(std::time::Duration::from_millis(10))
@@ -924,7 +962,7 @@ mod tests {
         let t = std::thread::spawn(move || {
             for _ in 0..2 {
                 // 2 messages can be received. one from first LC and one from 2nd lc
-                assert!(!rx.recv().is_err()); // one msg can be received
+                assert!(rx.recv().is_ok()); // one msg can be received
             }
             assert!(rx
                 .recv_timeout(std::time::Duration::from_millis(10))
@@ -1163,7 +1201,7 @@ mod tests {
             // so using the mapped lifecycles gives the current view
             for _i in 0..NUMBER_MSGS {
                 let rm = rx2.recv();
-                assert!(!rm.is_err());
+                assert!(rm.is_ok());
                 let m = rm.unwrap();
                 assert!(m.lifecycle != 0);
                 assert!(
@@ -1439,5 +1477,53 @@ mod tests {
         let _lcs_w = t2.join().unwrap();
         t3.join().unwrap();
         t4.join().unwrap();
+    }
+
+    /// return a control message
+    fn get_testmsg_control(big_endian: bool, noar: u8, payload_buf: &[u8]) -> DltMessage {
+        let sh = DltStorageHeader {
+            secs: 0,
+            micros: 0,
+            ecu: DltChar4::from_str("ECU1").unwrap(),
+        };
+        let exth = DltExtendedHeader {
+            verb_mstp_mtin: 0x3 << 1 | (0x02 << 4),
+            noar,
+            apid: DltChar4::from_buf(b"DA1\0"),
+            ctid: DltChar4::from_buf(b"DC1\0"),
+        };
+        let stdh = DltStandardHeader {
+            htyp: 0x21
+                | (if big_endian {
+                    DLT_STD_HDR_BIG_ENDIAN
+                } else {
+                    0
+                }),
+            mcnt: 0,
+            len: (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + payload_buf.len()) as u16,
+        };
+        let mut add_header_buf = Vec::new();
+        exth.to_write(&mut add_header_buf).unwrap();
+
+        DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
+    }
+
+    #[test]
+    fn sw_version() {
+        let mut m = get_testmsg_control(
+            false,
+            1,
+            &[19, 0, 0, 0, 0, 4, 0, 0, 0, b'S', b'W', b' ', b'1'],
+        );
+        let mut m2 = get_testmsg_control(
+            false,
+            1,
+            &[19, 0, 0, 0, 0, 4, 0, 0, 0, b'S', b'W', b' ', b'2'],
+        );
+        let mut lc = Lifecycle::new(&mut m);
+        assert!(lc.sw_version.is_none()); // this is weird but currently accepted impl.
+        lc.update(&mut m2);
+        assert!(lc.sw_version.is_some());
+        assert_eq!(lc.sw_version.unwrap(), "SW 2");
     }
 }

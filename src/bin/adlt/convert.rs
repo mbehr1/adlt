@@ -410,6 +410,8 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     // print lifecycles:
     if let OutputStyle::None = output_style {
+        const EMPTY_STR: String = String::new();
+        const EMPTY_STR_R: &String = &EMPTY_STR;
         if let Some(..) = writer_screen {
             let writer_screen = writer_screen.as_mut().unwrap();
             if let Some(a) = lcs_r.read() {
@@ -420,7 +422,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 for lc in sorted_lcs {
                     writeln!(
                         writer_screen,
-                        "LC#{:3}: {:4} {} - {} #{:8} {}",
+                        "LC#{:3}: {:4} {} - {} #{:8}{} {}",
                         lc.id(),
                         lc.ecu,
                         Local
@@ -431,9 +433,14 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                             .format("%H:%M:%S"),
                         lc.nr_msgs,
                         if lc.only_control_requests() {
-                            "CTRL_REQUESTS_ONLY"
+                            " CTRL_REQUESTS_ONLY"
                         } else {
                             ""
+                        },
+                        if let Some(sw_vers) = &lc.sw_version {
+                            sw_vers
+                        } else {
+                            EMPTY_STR_R
                         }
                     )?;
                 }
