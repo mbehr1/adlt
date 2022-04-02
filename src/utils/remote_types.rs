@@ -7,6 +7,7 @@ pub struct BinLifecycle {
     pub nr_msgs: u32,
     pub start_time: u64,
     pub end_time: u64,
+    pub sw_version: Option<String>,
 }
 
 #[derive(Encode)]

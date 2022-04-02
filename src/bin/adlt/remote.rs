@@ -673,15 +673,17 @@ fn process_file_context<T: Read + Write>(
                 let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&lc_map);
                 info!(log, "lcs: #{}", sorted_lcs.len());
 
-                // encode the lifecycles:
+                // encode the lifecycles: (all but the ones with only ctrl requests)
                 let lcs = sorted_lcs
                     .iter()
+                    .filter(|l| !l.only_control_requests())
                     .map(|&l| remote_types::BinLifecycle {
                         id: l.id(),
                         ecu: l.ecu.as_u32le(),
                         nr_msgs: l.nr_msgs,
                         start_time: l.start_time,
                         end_time: l.end_time(),
+                        sw_version: l.sw_version.to_owned(),
                     })
                     .collect();
                 let encoded: Vec<u8> =
