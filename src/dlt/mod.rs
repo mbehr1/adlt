@@ -195,7 +195,7 @@ impl DltStorageHeader {
 
 // dlt standard header htyp bitfield:
 const DLT_STD_HDR_HAS_EXT_HDR: u8 = 1;
-const DLT_STD_HDR_BIG_ENDIAN: u8 = 1 << 1;
+pub(crate) const DLT_STD_HDR_BIG_ENDIAN: u8 = 1 << 1;
 const DLT_STD_HDR_HAS_ECU_ID: u8 = 1 << 2;
 const DLT_STD_HDR_HAS_SESSION_ID: u8 = 1 << 3;
 const DLT_STD_HDR_HAS_TIMESTAMP: u8 = 1 << 4;
@@ -498,7 +498,10 @@ impl DltExtendedHeader {
     }
 
     /// serialize to a writer in DLT byte format
-    fn to_write(&self, writer: &mut impl std::io::Write) -> Result<usize, std::io::Error> {
+    pub(crate) fn to_write(
+        &self,
+        writer: &mut impl std::io::Write,
+    ) -> Result<usize, std::io::Error> {
         let b1 = &[self.verb_mstp_mtin, self.noar];
         writer.write_all(b1)?;
         writer.write_all(&self.apid.char4)?;
@@ -560,6 +563,8 @@ static SERVICE_ID_NAMES: [&str; 21] = [
     "message_buffer_overflow",
 ];
 
+pub const SERVICE_ID_GET_SOFTWARE_VERSION: u32 = 19;
+
 static CTRL_RESPONSE_STRS: [&str; 9] = [
     "ok",
     "not_supported",
@@ -571,6 +576,10 @@ static CTRL_RESPONSE_STRS: [&str; 9] = [
     "",
     "no_matching_context_id",
 ];
+
+lazy_static! {
+    static ref RE_NEW_LINE: regex::Regex = regex::Regex::new(r"[\r\n\t]").unwrap();
+}
 
 impl DltMessage {
     pub fn timestamp_us(&self) -> u64 {
@@ -594,6 +603,7 @@ impl DltMessage {
         }
     }
 
+    /// return whether the message is a CONTROL_REQUEST message
     pub fn is_ctrl_request(&self) -> bool {
         match &self.extended_header {
             Some(e) => {
@@ -601,6 +611,19 @@ impl DltMessage {
                 (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
             (e.verb_mstp_mtin>>4 & 0x0f) == 1
                 // mtin == MTIN_CTRL.CONTROL_REQUEST
+            }
+            None => false,
+        }
+    }
+
+    /// return whether the message is a CONTROL_RESPONSE message
+    pub fn is_ctrl_response(&self) -> bool {
+        match &self.extended_header {
+            Some(e) => {
+                // could return e.mstp() == DltMessageType::Control(DltMessageControlType::Response)
+                (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
+                (e.verb_mstp_mtin>>4 & 0x0f) == 2
+                // mtin == MTIN_CTRL.CONTROL_RESPONSE
             }
             None => false,
         }
@@ -891,10 +914,6 @@ impl DltMessage {
                     }
                 } else if is_strg {
                     let scod = arg.type_info & DLT_TYPE_INFO_MASK_SCOD;
-                    lazy_static! {
-                        static ref RE: regex::Regex = regex::Regex::new(r"[\r\n\t]").unwrap();
-                    }
-
                     match scod {
                         DLT_SCOD_UTF8 => {
                             // they should be zero terminated
@@ -909,7 +928,7 @@ impl DltMessage {
                                         RE.replace_all(&s, " ").into_owned(),
                                     ),
                                 };*/
-                                let s = RE.replace_all(&s, " ");
+                                let s = RE_NEW_LINE.replace_all(&s, " ");
                                 text.write_str(&s)?;
                             }
                         }
@@ -924,7 +943,7 @@ impl DltMessage {
                                 let (s, _) = WINDOWS_1252.decode_without_bom_handling(
                                     &arg.payload_raw[0..arg.payload_raw.len() - 1],
                                 );
-                                let s = RE.replace_all(&s, " ");
+                                let s = RE_NEW_LINE.replace_all(&s, " ");
                                 text.write_str(&s)?;
 
                                 /* instead of WINDOWS-1252 we could use for printable ones only:
@@ -966,24 +985,23 @@ impl DltMessage {
                         u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
                     }
                 }
-                None => 0,
+                None => {
+                    write!(&mut text, "[<args missing>]")?;
+                    return Ok(text); // stop here
+                }
             };
             let payload_arg = args.next();
-            let payload = match payload_arg {
-                Some(a) => a.payload_raw,
-                None => &[],
+            let (payload, is_big_endian) = match payload_arg {
+                Some(a) => (a.payload_raw, a.is_big_endian),
+                None => (&[] as &[u8], false),
             };
 
             match self.mstp() {
                 DltMessageType::Control(ct) => {
                     if message_id > 0 && message_id < SERVICE_ID_NAMES.len() as u32 {
-                        write!(&mut text, "{}", SERVICE_ID_NAMES[message_id as usize])?;
+                        write!(&mut text, "[{} ", SERVICE_ID_NAMES[message_id as usize])?;
                     } else if ct != DltMessageControlType::Time {
-                        write!(&mut text, "service({})", message_id)?;
-                    }
-
-                    if !payload.is_empty() {
-                        write!(&mut text, ", ")?;
+                        write!(&mut text, "[service({}) ", message_id)?;
                     }
 
                     match ct {
@@ -992,16 +1010,31 @@ impl DltMessage {
                             if !payload.is_empty() {
                                 let retval = payload.get(0).unwrap();
                                 if *retval < 5u8 || *retval == 8u8 {
-                                    write!(&mut text, "{}", CTRL_RESPONSE_STRS[*retval as usize])?;
+                                    write!(&mut text, "{}]", CTRL_RESPONSE_STRS[*retval as usize])?;
                                 } else {
-                                    write!(&mut text, "{:02x}", *retval)?;
+                                    write!(&mut text, "{:02x}]", *retval)?;
                                 }
-                                write!(&mut text, ", ")?;
-                                if payload.len() > 1 {
-                                    crate::utils::buf_as_hex_to_write(
-                                        &mut text,
-                                        payload.get(1..).unwrap(),
-                                    )?;
+                                let payload = &payload[1..];
+                                match message_id {
+                                    SERVICE_ID_GET_SOFTWARE_VERSION => {
+                                        let res = DltMessage::parse_ctrl_sw_version_payload(
+                                            is_big_endian,
+                                            payload,
+                                        );
+                                        if let Some(res) = res {
+                                            write!(&mut text, " ")?;
+                                            text.write_str(&res)?;
+                                        }
+                                    }
+                                    _ => {
+                                        if payload.len() > 1 {
+                                            write!(&mut text, " ")?;
+                                            crate::utils::buf_as_hex_to_write(
+                                                &mut text,
+                                                payload.get(1..).unwrap(),
+                                            )?;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1018,6 +1051,25 @@ impl DltMessage {
         }
 
         Ok(text)
+    }
+
+    /// parse the payload for a CTRL_RESPONSE 19 GET_SW_VERSION
+    /// payload must already point to the data after the CtrlServiceId and CtrlReturnType
+    pub fn parse_ctrl_sw_version_payload(is_big_endian: bool, payload: &[u8]) -> Option<String> {
+        if payload.len() >= 4 {
+            let sw_len = if is_big_endian {
+                u32::from_be_bytes(payload.get(0..4).unwrap().try_into().unwrap())
+            } else {
+                u32::from_le_bytes(payload.get(0..4).unwrap().try_into().unwrap())
+            } as usize;
+            let payload: &[u8] = &payload[4..];
+            if payload.len() >= sw_len {
+                let (s, _) = WINDOWS_1252.decode_without_bom_handling(&payload[0..sw_len]);
+                let s2 = RE_NEW_LINE.replace_all(&s, " ");
+                return Some(String::from(s2)); // todo optimize with returning Cow...
+            }
+        }
+        None
     }
 
     #[cfg(test)]
@@ -2135,6 +2187,35 @@ mod tests {
         DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
     }
 
+    /// return a control message
+    fn get_testmsg_control(big_endian: bool, noar: u8, payload_buf: &[u8]) -> DltMessage {
+        let sh = DltStorageHeader {
+            secs: 0,
+            micros: 0,
+            ecu: DltChar4::from_str("ECU1").unwrap(),
+        };
+        let exth = DltExtendedHeader {
+            verb_mstp_mtin: 0x3 << 1 | (0x02 << 4),
+            noar,
+            apid: DltChar4::from_buf(b"DA1\0"),
+            ctid: DltChar4::from_buf(b"DC1\0"),
+        };
+        let stdh = DltStandardHeader {
+            htyp: 0x21
+                | (if big_endian {
+                    DLT_STD_HDR_BIG_ENDIAN
+                } else {
+                    0
+                }),
+            mcnt: 0,
+            len: (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + payload_buf.len()) as u16,
+        };
+        let mut add_header_buf = Vec::new();
+        exth.to_write(&mut add_header_buf).unwrap();
+
+        DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
+    }
+
     #[test]
     fn payload_bool() {
         let m = get_testmsg_with_payload(
@@ -2519,6 +2600,58 @@ mod tests {
     // todo add smaller test cases for all FLOAT, VARI, FIXP, STRING encodings,...
     // todo test invalid/missing payload for SINT, UINT, and think about proper error handling
     // todo add SCOD_BIN and SCOD_HEX for uints see e.g. https://github.com/COVESA/dlt-viewer/blob/03baa67d3bb059458cb5b8e0ed940ea6f607f575/qdlt/qdltargument.cpp#L444
+
+    #[test]
+    fn control_msgs_sw_version() {
+        let m = get_testmsg_control(
+            false,
+            1,
+            &[19, 0, 0, 0, 0, 4, 0, 0, 0, b'S', b'W', b' ', b'1'],
+        );
+        assert!(m.is_ctrl_response());
+
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            "[get_software_version ok] SW 1"
+        );
+
+        let m = get_testmsg_control(
+            true,
+            1,
+            &[0, 0, 0, 19, 0, 0, 0, 0, 4, b'S', b'W', b' ', b'2'],
+        );
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            "[get_software_version ok] SW 2"
+        );
+
+        // len wrong!
+        let m = get_testmsg_control(
+            true,
+            1,
+            &[0, 0, 0, 19, 0, 0, 0, 0, 5, b'S', b'W', b' ', b'2'],
+        );
+        assert_eq!(m.payload_as_text().unwrap(), "[get_software_version ok]");
+
+        // len too short is ok, rest ignored
+        let m = get_testmsg_control(
+            true,
+            1,
+            &[0, 0, 0, 19, 0, 0, 0, 0, 3, b'S', b'W', b' ', b'2'],
+        );
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            "[get_software_version ok] SW "
+        );
+
+        // far too short
+        let m = get_testmsg_control(true, 1, &[0, 0, 0, 19, 0]);
+        assert_eq!(m.payload_as_text().unwrap(), "[get_software_version ok]");
+        let m = get_testmsg_control(true, 1, &[0, 0, 0, 19, 0, 1]);
+        assert_eq!(m.payload_as_text().unwrap(), "[get_software_version ok]");
+        let m = get_testmsg_control(true, 1, &[0, 0, 0]);
+        assert_eq!(m.payload_as_text().unwrap(), "[<args missing>]");
+    }
 
     #[test]
     fn parse_storage() {
