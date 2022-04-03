@@ -1,10 +1,12 @@
-use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
-use adlt::plugins::{factory::get_plugin, plugin::Plugin};
-use adlt::utils::{
-    get_first_message_from_file, remote_types, DltMessageIterator, LowMarkBufReader,
+use adlt::{
+    dlt::DLT_MAX_STORAGE_MSG_SIZE,
+    lifecycle::LifecycleId,
+    plugins::{factory::get_plugin, plugin::Plugin},
+    utils::{get_first_message_from_file, remote_types, DltMessageIterator, LowMarkBufReader},
 };
 use clap::{App, Arg, SubCommand};
 use slog::{debug, error, info, warn};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::net::TcpListener;
@@ -574,33 +576,137 @@ fn process_incoming_text_message<T: Read + Write>(
                 }
             }
         }
-        "stop" => {
-            match params.parse::<u32>() {
+        "stop" | "stream_binary_search" => {
+            let params_splitted = params.split(' ').collect::<Vec<_>>();
+            let param0 = params_splitted[0];
+            match param0.parse::<u32>() {
                 Ok(id) => {
                     match file_context {
                         Some(fc) => {
                             if let Some(pos) = fc.streams.iter().position(|x| x.id == id) {
-                                fc.streams.remove(pos);
-                                websocket
-                                    .write_message(Message::Text(format!(
-                                        "ok: stop stream stream_id {}",
-                                        id
-                                    )))
-                                    .unwrap(); // todo
+                                match command {
+                                    "stream_binary_search" => {
+                                        // binary search, i.e. return the first info for a search expr
+                                        let stream = &fc.streams[pos];
+
+                                        // for now just support one search: ~time_ms=...
+                                        // that returns the index of the filtered_msgs that is closest to the time:
+                                        if params_splitted.len() > 1 {
+                                            let search_text = params_splitted[1];
+                                            let search = search_text.split_once('=');
+                                            match search {
+                                                Some((expr, what)) if expr == "time_ms" => {
+                                                    // binary search in all msgs:
+                                                    let time_us = 1000u64
+                                                        * what.parse::<u64>().unwrap_or_default();
+
+                                                    // map of all lc.id/lifecycle_start_times:
+                                                    let lc_id_map = if let Some(pt) =
+                                                        &fc.parsing_thread
+                                                    {
+                                                        let lcs_r = &pt.lcs_r;
+                                                        let mut lc_map =
+                                                            BTreeMap::<LifecycleId, u64>::new(); // todo could opt with capacity
+                                                        if let Some(map_read_ref) = lcs_r.read() {
+                                                            map_read_ref.iter().for_each(
+                                                                |(k, l)| {
+                                                                    if let Some(l) = l.get_one() {
+                                                                        lc_map.insert(
+                                                                            *k,
+                                                                            l.start_time,
+                                                                        );
+                                                                    }
+                                                                },
+                                                            );
+                                                        };
+                                                        lc_map
+                                                    } else {
+                                                        BTreeMap::<LifecycleId, u64>::new()
+                                                    };
+
+                                                    let all_msgs_idx = fc
+                                                        .all_msgs
+                                                        .binary_search_by(|m| {
+                                                            let m_time =
+                                                                if let Some(lc_start_time) =
+                                                                    lc_id_map.get(&m.lifecycle)
+                                                                {
+                                                                    lc_start_time + m.timestamp_us()
+                                                                } else {
+                                                                    m.reception_time_us
+                                                                };
+                                                            m_time.cmp(&time_us)
+                                                        })
+                                                        .unwrap_or_else(|e| e);
+
+                                                    let index = if stream.filters_active {
+                                                        // return the index that fits to that:
+                                                        stream
+                                                            .filtered_msgs
+                                                            .binary_search(&all_msgs_idx)
+                                                            .unwrap_or_else(|e| e)
+                                                    } else {
+                                                        all_msgs_idx
+                                                    };
+
+                                                    websocket
+                                                        .write_message(Message::Text(format!(
+                                                            "ok: {} {}={{\"filtered_msg_index\":{}}}",
+                                                            command, id, index,
+                                                        )))
+                                                        .unwrap(); // todo
+                                                }
+                                                _ => {
+                                                    websocket
+                                                    .write_message(Message::Text(format!(
+                                                        "err: {} failed. stream_id {}:filtered_msgs={}: search '{:?}' unknown! params_splitted={:?}",
+                                                        command, id, stream.filtered_msgs.len(), search, params_splitted
+                                                    )))
+                                                    .unwrap(); // todo
+                                                }
+                                            }
+                                        } else {
+                                            websocket
+                                            .write_message(Message::Text(format!(
+                                                "err: {} failed. stream_id {}, filtered_msgs={}: too few params_splitted={:?}",
+                                                command, id, stream.filtered_msgs.len(), params_splitted
+                                            )))
+                                            .unwrap(); // todo
+                                        }
+                                    }
+                                    "stop" => {
+                                        fc.streams.remove(pos);
+                                        websocket
+                                            .write_message(Message::Text(format!(
+                                                "ok: {} stream stream_id {}",
+                                                command, id
+                                            )))
+                                            .unwrap(); // todo
+                                    }
+                                    _ => {
+                                        websocket
+                                            .write_message(Message::Text(format!(
+                                                "err: {} failed. stream_id {} not found!",
+                                                command, id
+                                            )))
+                                            .unwrap(); // todo
+                                    }
+                                }
                             } else {
                                 websocket
                                     .write_message(Message::Text(format!(
-                                        "err: stop stream failed. stream_id {} not found!",
-                                        id
+                                        "err: {} stream failed. stream_id {} not found!",
+                                        command, id
                                     )))
                                     .unwrap(); // todo
                             }
                         }
                         None => {
                             websocket
-                                .write_message(Message::Text(
-                                    "err: stop stream failed. No file opened!".to_string(),
-                                ))
+                                .write_message(Message::Text(format!(
+                                    "err: {} stream failed. No file opened!",
+                                    command
+                                )))
                                 .unwrap(); // todo
                         }
                     }
@@ -608,8 +714,8 @@ fn process_incoming_text_message<T: Read + Write>(
                 Err(e) => {
                     websocket
                         .write_message(Message::Text(format!(
-                            "err: stop stream failed. param {} is no valid stream_id! Err={}",
-                            params, e
+                            "err: {} stream failed. param {} is no valid stream_id! Err={}",
+                            command, params, e
                         )))
                         .unwrap(); // todo
                 }
@@ -977,7 +1083,7 @@ fn create_parser_thread(
 
                 const BUFREADER_CAPACITY: usize = 512 * 1024;
                 // we use a relatively small 512kb chunk size as we're processing
-                // the data multithreaded reader in bigger chunks slows is in total slower
+                // the data multithreaded. reading in bigger chunks is in total slower
 
                 for ref input_file_name in input_file_names {
                     let fi = File::open(input_file_name)?;
