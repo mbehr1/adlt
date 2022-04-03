@@ -10,7 +10,7 @@ use std::str::FromStr;
 /// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
 /// todo use crate ryu for float to str conversations (numtoa seems outdated)
 
-#[derive(Clone, PartialEq, Eq, Copy, Hash)] // Debug, Hash, Eq, Copy?
+#[derive(Clone, Eq, Copy)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
     char4: [u8; 4], // String, // todo u8,4 array?
 }
@@ -51,6 +51,21 @@ impl DltChar4 {
     /// bincode-typescript doesn't support [u8;4]
     pub fn as_u32le(&self) -> u32 {
         u32::from_le_bytes(self.char4)
+    }
+}
+
+impl std::hash::Hash for DltChar4 {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        hasher.write_u32(u32::from_ne_bytes(self.char4))
+    }
+}
+impl nohash_hasher::IsEnabled for DltChar4 {}
+
+impl PartialEq for DltChar4 {
+    #[inline]
+    fn eq(&self, other: &DltChar4) -> bool {
+        u32::from_ne_bytes(self.char4).eq(&u32::from_ne_bytes(other.char4))
     }
 }
 
@@ -563,6 +578,7 @@ static SERVICE_ID_NAMES: [&str; 21] = [
     "message_buffer_overflow",
 ];
 
+pub const SERVICE_ID_GET_LOG_INFO: u32 = 3;
 pub const SERVICE_ID_GET_SOFTWARE_VERSION: u32 = 19;
 
 static CTRL_RESPONSE_STRS: [&str; 9] = [
@@ -604,6 +620,7 @@ impl DltMessage {
     }
 
     /// return whether the message is a CONTROL_REQUEST message
+    #[inline(always)]
     pub fn is_ctrl_request(&self) -> bool {
         match &self.extended_header {
             Some(e) => {
@@ -617,6 +634,7 @@ impl DltMessage {
     }
 
     /// return whether the message is a CONTROL_RESPONSE message
+    #[inline(always)]
     pub fn is_ctrl_response(&self) -> bool {
         match &self.extended_header {
             Some(e) => {
@@ -726,19 +744,19 @@ impl DltMessage {
         if self.extended_header.is_some() {
             match self.mstp() {
                 DltMessageType::Control(ct) => {
-                    write!(writer, "control {type}", type = CONTROL_TYPE_STRS[ct as usize])?;
+                    write!(writer, "control {}", CONTROL_TYPE_STRS[ct as usize])?;
                     // todo
                 }
                 DltMessageType::AppTrace(tt) => {
-                    write!(writer, "app_trace {type}", type = TRACE_TYPE_STRS[tt as usize])?;
+                    write!(writer, "app_trace {}", TRACE_TYPE_STRS[tt as usize])?;
                     // todo
                 }
                 DltMessageType::NwTrace(nt) => {
-                    write!(writer, "nw_trace {type}", type = NW_TYPE_STRS[nt as usize])?;
+                    write!(writer, "nw_trace {}", NW_TYPE_STRS[nt as usize])?;
                     // todo
                 }
                 DltMessageType::Log(lt) => {
-                    write!(writer, "log {level}", level = LOG_LEVEL_STRS[lt as usize])?;
+                    write!(writer, "log {}", LOG_LEVEL_STRS[lt as usize])?;
                 }
             }
             if self.is_verbose() {
@@ -2668,6 +2686,7 @@ mod tests {
         let file_len = file.len();
         let (parsed, m2) = parse_dlt_with_storage_header(1, &file).unwrap();
         assert_eq!(parsed, file_len);
+        assert!(!m2.is_ctrl_response());
         assert_eq!(m.ecu, m2.ecu);
         assert_eq!(m, m2);
         assert_eq!(m.extended_header, m2.extended_header);
