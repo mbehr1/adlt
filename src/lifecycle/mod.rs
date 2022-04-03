@@ -4,7 +4,10 @@
 // https://lib.rs/crates/arccstr or https://lib.rs/crates/arcstr
 // once_cell for one time inits.
 // use chrono::{Local, TimeZone};
-use crate::dlt::{DltChar4, DltMessage, SERVICE_ID_GET_SOFTWARE_VERSION};
+use crate::dlt::{
+    control_msgs::parse_ctrl_sw_version_payload, DltChar4, DltMessage,
+    SERVICE_ID_GET_SOFTWARE_VERSION,
+};
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -252,7 +255,7 @@ impl Lifecycle {
                     };
                     if payload.len() >= 5 {
                         if let Some(sw_vers) =
-                            DltMessage::parse_ctrl_sw_version_payload(is_big_endian, &payload[1..])
+                            parse_ctrl_sw_version_payload(is_big_endian, &payload[1..])
                         {
                             self.sw_version = Some(sw_vers);
                         }

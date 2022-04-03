@@ -1,3 +1,4 @@
+pub mod control_msgs;
 use chrono::{Local, TimeZone};
 use encoding_rs::WINDOWS_1252;
 use lazy_static::lazy_static;
@@ -6,6 +7,8 @@ use std::convert::TryInto;
 use std::fmt;
 use std::fmt::Write;
 use std::str::FromStr;
+
+use control_msgs::{parse_ctrl_log_info_payload, parse_ctrl_sw_version_payload};
 
 /// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
 /// todo use crate ryu for float to str conversations (numtoa seems outdated)
@@ -594,7 +597,7 @@ static CTRL_RESPONSE_STRS: [&str; 9] = [
 ];
 
 lazy_static! {
-    static ref RE_NEW_LINE: regex::Regex = regex::Regex::new(r"[\r\n\t]").unwrap();
+    pub(crate) static ref RE_NEW_LINE: regex::Regex = regex::Regex::new(r"[\r\n\t]").unwrap();
 }
 
 impl DltMessage {
@@ -661,6 +664,11 @@ impl DltMessage {
             Some(e) => e.is_verbose(),
             None => false, // [Dlt096]
         }
+    }
+
+    /// return verb_mstp_mtin field from ext header. None if no ext header
+    pub fn verb_mstp_mtin(&self) -> Option<u8> {
+        self.extended_header.as_ref().map(|e| e.verb_mstp_mtin)
     }
 
     pub fn from_headers(
@@ -1017,31 +1025,47 @@ impl DltMessage {
             match self.mstp() {
                 DltMessageType::Control(ct) => {
                     if message_id > 0 && message_id < SERVICE_ID_NAMES.len() as u32 {
-                        write!(&mut text, "[{} ", SERVICE_ID_NAMES[message_id as usize])?;
+                        write!(&mut text, "[{}", SERVICE_ID_NAMES[message_id as usize])?;
                     } else if ct != DltMessageControlType::Time {
-                        write!(&mut text, "[service({}) ", message_id)?;
+                        write!(&mut text, "[service({})", message_id)?;
                     }
-
+                    let mut needs_closing_bracket = true;
                     match ct {
                         DltMessageControlType::Response => {
                             // todo dump first byte as response result
                             if !payload.is_empty() {
                                 let retval = payload.get(0).unwrap();
                                 if *retval < 5u8 || *retval == 8u8 {
-                                    write!(&mut text, "{}]", CTRL_RESPONSE_STRS[*retval as usize])?;
+                                    write!(
+                                        &mut text,
+                                        " {}]",
+                                        CTRL_RESPONSE_STRS[*retval as usize]
+                                    )?;
                                 } else {
-                                    write!(&mut text, "{:02x}]", *retval)?;
+                                    write!(&mut text, " {:02x}]", *retval)?;
                                 }
+                                needs_closing_bracket = false;
                                 let payload = &payload[1..];
                                 match message_id {
                                     SERVICE_ID_GET_SOFTWARE_VERSION => {
-                                        let res = DltMessage::parse_ctrl_sw_version_payload(
-                                            is_big_endian,
-                                            payload,
-                                        );
+                                        let res =
+                                            parse_ctrl_sw_version_payload(is_big_endian, payload);
                                         if let Some(res) = res {
                                             write!(&mut text, " ")?;
                                             text.write_str(&res)?;
+                                        }
+                                    }
+                                    SERVICE_ID_GET_LOG_INFO => {
+                                        let apids = parse_ctrl_log_info_payload(
+                                            *retval,
+                                            is_big_endian,
+                                            payload,
+                                        );
+                                        // output as json parseable array
+                                        let apids_json = serde_json::to_string(&apids);
+                                        match &apids_json {
+                                            Ok(apid_str) => write!(&mut text, " {}", apid_str)?,
+                                            Err(err) => write!(&mut text, " got err={:?}", err)?,
                                         }
                                     }
                                     _ => {
@@ -1057,9 +1081,14 @@ impl DltMessage {
                             }
                         }
                         _ => {
+                            write!(&mut text, "] ")?;
+                            needs_closing_bracket = false;
                             crate::utils::buf_as_hex_to_write(&mut text, payload)?;
                             // todo
                         }
+                    }
+                    if needs_closing_bracket {
+                        write!(&mut text, "]")?;
                     }
                 }
                 _ => {
@@ -1069,25 +1098,6 @@ impl DltMessage {
         }
 
         Ok(text)
-    }
-
-    /// parse the payload for a CTRL_RESPONSE 19 GET_SW_VERSION
-    /// payload must already point to the data after the CtrlServiceId and CtrlReturnType
-    pub fn parse_ctrl_sw_version_payload(is_big_endian: bool, payload: &[u8]) -> Option<String> {
-        if payload.len() >= 4 {
-            let sw_len = if is_big_endian {
-                u32::from_be_bytes(payload.get(0..4).unwrap().try_into().unwrap())
-            } else {
-                u32::from_le_bytes(payload.get(0..4).unwrap().try_into().unwrap())
-            } as usize;
-            let payload: &[u8] = &payload[4..];
-            if payload.len() >= sw_len {
-                let (s, _) = WINDOWS_1252.decode_without_bom_handling(&payload[0..sw_len]);
-                let s2 = RE_NEW_LINE.replace_all(&s, " ");
-                return Some(String::from(s2)); // todo optimize with returning Cow...
-            }
-        }
-        None
     }
 
     #[cfg(test)]
