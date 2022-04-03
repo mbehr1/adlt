@@ -67,6 +67,11 @@ pub struct Filter {
     pub ecu: Option<DltChar4>,
     pub apid: Option<DltChar4>,
     pub ctid: Option<DltChar4>,
+    /// can match for mstp and all mtins (mtin part 0) or specific mtin (mtin !=0)
+    /// mtin is the upper 4 bits, mstp the bits 3..1, verbose the lowest bit
+    /// e.g.  0<<4 | 3<<1 = all ctrl messages, non verbose
+    /// 2<<4 | 3<<1 = all ctrl, response messages, non verbose
+    pub verb_mstp_mtin: Option<u8>,
     pub payload: Option<String>,
     pub payload_regex: Option<Regex>,
     // filter on lifecycles. This is not the lifecycle.id but the persistentId
@@ -147,6 +152,19 @@ impl Filter {
                 .collect()
         });
 
+        // we prefer verb_mstp_mtin higher than mstp
+        // todo add unit tests
+        let verb_mstp_mtin = if let Some(mstp) = v["verb_mstp_mtin"].as_u64() {
+            let verb_mstp_mtin = (mstp & 0xff) as u8;
+            Some(verb_mstp_mtin)
+        } else if let Some(mstp) = v["mstp"].as_u64() {
+            // match mstp to verb_mstp_mtin logic
+            let verb_mstp_mtin = ((mstp & 0x07) << 1) as u8;
+            Some(verb_mstp_mtin)
+        } else {
+            None
+        };
+
         Ok(Filter {
             kind,
             enabled,
@@ -155,6 +173,7 @@ impl Filter {
             ecu,
             apid,
             ctid,
+            verb_mstp_mtin,
             payload,
             payload_regex,
             lifecycles,
@@ -237,6 +256,9 @@ impl Filter {
                 filter.ctid = DltChar4::from_str(s).ok();
             }
         }
+        if attrs.get("enablecontrolmsgs") == Some(&"1".to_string()) {
+            filter.verb_mstp_mtin = Some(0x03u8 << 1);
+        }
         if attrs.get("enablepayloadtext") == Some(&"1".to_string()) {
             if let Some(s) = attrs.get("payloadtext") {
                 if attrs.get("enableregexp_Payload") == Some(&"1".to_string()) {
@@ -260,6 +282,7 @@ impl Filter {
             ecu: None,
             apid: None,
             ctid: None,
+            verb_mstp_mtin: None,
             payload: None,
             payload_regex: None,
             lifecycles: None,
@@ -295,6 +318,32 @@ impl Filter {
                 return negated;
             }
         }
+
+        if let Some(verb_mstp_mtin) = &self.verb_mstp_mtin {
+            if let Some(msg_vmm) = msg.verb_mstp_mtin() {
+                // mtin is like a mask/special meaning.
+                // if 0 -> all mtins match
+                // if != 0 -> needs to match
+                let verb = verb_mstp_mtin & 0x01 == 0x01;
+                let mstp = (*verb_mstp_mtin >> 1) & 0x07u8;
+                let mtin = (*verb_mstp_mtin >> 4) & 0x0fu8;
+
+                let m_verb = msg_vmm & 0x01 == 0x01;
+                let m_mstp = (msg_vmm >> 1) & 0x07u8;
+                let m_mtin = (msg_vmm >> 4) & 0x0fu8;
+
+                if verb != m_verb || mstp != m_mstp {
+                    return negated;
+                }
+                // now check mtin if >0
+                if mtin > 0 && mtin != m_mtin {
+                    return negated;
+                }
+            } else {
+                return negated;
+            }
+        }
+
         // todo payload and payloadRegex: cache payload_as_text()?
         // and think about plugins that convert the payload
         if let Some(payload_regex) = &self.payload_regex {
@@ -551,6 +600,49 @@ mod tests {
     }
 
     #[test]
+    fn match_mstp() {
+        let mut f = Filter::new(FilterKind::Positive);
+        let mut m = DltMessage::for_test();
+        f.verb_mstp_mtin = Some(0u8 << 4 | 3u8 << 1);
+        assert!(!f.matches(&m));
+
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 2u8 << 1,
+        });
+        // no match, diff mstp
+        assert!(!f.matches(&m));
+
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 3u8 << 1,
+        });
+        // match, same mstp
+        assert!(f.matches(&m));
+
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 1u8 << 4 | 3u8 << 1,
+        });
+        // still match, msg has more, but filter has mtin 0
+        assert!(f.matches(&m));
+
+        f.verb_mstp_mtin = Some(1u8 << 4 | 3u8 << 1);
+        // still match, msg has same
+        assert!(f.matches(&m));
+
+        f.verb_mstp_mtin = Some(2u8 << 4 | 3u8 << 1);
+        // no match, same mstp but dif mtin
+        assert!(!f.matches(&m));
+    }
+
+    #[test]
     fn from_json() {
         // missing type
         let f = Filter::from_json(r#""#);
@@ -610,6 +702,16 @@ mod tests {
         let f = Filter::from_json(r#"{"type": 1, "lifecycles":["1"]}"#).unwrap();
         assert!(f.lifecycles.is_some());
         assert_eq!(f.lifecycles, Some(vec![]));
+
+        // proper type and mstp
+        let f = Filter::from_json(r#"{"type": 0, "mstp": 3}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.verb_mstp_mtin, Some(3u8 << 1));
+
+        // proper type and mstp and verb_mstp_mtin (has a higher prio)
+        let f = Filter::from_json(r#"{"type": 0, "verb_mstp_mtin":42,"mstp": 2}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.verb_mstp_mtin, Some(42u8));
     }
 
     #[test]
@@ -687,6 +789,8 @@ mod tests {
             "lifecycles unexpected in {}",
             &s
         );
+
+        // todo verb_mstp_mtin...
     }
 
     mod from_dlf {
@@ -780,6 +884,16 @@ mod tests {
             ))
             .unwrap();
             assert_eq!(r.ctid, DltChar4::from_str("fOo").ok());
+        }
+
+        #[test]
+        fn control() {
+            // ctid set and enablectid
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><enablecontrolmsgs>1</enablecontrolmsgs></filter>"#,
+            ))
+            .unwrap();
+            assert_eq!(r.verb_mstp_mtin, Some(3u8 << 1));
         }
 
         #[test]
