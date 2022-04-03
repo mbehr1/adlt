@@ -2,6 +2,21 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.12.0 - 2022-04-03
+#### Features
+- **(filter)** control messages mstp, verb_mstp_mtin - (08c8561) - Matthias Behr
+- **(remote)** stream_binary_search time_ms - (63df195) - Matthias Behr
+- **(remote)** add sw_version to lc info - (6cf21f6) - Matthias Behr
+- **(sw_version)** add SW vers to lifecycles - (c7bc643) - Matthias Behr
+- service get_log_info - (d1f2281) - Matthias Behr
+#### Miscellaneous Chores
+- use asomeip 0.1.2 - (04813b1) - Matthias Behr
+#### Performance Improvements
+- minor inline optimizations and faster hasher - (e9a8823) - Matthias Behr
+#### Refactoring
+- remove Copy and use explicit clone - (014fa04) - Matthias Behr
+- - -
+
 ## v0.11.0 - 2022-03-29
 #### Bug Fixes
 - updated asomeip, afibex deps - (4b278d7) - Matthias Behr
