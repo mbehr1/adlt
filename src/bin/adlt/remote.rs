@@ -348,26 +348,41 @@ impl FileContext {
             let fi = File::open(f_name);
             match fi {
                 Ok(mut f) => {
+                    let file_len = f.metadata().map_or(0, |m|m.len());
                     let m1 = get_first_message_from_file(&mut f, 512 * 1024);
                     if m1.is_none() {
                         warn!(log, "file {} doesn't contain a DLT message in first 0.5MB. Skipping!", f_name;);
                     }
-                    (f_name, m1)
+                    (f_name, m1, file_len)
                 }
                 _ => {
                     warn!(log, "couldn't open {}. Skipping!", f_name;);
-                    (f_name, None)
+                    (f_name, None, 0)
                 }
             }
         });
-        let mut file_msgs: Vec<_> = file_msgs.filter(|(_a, b)| b.is_some()).collect();
+        let mut file_msgs: Vec<_> = file_msgs.filter(|(_a, b, _c)| b.is_some()).collect();
         file_msgs.sort_by(|a, b| {
             a.1.as_ref()
                 .unwrap()
                 .reception_time_us
                 .cmp(&b.1.as_ref().unwrap().reception_time_us)
         });
-        let file_names: Vec<_> = file_msgs.iter_mut().map(|(a, _b)| (*a).into()).collect();
+
+        // file size for all files:
+        let sum_file_len: u64 = file_msgs.iter().map(|f| f.2).sum();
+        let all_msgs_len_estimate = sum_file_len / 128; // todo better heuristics? e.g. 20gb dlt -> 117mio msgs
+        info!(
+            log,
+            "FileContext sum_file_len={} -> estimated #msgs = {}",
+            sum_file_len,
+            all_msgs_len_estimate
+        );
+
+        let file_names: Vec<_> = file_msgs
+            .iter_mut()
+            .map(|(a, _b, _c)| (*a).into())
+            .collect();
         //debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
 
         if file_names.is_empty() {
@@ -410,7 +425,10 @@ impl FileContext {
             sort_by_time,
             plugins_active,
             parsing_thread: None,
-            all_msgs: Vec::new(),
+            all_msgs: Vec::with_capacity(std::cmp::min(
+                all_msgs_len_estimate as usize,
+                u32::MAX as usize,
+            )),
             streams: Vec::new(),
         })
     }
