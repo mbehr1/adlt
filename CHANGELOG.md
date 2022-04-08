@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.12.1 - 2022-04-08
+#### Bug Fixes
+- **(filter)** payloadRegex use fancy-regex - (9315f48) - Matthias Behr
+- fix clippy warning - (5a4b7c5) - Matthias Behr
+#### Performance Improvements
+- **(remote)** heuristic for all_msgs_len - (c131cde) - Matthias Behr
+- - -
+
 ## v0.12.0 - 2022-04-03
 #### Features
 - **(filter)** control messages mstp, verb_mstp_mtin - (08c8561) - Matthias Behr
