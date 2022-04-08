@@ -1334,7 +1334,7 @@ mod tests {
             // so using the mapped lifecycles gives the current view
             for _i in 0..2 * NUMBER_MSGS {
                 let rm = rx2.recv();
-                assert!(!rm.is_err());
+                assert!(rm.is_ok());
                 let m = rm.unwrap();
                 assert!(m.lifecycle != 0);
                 assert!(

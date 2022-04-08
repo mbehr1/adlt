@@ -2,7 +2,7 @@ use crate::dlt::DltChar4;
 use crate::dlt::DltMessage;
 use crate::dlt::Error; // todo??? or in crate::?
 use crate::dlt::ErrorKind;
-use regex::Regex;
+use fancy_regex::Regex;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json::Value;
 use std::str::FromStr; // todo??? or in crate::?
@@ -138,8 +138,13 @@ impl Filter {
         if let Some(s) = v["payloadRegex"].as_str() {
             // sadly this regex is python syntax and not ecmascript
             // so convert ecmascript capture groups to python ones
-            let s = s.replace("(?<", "(?P<");
-            payload_regex = Regex::new(&s).ok();
+            // not needed any longer with fancy_regex let s = s.replace("(?<", "(?P<");
+            payload_regex = Some(Regex::new(&s).map_err(|e| {
+                Error::new(ErrorKind::InvalidData(format!(
+                    "regex error parsing '{}':{:?}",
+                    s, e
+                )))
+            })?);
         } else if let Some(s) = v["payload"].as_str() {
             payload = Some(s.to_string());
         }
@@ -349,7 +354,7 @@ impl Filter {
         if let Some(payload_regex) = &self.payload_regex {
             let payload_text = msg.payload_as_text();
             if let Ok(payload_text) = payload_text {
-                if !payload_regex.is_match(&payload_text) {
+                if !payload_regex.is_match(&payload_text).unwrap_or(false) {
                     return negated;
                 }
             } else {
@@ -523,7 +528,7 @@ mod tests {
         };
         let stdh = crate::dlt::DltStandardHeader::from_buf(&v).unwrap();
         let payload_offset = stdh.std_ext_header_size() as usize;
-        let m = DltMessage::from_headers(
+        let mut m = DltMessage::from_headers(
             1423084,
             sh,
             stdh,
@@ -548,6 +553,27 @@ mod tests {
         let f =
             Filter::from_json(r#"{"type": 0, "payloadRegex":"^(?<state>Final) answer"}"#).unwrap();
         assert!(f.payload_regex.is_some());
+        assert!(f.matches(&m));
+
+        // ^Git hash/version  (.*)$
+        m.payload_text = Some("Git hash/version v1.0.0-deadbeef".to_string());
+        let f =
+            Filter::from_json(r#"{"type": 0, "payloadRegex":"^Git hash\/version (.*)$"}"#).unwrap();
+        assert!(f.payload_regex.is_some());
+        assert!(f.matches(&m));
+        let f =
+            Filter::from_json(r#"{"type": 0, "payloadRegex":"^Git hash/version (.*)$"}"#).unwrap();
+        assert!(f.payload_regex.is_some());
+        assert!(f.matches(&m));
+
+        // lookahead regex
+        // ^New process crash: name=(?!\"crashtest\"|\"test_app\")\"(.*?)\"
+        m.payload_text = Some("New process crash: name=\"crashtest\"".to_string());
+        let f =
+            Filter::from_json(r#"{"type": 0, "payloadRegex":"^New process crash: name=(?!\"crashtest\"|\"test_app\")\"(.*?)\""}"#).unwrap();
+        assert!(f.payload_regex.is_some());
+        assert!(!f.matches(&m));
+        m.payload_text = Some("New process crash: name=\"foo\"".to_string());
         assert!(f.matches(&m));
     }
 
@@ -603,7 +629,7 @@ mod tests {
     fn match_mstp() {
         let mut f = Filter::new(FilterKind::Positive);
         let mut m = DltMessage::for_test();
-        f.verb_mstp_mtin = Some(0u8 << 4 | 3u8 << 1);
+        f.verb_mstp_mtin = Some(3u8 << 1); // | 0u8<<4
         assert!(!f.matches(&m));
 
         m.extended_header = Some(DltExtendedHeader {
