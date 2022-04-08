@@ -139,7 +139,7 @@ impl Filter {
             // sadly this regex is python syntax and not ecmascript
             // so convert ecmascript capture groups to python ones
             // not needed any longer with fancy_regex let s = s.replace("(?<", "(?P<");
-            payload_regex = Some(Regex::new(&s).map_err(|e| {
+            payload_regex = Some(Regex::new(s).map_err(|e| {
                 Error::new(ErrorKind::InvalidData(format!(
                     "regex error parsing '{}':{:?}",
                     s, e
