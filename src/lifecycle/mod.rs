@@ -5,7 +5,7 @@
 // once_cell for one time inits.
 // use chrono::{Local, TimeZone};
 use crate::dlt::{
-    control_msgs::parse_ctrl_sw_version_payload, DltChar4, DltMessage,
+    control_msgs::parse_ctrl_sw_version_payload, DltChar4, DltMessage, DltMessageIndexType,
     SERVICE_ID_GET_SOFTWARE_VERSION,
 };
 use std::hash::{Hash, Hasher};
@@ -50,6 +50,11 @@ pub struct Lifecycle {
     /// sw version detected for this lifecycle
     /// this is parsed from the control messages GET_SW_VERSION
     pub sw_version: Option<String>,
+
+    /// the highest/maximum index of the msg that lead to an update
+    /// this can be used as a heuristics to see whether the lifecycle was changed
+    /// minor (time wise) updates will not be reflected due to buffering delays
+    pub max_msg_index_update: DltMessageIndexType,
 }
 
 impl evmap::ShallowCopy for Lifecycle {
@@ -130,6 +135,7 @@ impl Lifecycle {
             max_timestamp_us: timestamp_us,
             last_reception_time: msg.reception_time_us,
             sw_version: None, // might be wrongif the first message is a GET_SW_VERSION but we ignore this case
+            max_msg_index_update: msg.index,
         };
         msg.lifecycle = alc.id;
         alc
@@ -160,6 +166,10 @@ impl Lifecycle {
         // if the lc_to_merge has a sw_version and we not, we do use that one:
         if self.sw_version.is_none() && lc_to_merge.sw_version.is_some() {
             self.sw_version = lc_to_merge.sw_version.take();
+        }
+
+        if lc_to_merge.max_msg_index_update > self.max_msg_index_update {
+            self.max_msg_index_update = lc_to_merge.max_msg_index_update;
         }
     }
 
@@ -231,6 +241,9 @@ impl Lifecycle {
             }
             msg.lifecycle = self.id;
             self.nr_msgs += 1;
+            if msg.index > self.max_msg_index_update {
+                self.max_msg_index_update = msg.index;
+            }
             // println!("update: lifecycle updated by {:?} to LC:{:?}", msg, &self);
 
             // sw-version contained?

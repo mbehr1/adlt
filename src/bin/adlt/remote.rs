@@ -1,5 +1,5 @@
 use adlt::{
-    dlt::DLT_MAX_STORAGE_MSG_SIZE,
+    dlt::{DltMessageIndexType, DLT_MAX_STORAGE_MSG_SIZE},
     lifecycle::LifecycleId,
     plugins::{factory::get_plugin, plugin::Plugin},
     utils::{get_first_message_from_file, remote_types, DltMessageIterator, LowMarkBufReader},
@@ -294,6 +294,8 @@ struct FileContext {
     parsing_thread: Option<ParserThreadType>,
     all_msgs: Vec<adlt::dlt::DltMessage>,
     streams: Vec<StreamContext>,
+    /// we did send lifecycles with that max_msg_index_update
+    lcs_max_msg_index_update: DltMessageIndexType,
 }
 
 impl FileContext {
@@ -430,6 +432,7 @@ impl FileContext {
                 u32::MAX as usize,
             )),
             streams: Vec::new(),
+            lcs_max_msg_index_update: 0,
         })
     }
 }
@@ -594,7 +597,7 @@ fn process_incoming_text_message<T: Read + Write>(
                 }
             }
         }
-        "stop" | "stream_binary_search" => {
+        "stop" | "stream_binary_search" | "stream_change_window" => {
             let params_splitted = params.split(' ').collect::<Vec<_>>();
             let param0 = params_splitted[0];
             match param0.parse::<u32>() {
@@ -688,6 +691,58 @@ fn process_incoming_text_message<T: Read + Write>(
                                             .write_message(Message::Text(format!(
                                                 "err: {} failed. stream_id {}, filtered_msgs={}: too few params_splitted={:?}",
                                                 command, id, stream.filtered_msgs.len(), params_splitted
+                                            )))
+                                            .unwrap(); // todo
+                                        }
+                                    }
+                                    "stream_change_window" => {
+                                        if params_splitted.len() > 1 {
+                                            let stream = &mut fc.streams[pos];
+                                            // we expect one parameter with "<start>,<end>"
+                                            let window_text = params_splitted[1];
+                                            let window =
+                                                window_text.split_once(',').map(|(s, e)| {
+                                                    (
+                                                        s.parse::<usize>().unwrap_or(0),
+                                                        e.parse::<usize>().unwrap_or(0),
+                                                    )
+                                                });
+                                            match window {
+                                                Some((start_idx, end_idx)) => {
+                                                    stream.msgs_to_send = std::ops::Range {
+                                                        start: start_idx,
+                                                        end: end_idx,
+                                                    };
+                                                    stream.msgs_sent = std::ops::Range {
+                                                        start: start_idx,
+                                                        end: start_idx,
+                                                    };
+                                                    // we do assigne a new stream id to ease identifying binmsgs sent already
+                                                    stream.id = NEXT_STREAM_ID.fetch_add(
+                                                        1,
+                                                        std::sync::atomic::Ordering::Relaxed,
+                                                    );
+                                                    websocket
+                                                        .write_message(Message::Text(format!(
+                                                            "ok: {} {}={{\"id\":{},\"window\":[{},{}]}}",
+                                                            command, id, stream.id, start_idx, end_idx
+                                                        )))
+                                                        .unwrap(); // todo
+                                                }
+                                                _ => {
+                                                    websocket
+                                            .write_message(Message::Text(format!(
+                                                "err: {} failed. stream_id {}: failure parsing={:?}",
+                                                command, id, window_text
+                                            )))
+                                            .unwrap(); // todo
+                                                }
+                                            }
+                                        } else {
+                                            websocket
+                                            .write_message(Message::Text(format!(
+                                                "err: {} failed. stream_id {}: too few params_splitted={:?}",
+                                                command, id, params_splitted
                                             )))
                                             .unwrap(); // todo
                                         }
@@ -791,31 +846,41 @@ fn process_file_context<T: Read + Write>(
         ))?;
 
         // lc infos:
+        // we send updates only on the ones that did change
         if let Some(pt) = &fc.parsing_thread {
             let lcs_r = &pt.lcs_r;
             if let Some(lc_map) = lcs_r.read() {
-                let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&lc_map);
-                info!(log, "lcs: #{}", sorted_lcs.len());
-
-                // encode the lifecycles: (all but the ones with only ctrl requests)
-                let lcs = sorted_lcs
-                    .iter()
-                    .filter(|l| !l.only_control_requests())
-                    .map(|&l| remote_types::BinLifecycle {
-                        id: l.id(),
-                        ecu: l.ecu.as_u32le(),
-                        nr_msgs: l.nr_msgs,
-                        start_time: l.start_time,
-                        end_time: l.end_time(),
-                        sw_version: l.sw_version.to_owned(),
-                    })
-                    .collect();
-                let encoded: Vec<u8> =
-                    bincode::encode_to_vec(remote_types::BinType::Lifecycles(lcs), BINCODE_CONFIG)
-                        .unwrap(); // todo
-                                   //info!(log, "encoded: #{:?}", &encoded);
-
-                websocket.write_message(Message::Binary(encoded))?;
+                let mut lcs: Vec<remote_types::BinLifecycle> = vec![];
+                let mut new_max_msg_index_update = fc.lcs_max_msg_index_update;
+                for lc in lc_map.iter().map(|(_id, b)| b.get_one().unwrap()) {
+                    if lc.max_msg_index_update > fc.lcs_max_msg_index_update {
+                        new_max_msg_index_update =
+                            std::cmp::max(new_max_msg_index_update, lc.max_msg_index_update);
+                        if !lc.only_control_requests() {
+                            // send this one
+                            lcs.push(remote_types::BinLifecycle {
+                                id: lc.id(),
+                                ecu: lc.ecu.as_u32le(),
+                                nr_msgs: lc.nr_msgs,
+                                start_time: lc.start_time,
+                                end_time: lc.end_time(),
+                                sw_version: lc.sw_version.to_owned(),
+                            })
+                        }
+                    }
+                }
+                fc.lcs_max_msg_index_update = new_max_msg_index_update;
+                if !lcs.is_empty() {
+                    // we do send them sorted (even in case only updates are sent)
+                    lcs.sort_unstable_by(|a, b| a.start_time.cmp(&b.start_time));
+                    let encoded: Vec<u8> = bincode::encode_to_vec(
+                        remote_types::BinType::Lifecycles(lcs),
+                        BINCODE_CONFIG,
+                    )
+                    .unwrap(); // todo
+                               //info!(log, "encoded: #{:?}", &encoded);
+                    websocket.write_message(Message::Binary(encoded))?;
+                }
             }
         }
     }
