@@ -1,4 +1,4 @@
-use crate::plugins::{plugin::Plugin, someip::SomeipPlugin};
+use super::{plugin::Plugin, rewrite::RewritePlugin, someip::SomeipPlugin};
 
 pub fn get_plugin(
     config: &serde_json::Map<String, serde_json::Value>,
@@ -19,9 +19,23 @@ pub fn get_plugin(
 
             return match name {
                 "SomeIp" => {
-                    let plugin: Box<dyn Plugin + Send> =
-                        Box::new(SomeipPlugin::from_json(config).unwrap());
-                    Some(plugin)
+                    let plugin = SomeipPlugin::from_json(config);
+                    if let Ok(plugin) = plugin {
+                        Some(Box::new(plugin))
+                    } else {
+                        // todo log error properly
+                        println!("plugin:{} got err {:?}", name, plugin.unwrap_err());
+                        None
+                    }
+                }
+                "Rewrite" => {
+                    let plugin = RewritePlugin::from_json(config);
+                    if let Ok(plugin) = plugin {
+                        Some(Box::new(plugin))
+                    } else {
+                        println!("plugin:{} got err {:?}", name, plugin.unwrap_err());
+                        None
+                    }
                 }
                 _ => {
                     println!(
