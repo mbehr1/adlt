@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.13.0 - 2022-04-12
+#### Features
+- **(remote)** stream_change_window - (696c7b6) - Matthias Behr
+- - -
+
 ## v0.12.1 - 2022-04-08
 #### Bug Fixes
 - **(filter)** payloadRegex use fancy-regex - (9315f48) - Matthias Behr
