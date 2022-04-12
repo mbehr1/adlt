@@ -15,7 +15,7 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 - **Filter**...
 
 - **remote** server support: serve requests via wss. E.g. used with [DLT-Logs Visual Studio Code Extension](https://marketplace.visualstudio.com/items?itemName=mbehr1.dlt-logs).
-- builtin **plugins** e.g. for SOME/IP payload decoding (currently only for remote server)
+- builtin **plugins** e.g. for SOME/IP payload decoding (currently only for remote server) and **rewrite**ing of message timestamp or payload text.
 
 ## Usage examples
 
