@@ -2,12 +2,14 @@
 //
 // todos:
 // [ ] show frames in dlt-logs tree...
+// [ ] use the ECU/MANUF.EXT APID/CTID desc infos...
 
 use crate::{
     dlt::{
-        DltArg, DltChar4, DltMessage, DLT_SCOD_ASCII, DLT_SCOD_UTF8, DLT_TYLE_16BIT,
-        DLT_TYLE_32BIT, DLT_TYLE_64BIT, DLT_TYLE_8BIT, DLT_TYPE_INFO_BOOL, DLT_TYPE_INFO_FLOA,
-        DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_SINT, DLT_TYPE_INFO_STRG, DLT_TYPE_INFO_UINT,
+        DltArg, DltChar4, DltExtendedHeader, DltMessage, DLT_SCOD_ASCII, DLT_SCOD_UTF8,
+        DLT_TYLE_16BIT, DLT_TYLE_32BIT, DLT_TYLE_64BIT, DLT_TYLE_8BIT, DLT_TYPE_INFO_BOOL,
+        DLT_TYPE_INFO_FLOA, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_SINT, DLT_TYPE_INFO_STRG,
+        DLT_TYPE_INFO_UINT,
     },
     //filter::Filter,
     plugins::plugin::Plugin,
@@ -24,6 +26,9 @@ struct NonVerboseFibexData {
 #[derive(Debug)]
 struct NVFrame {
     byte_length: u32,
+    ext_header: Option<DltExtendedHeader>,
+    _source_file: Option<String>,
+    _line_number: Option<u32>,
     pdus: Vec<NVPdu>,
 }
 
@@ -157,10 +162,70 @@ impl NonVerboseFibexData {
                     {
                         // todo warn
                     } else {
+                        let frame = frame.1;
+                        let apid = frame
+                            .manufacturer_extension
+                            .as_ref()
+                            .and_then(|e| e.child_by_name("APPLICATION_ID"))
+                            .and_then(|a| a.text.as_ref())
+                            .and_then(|text| DltChar4::from_str(text).ok());
+
+                        let ctid = frame
+                            .manufacturer_extension
+                            .as_ref()
+                            .and_then(|e| e.child_by_name("CONTEXT_ID"))
+                            .and_then(|a| a.text.as_ref())
+                            .and_then(|text| DltChar4::from_str(text).ok());
+                        let source_file = frame
+                            .manufacturer_extension
+                            .as_ref()
+                            .and_then(|e| e.child_by_name("MESSAGE_SOURCE_FILE"))
+                            .and_then(|a| a.text.to_owned());
+                        let line_number = frame
+                            .manufacturer_extension
+                            .as_ref()
+                            .and_then(|e| e.child_by_name("MESSAGE_LINE_NUMBER"))
+                            .and_then(|a| a.text.as_ref())
+                            .and_then(|t| t.parse::<u32>().ok());
+
+                        let ext_header = if let Some(apid) = apid {
+                            if let Some(ctid) = ctid {
+                                let message_info = frame
+                                    .manufacturer_extension
+                                    .as_ref()
+                                    .and_then(|e| e.child_by_name("MESSAGE_INFO"))
+                                    .and_then(|a| a.text.as_deref());
+                                let mtin = match message_info {
+                                    Some("DLT_LOG_ERROR") => 2u8,
+                                    Some("DLT_LOG_WARN") => 3,
+                                    Some("DLT_LOG_INFO") => 4,
+                                    Some("DLT_LOG_DEBUG") => 5,
+                                    Some("DLT_LOG_VERBOSE") => 6,
+                                    _ => 1, // default to FATAL
+                                };
+                                let mstp = 0u8; // todo match MESSAGE_TYPE
+
+                                let verb_mstp_mtin = (mtin << 4) | (mstp << 1);
+                                Some(DltExtendedHeader {
+                                    verb_mstp_mtin,
+                                    noar: 0, // todo or to nr pdus?
+                                    apid,
+                                    ctid,
+                                })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
                         self.frames_map_by_id.insert(
                             id,
                             NVFrame {
-                                byte_length: frame.1.byte_length,
+                                byte_length: frame.byte_length,
+                                ext_header,
+                                _source_file: source_file,
+                                _line_number: line_number,
                                 pdus,
                             },
                         );
@@ -234,6 +299,11 @@ impl<'a> Plugin for NonVerbosePlugin {
                                 let mut text = String::with_capacity(256);
                                 if DltMessage::process_msg_arg_iter(args, &mut text).is_ok() {
                                     msg.payload_text = Some(text);
+                                    if let Some(ext_header) = &frame.ext_header {
+                                        if msg.extended_header.is_none() {
+                                            msg.extended_header = Some(ext_header.to_owned());
+                                        }
+                                    }
                                 } else {
                                     // todo write error?
                                     msg.payload_text = Some(format!(
@@ -369,7 +439,7 @@ impl NonVerbosePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dlt::DltChar4;
+    use crate::dlt::{DltChar4, DltMessageLogType, DltMessageType};
     use serde_json::json;
 
     #[test]
@@ -428,6 +498,10 @@ mod tests {
             m.payload_as_text(),
             Ok("FooStateMachine, Enter ON State".to_owned())
         );
+        // verify that mstp, APID, CTID are updated as well:
+        assert_eq!(m.mstp(), DltMessageType::Log(DltMessageLogType::Debug));
+        assert_eq!(m.apid(), Some(&DltChar4::from_buf(b"HLD\0")));
+        assert_eq!(m.ctid(), Some(&DltChar4::from_buf(b"MAIN")));
 
         let payload: Vec<Vec<u8>> = vec![
             805834673u32.to_le_bytes().into(),

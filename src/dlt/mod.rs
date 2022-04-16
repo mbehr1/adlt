@@ -474,7 +474,7 @@ pub enum DltMessageType {
     Control(DltMessageControlType),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct DltExtendedHeader {
     pub verb_mstp_mtin: u8,
     pub(super) noar: u8,
