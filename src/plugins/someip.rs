@@ -329,13 +329,17 @@ impl SomeipPlugin {
 
         // todo parse ctid and mtin
 
-        let enabled = match &config["enabled"] {
-            serde_json::Value::Bool(b) => *b,
-            serde_json::Value::Null => true,
-            _ => false,
+        let enabled = match &config.get("enabled") {
+            Some(serde_json::Value::Bool(b)) => *b,
+            None => true, // default to true
+            _ => {
+                return Err(
+                    SomeipPluginError::new("SomeipPlugin: config 'enabled' not an bool").into(),
+                )
+            }
         };
 
-        let fibex_dir = if let serde_json::Value::String(s) = &config["fibexDir"] {
+        let fibex_dir = if let Some(serde_json::Value::String(s)) = &config.get("fibexDir") {
             s.clone()
         } else {
             return Err(

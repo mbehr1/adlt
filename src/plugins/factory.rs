@@ -1,4 +1,6 @@
-use super::{plugin::Plugin, rewrite::RewritePlugin, someip::SomeipPlugin};
+use super::{
+    non_verbose::NonVerbosePlugin, plugin::Plugin, rewrite::RewritePlugin, someip::SomeipPlugin,
+};
 
 pub fn get_plugin(
     config: &serde_json::Map<String, serde_json::Value>,
@@ -30,6 +32,15 @@ pub fn get_plugin(
                 }
                 "Rewrite" => {
                     let plugin = RewritePlugin::from_json(config);
+                    if let Ok(plugin) = plugin {
+                        Some(Box::new(plugin))
+                    } else {
+                        println!("plugin:{} got err {:?}", name, plugin.unwrap_err());
+                        None
+                    }
+                }
+                "NonVerbose" => {
+                    let plugin = NonVerbosePlugin::from_json(config);
                     if let Ok(plugin) = plugin {
                         Some(Box::new(plugin))
                     } else {

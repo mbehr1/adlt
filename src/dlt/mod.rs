@@ -790,6 +790,220 @@ impl DltMessage {
         self.payload_text = Some(text);
     }
 
+    /// process the iterator adding text to the provided string.
+    /// The text is modified and should only be used if no error is returned
+    pub(crate) fn process_msg_arg_iter<'a, I>(
+        args: I,
+        text: &mut String,
+    ) -> Result<(), std::fmt::Error>
+    where
+        I: Iterator<Item = DltArg<'a>>,
+    {
+        let mut itoa_buf = itoa::Buffer::new(); // even though cheap, we do reuse
+        for (nr_arg, arg) in args.enumerate() {
+            if nr_arg > 0 {
+                text.write_char(' ')?;
+            }
+            // let _tyle = arg.type_info & 0x0f;
+            let is_bool = arg.type_info & DLT_TYPE_INFO_BOOL > 0;
+            let is_sint = arg.type_info & DLT_TYPE_INFO_SINT > 0;
+            let is_uint = arg.type_info & DLT_TYPE_INFO_UINT > 0;
+            let is_floa = arg.type_info & DLT_TYPE_INFO_FLOA > 0;
+            let _is_aray = arg.type_info & DLT_TYPE_INFO_ARAY > 0;
+            let is_strg = arg.type_info & DLT_TYPE_INFO_STRG > 0;
+            let is_rawd = arg.type_info & DLT_TYPE_INFO_RAWD > 0;
+
+            if is_bool {
+                let val = arg.payload_raw[0];
+                if val > 0 {
+                    text.write_str("true")?;
+                } else {
+                    text.write_str("false")?;
+                }
+            } else if is_uint {
+                match arg.payload_raw.len() {
+                    1 => {
+                        let val: u8 = arg.payload_raw[0];
+                        text.write_str(itoa_buf.format(val))?;
+                        // itoa_buf is faster than write!(text, "{}", val)?; // is surpringly faster than text.write_str(&val.to_string())?;
+                    }
+                    2 => {
+                        let val: u16 = if arg.is_big_endian {
+                            u16::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            u16::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    4 => {
+                        let val: u32 = if arg.is_big_endian {
+                            u32::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            u32::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    8 => {
+                        let val: u64 = if arg.is_big_endian {
+                            u64::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            u64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    16 => {
+                        let val: u128 = if arg.is_big_endian {
+                            u128::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            u128::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    _ => (),
+                };
+            } else if is_sint {
+                match arg.payload_raw.len() {
+                    1 => {
+                        let val: i8 = arg.payload_raw[0] as i8;
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    2 => {
+                        let val: i16 = if arg.is_big_endian {
+                            i16::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            i16::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    4 => {
+                        let val: i32 = if arg.is_big_endian {
+                            i32::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            i32::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    8 => {
+                        let val: i64 = if arg.is_big_endian {
+                            i64::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    16 => {
+                        let val: i128 = if arg.is_big_endian {
+                            i128::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            i128::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        text.write_str(itoa_buf.format(val))?;
+                    }
+                    _ => (),
+                };
+            } else if is_floa {
+                match arg.payload_raw.len() {
+                    4 => {
+                        let val: f32 = if arg.is_big_endian {
+                            f32::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            f32::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        write!(text, "{}", val)?;
+                    }
+                    8 => {
+                        let val: f64 = if arg.is_big_endian {
+                            f64::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                        } else {
+                            f64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                        };
+                        write!(text, "{}", val)?;
+                    }
+                    // f16 and f128 dont exist. todo could use create half::f16 and f128::f128 but dlt-viewer doesn't support it either
+                    _ => {
+                        write!(
+                            text,
+                            "?<floa with len={} raw={:?}>",
+                            arg.payload_raw.len(),
+                            arg.payload_raw
+                        )?;
+                    }
+                }
+            } else if is_rawd {
+                if !arg.payload_raw.is_empty() {
+                    for (i, &c) in arg.payload_raw[0..arg.payload_raw.len()].iter().enumerate() {
+                        if i > 0 {
+                            write!(text, " {:02x}", c)?;
+                        } else {
+                            write!(text, "{:02x}", c)?;
+                        }
+                    }
+                }
+            } else if is_strg {
+                let scod = arg.type_info & DLT_TYPE_INFO_MASK_SCOD;
+                match scod {
+                    DLT_SCOD_UTF8 => {
+                        // they should be zero terminated
+                        if arg.payload_raw.len() > 1 {
+                            // use copy-on-write strings that alloc only if modification is needed
+                            let s = String::from_utf8_lossy(
+                                &arg.payload_raw[0..arg.payload_raw.len() - 1],
+                            );
+                            /* todo or ? let s = match s {
+                                std::borrow::Cow::Borrowed(s) => RE.replace_all(s, " "),
+                                std::borrow::Cow::Owned(s) => std::borrow::Cow::Owned(
+                                    RE.replace_all(&s, " ").into_owned(),
+                                ),
+                            };*/
+                            let s = RE_NEW_LINE.replace_all(&s, " ");
+                            text.write_str(&s)?;
+                        }
+                    }
+                    DLT_SCOD_ASCII => {
+                        // dlt doesn't seem to define the ASCII codepage.
+                        // we could use ISO-8859-1 or WINDOWS_1252 "Latin 1"
+                        // or we reduce the printable ones to 0x20 (' ') .. 0x7e ('~')
+                        // for now we start with 0x20..0x7e and \n\r\t -> ' '
+                        // they should be zero terminated
+                        if arg.payload_raw.len() > 1 {
+                            // use copy-on-write strings that alloc only if modification is needed
+                            let (s, _) = WINDOWS_1252.decode_without_bom_handling(
+                                &arg.payload_raw[0..arg.payload_raw.len() - 1],
+                            );
+                            let s = RE_NEW_LINE.replace_all(&s, " ");
+                            text.write_str(&s)?;
+
+                            /* instead of WINDOWS-1252 we could use for printable ones only:
+                            for c in &arg.payload_raw[0..arg.payload_raw.len() - 1] {
+                                let c = *c;
+                                let printable_char = if c == b'\n' || c == b'\r' || c == b'\t' {
+                                    ' '
+                                } else if !(0x20..0x7e).contains(&c) {
+                                    '\u{FFFD}'
+                                } else {
+                                    char::from(c)
+                                };
+                                text.write_char(printable_char)?;
+                            }
+                            */
+                        }
+                    }
+
+                    DLT_SCOD_HEX => {
+                        write!(text, "<scod hex nyi! todo>")?;
+                    }
+                    DLT_SCOD_BIN => {
+                        write!(text, "<scod bin nyi! todo>")?;
+                    }
+                    _ => {
+                        write!(text, "<scod unknown {}>", scod)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn payload_as_text(&self) -> Result<String, std::fmt::Error> {
         if let Some(text) = &self.payload_text {
             return Ok(text.clone());
@@ -797,215 +1011,14 @@ impl DltMessage {
         let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
         let mut args = self.into_iter();
         if self.is_verbose() {
-            let mut itoa_buf = itoa::Buffer::new(); // even though cheap, we do reuse
-            for (nr_arg, arg) in args.enumerate() {
-                if nr_arg > 0 {
-                    text.write_char(' ')?;
-                }
-                // let _tyle = arg.type_info & 0x0f;
-                let is_bool = arg.type_info & DLT_TYPE_INFO_BOOL > 0;
-                let is_sint = arg.type_info & DLT_TYPE_INFO_SINT > 0;
-                let is_uint = arg.type_info & DLT_TYPE_INFO_UINT > 0;
-                let is_floa = arg.type_info & DLT_TYPE_INFO_FLOA > 0;
-                let _is_aray = arg.type_info & DLT_TYPE_INFO_ARAY > 0;
-                let is_strg = arg.type_info & DLT_TYPE_INFO_STRG > 0;
-                let is_rawd = arg.type_info & DLT_TYPE_INFO_RAWD > 0;
-
-                if is_bool {
-                    let val = arg.payload_raw[0];
-                    if val > 0 {
-                        text.write_str("true")?;
-                    } else {
-                        text.write_str("false")?;
-                    }
-                } else if is_uint {
-                    match arg.payload_raw.len() {
-                        1 => {
-                            let val: u8 = arg.payload_raw[0];
-                            text.write_str(itoa_buf.format(val))?;
-                            // itoa_buf is faster than write!(text, "{}", val)?; // is surpringly faster than text.write_str(&val.to_string())?;
-                        }
-                        2 => {
-                            let val: u16 = if arg.is_big_endian {
-                                u16::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                u16::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        4 => {
-                            let val: u32 = if arg.is_big_endian {
-                                u32::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                u32::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        8 => {
-                            let val: u64 = if arg.is_big_endian {
-                                u64::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                u64::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        16 => {
-                            let val: u128 = if arg.is_big_endian {
-                                u128::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                u128::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        _ => (),
-                    };
-                } else if is_sint {
-                    match arg.payload_raw.len() {
-                        1 => {
-                            let val: i8 = arg.payload_raw[0] as i8;
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        2 => {
-                            let val: i16 = if arg.is_big_endian {
-                                i16::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                i16::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        4 => {
-                            let val: i32 = if arg.is_big_endian {
-                                i32::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                i32::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        8 => {
-                            let val: i64 = if arg.is_big_endian {
-                                i64::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        16 => {
-                            let val: i128 = if arg.is_big_endian {
-                                i128::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                i128::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            text.write_str(itoa_buf.format(val))?;
-                        }
-                        _ => (),
-                    };
-                } else if is_floa {
-                    match arg.payload_raw.len() {
-                        4 => {
-                            let val: f32 = if arg.is_big_endian {
-                                f32::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                f32::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            write!(text, "{}", val)?;
-                        }
-                        8 => {
-                            let val: f64 = if arg.is_big_endian {
-                                f64::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                            } else {
-                                f64::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                            };
-                            write!(text, "{}", val)?;
-                        }
-                        // f16 and f128 dont exist. todo could use create half::f16 and f128::f128 but dlt-viewer doesn't support it either
-                        _ => {
-                            write!(
-                                text,
-                                "?<floa with len={} raw={:?}>",
-                                arg.payload_raw.len(),
-                                arg.payload_raw
-                            )?;
-                        }
-                    }
-                } else if is_rawd {
-                    if !arg.payload_raw.is_empty() {
-                        for (i, &c) in arg.payload_raw[0..arg.payload_raw.len()].iter().enumerate()
-                        {
-                            if i > 0 {
-                                write!(text, " {:02x}", c)?;
-                            } else {
-                                write!(text, "{:02x}", c)?;
-                            }
-                        }
-                    }
-                } else if is_strg {
-                    let scod = arg.type_info & DLT_TYPE_INFO_MASK_SCOD;
-                    match scod {
-                        DLT_SCOD_UTF8 => {
-                            // they should be zero terminated
-                            if arg.payload_raw.len() > 1 {
-                                // use copy-on-write strings that alloc only if modification is needed
-                                let s = String::from_utf8_lossy(
-                                    &arg.payload_raw[0..arg.payload_raw.len() - 1],
-                                );
-                                /* todo or ? let s = match s {
-                                    std::borrow::Cow::Borrowed(s) => RE.replace_all(s, " "),
-                                    std::borrow::Cow::Owned(s) => std::borrow::Cow::Owned(
-                                        RE.replace_all(&s, " ").into_owned(),
-                                    ),
-                                };*/
-                                let s = RE_NEW_LINE.replace_all(&s, " ");
-                                text.write_str(&s)?;
-                            }
-                        }
-                        DLT_SCOD_ASCII => {
-                            // dlt doesn't seem to define the ASCII codepage.
-                            // we could use ISO-8859-1 or WINDOWS_1252 "Latin 1"
-                            // or we reduce the printable ones to 0x20 (' ') .. 0x7e ('~')
-                            // for now we start with 0x20..0x7e and \n\r\t -> ' '
-                            // they should be zero terminated
-                            if arg.payload_raw.len() > 1 {
-                                // use copy-on-write strings that alloc only if modification is needed
-                                let (s, _) = WINDOWS_1252.decode_without_bom_handling(
-                                    &arg.payload_raw[0..arg.payload_raw.len() - 1],
-                                );
-                                let s = RE_NEW_LINE.replace_all(&s, " ");
-                                text.write_str(&s)?;
-
-                                /* instead of WINDOWS-1252 we could use for printable ones only:
-                                for c in &arg.payload_raw[0..arg.payload_raw.len() - 1] {
-                                    let c = *c;
-                                    let printable_char = if c == b'\n' || c == b'\r' || c == b'\t' {
-                                        ' '
-                                    } else if !(0x20..0x7e).contains(&c) {
-                                        '\u{FFFD}'
-                                    } else {
-                                        char::from(c)
-                                    };
-                                    text.write_char(printable_char)?;
-                                }
-                                */
-                            }
-                        }
-
-                        DLT_SCOD_HEX => {
-                            write!(text, "<scod hex nyi! todo>")?;
-                        }
-                        DLT_SCOD_BIN => {
-                            write!(text, "<scod bin nyi! todo>")?;
-                        }
-                        _ => {
-                            write!(text, "<scod unknown {}>", scod)?;
-                        }
-                    }
-                }
-            }
+            DltMessage::process_msg_arg_iter(args, &mut text)?;
         } else {
             // non-verbose
             let message_id_arg = args.next();
             let message_id = match message_id_arg {
                 Some(a) => {
                     if a.is_big_endian {
+                        // todo this fails if first arg is not a uint32! add check
                         u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
                     } else {
                         u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
@@ -1169,15 +1182,15 @@ pub struct DltMessageArgIterator<'a> {
 /// DLT argument encoding mask for type lengths DLT_TYLE_*
 const DLT_TYPE_INFO_MASK_TYLE: u32 = 0x0000000f;
 
-const DLT_TYPE_INFO_BOOL: u32 = 0x00000010;
-const DLT_TYPE_INFO_SINT: u32 = 0x00000020;
-const DLT_TYPE_INFO_UINT: u32 = 0x00000040;
-const DLT_TYPE_INFO_FLOA: u32 = 0x00000080;
+pub(crate) const DLT_TYPE_INFO_BOOL: u32 = 0x00000010;
+pub(crate) const DLT_TYPE_INFO_SINT: u32 = 0x00000020;
+pub(crate) const DLT_TYPE_INFO_UINT: u32 = 0x00000040;
+pub(crate) const DLT_TYPE_INFO_FLOA: u32 = 0x00000080;
 /// DLT argument encoding for array of standard types
 const DLT_TYPE_INFO_ARAY: u32 = 0x00000100;
 
-const DLT_TYPE_INFO_STRG: u32 = 0x00000200;
-const DLT_TYPE_INFO_RAWD: u32 = 0x00000400;
+pub(crate) const DLT_TYPE_INFO_STRG: u32 = 0x00000200;
+pub(crate) const DLT_TYPE_INFO_RAWD: u32 = 0x00000400;
 /// DLT argument encoding for additional information to a variable (name and unit)
 const DLT_TYPE_INFO_VARI: u32 = 0x00000800;
 /// DLT argument encoding for FIXP encoding with quantization and offset
@@ -1189,10 +1202,10 @@ const DLT_TYPE_INFO_STRU: u32 = 0x00004000;
 /// DLT argument encoding mask for the string types DLT_SCOD_*
 const DLT_TYPE_INFO_MASK_SCOD: u32 = 0x00038000;
 
-const DLT_TYLE_8BIT: u8 = 1;
-const DLT_TYLE_16BIT: u8 = 2;
-const DLT_TYLE_32BIT: u8 = 3;
-const DLT_TYLE_64BIT: u8 = 4;
+pub(crate) const DLT_TYLE_8BIT: u8 = 1;
+pub(crate) const DLT_TYLE_16BIT: u8 = 2;
+pub(crate) const DLT_TYLE_32BIT: u8 = 3;
+pub(crate) const DLT_TYLE_64BIT: u8 = 4;
 const DLT_TYLE_128BIT: u8 = 5;
 
 pub const DLT_SCOD_ASCII: u32 = 0x00000000;
@@ -1202,7 +1215,7 @@ pub const DLT_SCOD_BIN: u32 = 0x00018000;
 
 #[derive(Debug, PartialEq)]
 pub struct DltArg<'a> {
-    type_info: u32,            // in host endianess already
+    pub(crate) type_info: u32, // in host endianess already
     pub is_big_endian: bool,   // for the payload raw
     pub payload_raw: &'a [u8], // data within is
 }
