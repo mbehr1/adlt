@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet href="dlt_messages.xsl" type="text/xsl" ?>
+<fx:FIBEX xmlns:ho="http://www.asam.net/xml" xmlns:fx="http://www.asam.net/xml/fbx">
+    <fx:PROJECT ID="adlt-non-verbose-1">
+        <ho:SHORT-NAME>adlt non verbose test fibex 1</ho:SHORT-NAME>
+    </fx:PROJECT>
+    <fx:ELEMENTS>
+        <fx:ECUS>
+            <fx:ECU ID="Ecu1">
+                <ho:SHORT-NAME>Ecu1</ho:SHORT-NAME>
+                <fx:MANUFACTURER-EXTENSION>
+                    <SW_VERSION>1.0.1</SW_VERSION>
+                    <APPLICATIONS>
+                        <APPLICATION>
+                            <APPLICATION_ID>HLD</APPLICATION_ID>
+                            <APPLICATION_DESCRIPTION>Description for apid HLD</APPLICATION_DESCRIPTION>
+                            <CONTEXTS>
+                                <CONTEXT>
+                                    <CONTEXT_ID>ERR</CONTEXT_ID>
+                                    <CONTEXT_DESCRIPTION>Description for apid:context HLD:ERR</CONTEXT_DESCRIPTION>
+                                </CONTEXT>
+                                <CONTEXT>
+                                    <CONTEXT_ID>MAIN</CONTEXT_ID>
+                                    <CONTEXT_DESCRIPTION>Description for apid:context HLD:MAIN</CONTEXT_DESCRIPTION>
+                                </CONTEXT>
+                            </CONTEXTS>
+                        </APPLICATION>
+                    </APPLICATIONS>
+                </fx:MANUFACTURER-EXTENSION>
+            </fx:ECU>
+        </fx:ECUS>
+        <fx:PDUS>
+            <fx:PDU ID="PAYLOAD_805834673_0_DESCR">
+                <ho:SHORT-NAME>FooError_Set</ho:SHORT-NAME>
+                <ho:DESC>DTC set but env data was not yet fetched, lldErrorStatus=</ho:DESC>
+                <fx:BYTE-LENGTH>0</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+            </fx:PDU>
+            <fx:PDU ID="PAYLOAD_805834673_1">
+                <ho:SHORT-NAME>newEnvData.lldErrorStatus</ho:SHORT-NAME>
+                <fx:BYTE-LENGTH>4</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+                <fx:SIGNAL-INSTANCES>
+                    <fx:SIGNAL-INSTANCE ID="S_805834673_1">
+                        <fx:SEQUENCE-NUMBER>0</fx:SEQUENCE-NUMBER>
+                        <fx:SIGNAL-REF ID-REF="S_UINT32"/>
+                    </fx:SIGNAL-INSTANCE>
+                </fx:SIGNAL-INSTANCES>
+            </fx:PDU>
+            <fx:PDU ID="PAYLOAD_805834673_2_DESCR">
+                <ho:SHORT-NAME>FooError_Set</ho:SHORT-NAME>
+                <ho:DESC>, lldStatus=</ho:DESC>
+                <fx:BYTE-LENGTH>0</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+            </fx:PDU>
+            <fx:PDU ID="PAYLOAD_805834673_3">
+                <ho:SHORT-NAME>newEnvData.lldStatus</ho:SHORT-NAME>
+                <fx:BYTE-LENGTH>4</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+                <fx:SIGNAL-INSTANCES>
+                    <fx:SIGNAL-INSTANCE ID="S_805834673_3">
+                        <fx:SEQUENCE-NUMBER>0</fx:SEQUENCE-NUMBER>
+                        <fx:SIGNAL-REF ID-REF="S_SINT32"/>
+                    </fx:SIGNAL-INSTANCE>
+                </fx:SIGNAL-INSTANCES>
+            </fx:PDU>
+            <fx:PDU ID="PAYLOAD_805834673_4_DESCR">
+                <ho:SHORT-NAME>FooError_Set</ho:SHORT-NAME>
+                <ho:DESC>, lldBcklTemp=</ho:DESC>
+                <fx:BYTE-LENGTH>0</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+            </fx:PDU>
+            <fx:PDU ID="PAYLOAD_805834673_5">
+                <ho:SHORT-NAME>newEnvData.lldBcklTemp</ho:SHORT-NAME>
+                <fx:BYTE-LENGTH>2</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+                <fx:SIGNAL-INSTANCES>
+                    <fx:SIGNAL-INSTANCE ID="S_805834673_5">
+                        <fx:SEQUENCE-NUMBER>0</fx:SEQUENCE-NUMBER>
+                        <fx:SIGNAL-REF ID-REF="S_UINT16"/>
+                    </fx:SIGNAL-INSTANCE>
+                </fx:SIGNAL-INSTANCES>
+            </fx:PDU>
+            <fx:PDU ID="PAYLOAD_805834673_6_DESCR">
+                <ho:SHORT-NAME>FooError_Set</ho:SHORT-NAME>
+                <ho:DESC>, lldVccVoltage=</ho:DESC>
+                <fx:BYTE-LENGTH>0</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+            </fx:PDU>
+            <fx:PDU ID="PAYLOAD_805834673_7">
+                <ho:SHORT-NAME>newEnvData.lldVccVoltage</ho:SHORT-NAME>
+                <fx:BYTE-LENGTH>1</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+                <fx:SIGNAL-INSTANCES>
+                    <fx:SIGNAL-INSTANCE ID="S_805834673_7">
+                        <fx:SEQUENCE-NUMBER>0</fx:SEQUENCE-NUMBER>
+                        <fx:SIGNAL-REF ID-REF="S_UINT8"/>
+                    </fx:SIGNAL-INSTANCE>
+                </fx:SIGNAL-INSTANCES>
+            </fx:PDU>
+        </fx:PDUS>
+        <fx:FRAMES>
+            <fx:FRAME ID="ID_805834673">
+                <ho:SHORT-NAME>FooError_Set</ho:SHORT-NAME>
+                <fx:BYTE-LENGTH>11</fx:BYTE-LENGTH>
+                <fx:FRAME-TYPE>OTHER</fx:FRAME-TYPE>
+                <fx:PDU-INSTANCES>
+                    <fx:PDU-INSTANCE ID="PDU_805834673_0_DESCR">
+                        <fx:PDU-REF ID-REF="PAYLOAD_805834673_0_DESCR"/>
+                        <fx:SEQUENCE-NUMBER>0</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                    <fx:PDU-INSTANCE ID="PDU_805834673_1">
+                        <fx:PDU-REF ID-REF="PAYLOAD_805834673_1"/>
+                        <fx:SEQUENCE-NUMBER>1</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                    <fx:PDU-INSTANCE ID="PDU_805834673_2_DESCR">
+                        <fx:PDU-REF ID-REF="PAYLOAD_805834673_2_DESCR"/>
+                        <fx:SEQUENCE-NUMBER>2</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                    <fx:PDU-INSTANCE ID="PDU_805834673_3">
+                        <fx:PDU-REF ID-REF="PAYLOAD_805834673_3"/>
+                        <fx:SEQUENCE-NUMBER>3</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                    <fx:PDU-INSTANCE ID="PDU_805834673_4_DESCR">
+                        <fx:PDU-REF ID-REF="PAYLOAD_805834673_4_DESCR"/>
+                        <fx:SEQUENCE-NUMBER>4</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                    <fx:PDU-INSTANCE ID="PDU_805834673_5">
+                        <fx:PDU-REF ID-REF="PAYLOAD_805834673_5"/>
+                        <fx:SEQUENCE-NUMBER>5</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                    <fx:PDU-INSTANCE ID="PDU_805834673_6_DESCR">
+                        <fx:PDU-REF ID-REF="PAYLOAD_805834673_6_DESCR"/>
+                        <fx:SEQUENCE-NUMBER>6</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                    <fx:PDU-INSTANCE ID="PDU_805834673_7">
+                        <fx:PDU-REF ID-REF="PAYLOAD_805834673_7"/>
+                        <fx:SEQUENCE-NUMBER>7</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                </fx:PDU-INSTANCES>
+                <fx:MANUFACTURER-EXTENSION>
+                    <MESSAGE_TYPE>DLT_TYPE_LOG</MESSAGE_TYPE>
+                    <MESSAGE_INFO>DLT_LOG_WARN</MESSAGE_INFO>
+                    <APPLICATION_ID>HLD</APPLICATION_ID>
+                    <CONTEXT_ID>ERR</CONTEXT_ID>
+                    <MESSAGE_SOURCE_FILE>FooError.c</MESSAGE_SOURCE_FILE>
+                    <MESSAGE_LINE_NUMBER>42</MESSAGE_LINE_NUMBER>
+                </fx:MANUFACTURER-EXTENSION>
+            </fx:FRAME>
+        </fx:FRAMES>
+    </fx:ELEMENTS>
+</fx:FIBEX>

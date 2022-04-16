@@ -17,7 +17,6 @@ use std::{collections::HashMap, error::Error, fmt, path::Path, str::FromStr};
 
 #[derive(Debug)]
 struct NonVerboseFibexData {
-    _fd: FibexData,
     frames_map_by_id: HashMap<u32, NVFrame>,
 }
 
@@ -145,9 +144,7 @@ impl NonVerboseFibexData {
         pdus
     }
 
-    fn from_fibex(fd: FibexData) -> NonVerboseFibexData {
-        let mut frames_map_by_id = HashMap::with_capacity(fd.elements.frames_map_by_id.len());
-
+    fn insert_frames(&mut self, fd: &FibexData) {
         for frame in &fd.elements.frames_map_by_id {
             if frame.1.id.starts_with("ID_") {
                 let id = frame.1.id[3..].parse::<u32>();
@@ -160,7 +157,7 @@ impl NonVerboseFibexData {
                     {
                         // todo warn
                     } else {
-                        frames_map_by_id.insert(
+                        self.frames_map_by_id.insert(
                             id,
                             NVFrame {
                                 byte_length: frame.1.byte_length,
@@ -171,11 +168,13 @@ impl NonVerboseFibexData {
                 }
             }
         }
+    }
 
-        NonVerboseFibexData {
-            _fd: fd,
-            frames_map_by_id,
-        }
+    fn from_fibex(fd: FibexData) -> NonVerboseFibexData {
+        let frames_map_by_id = HashMap::with_capacity(fd.elements.frames_map_by_id.len());
+        let mut s = NonVerboseFibexData { frames_map_by_id };
+        s.insert_frames(&fd);
+        s
     }
 }
 
@@ -318,10 +317,22 @@ impl NonVerbosePlugin {
                                         NonVerboseFibexData::from_fibex(fd),
                                     )]);
                                 } else {
-                                    fibex_map_by_ecu
-                                        .get_mut(&ecu_id)
-                                        .unwrap()
-                                        .push((sw_version, NonVerboseFibexData::from_fibex(fd)));
+                                    // add as new sw-version or add to the existing one:
+                                    let versions = fibex_map_by_ecu.get_mut(&ecu_id).unwrap();
+
+                                    match versions.binary_search_by(|a| sw_version.cmp(&a.0)) {
+                                        Ok(idx) => {
+                                            // add to existing one
+                                            versions[idx].1.insert_frames(&fd);
+                                        }
+                                        Err(idx) => {
+                                            // insert at proper position
+                                            versions.insert(
+                                                idx,
+                                                (sw_version, NonVerboseFibexData::from_fibex(fd)),
+                                            );
+                                        }
+                                    };
                                 }
                             } else {
                                 println!(
@@ -375,24 +386,14 @@ mod tests {
         let ecu_id = DltChar4::from_buf(b"Ecu1");
         assert!(p.fibex_map_by_ecu.contains_key(&ecu_id));
         let versions = p.fibex_map_by_ecu.get(&ecu_id).unwrap();
-        assert_eq!(versions.len(), 1);
-        assert_eq!(versions[0].0, "1.0.0");
-        assert_eq!(versions[0].1._fd.elements.frames_map_by_id.len(), 2);
-        assert_eq!(versions[0].1._fd.elements.frames_map_by_id.len(), 2);
-        let frame = versions[0]
-            .1
-            ._fd
-            .elements
-            .frames_map_by_id
-            .get("ID_805834673")
-            .unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].0, "1.0.1"); // newest sw first
 
-        assert_eq!(frame.pdu_instances.len(), 8);
-
+        // both frames available even though splitted in two sep. files:
         let frame = versions[0].1.frames_map_by_id.get(&805834673).unwrap();
         assert_eq!(11, frame.byte_length);
-
-        assert_eq!(11, versions[0].1._fd.elements.pdus_map_by_id.len());
+        let frame = versions[0].1.frames_map_by_id.get(&805312382).unwrap();
+        assert_eq!(0, frame.byte_length);
 
         // name missing: -> err
         let cfg = json!({"enabled": false, "fibexDir":test_dir});
