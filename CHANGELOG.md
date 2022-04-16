@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.15.0 - 2022-04-16
+#### Features
+- **(nonverbose)** add NonVerbose plugin - (1031821) - Matthias Behr
+- - -
+
 ## v0.14.0 - 2022-04-12
 #### Features
 - **(plugin)** add Rewrite plugin - (0bec6db) - Matthias Behr
