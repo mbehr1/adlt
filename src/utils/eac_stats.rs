@@ -282,6 +282,12 @@ mod tests {
     fn init() {
         let eac = EacStats::new();
         assert_eq!(eac.nr_msgs(), 0);
+
+        let a_s: ApidStats = Default::default();
+        assert_eq!(a_s.nr_msgs(), 0);
+
+        let c_s: CtidStats = Default::default();
+        assert_eq!(c_s.nr_msgs, 0);
     }
 
     #[test]
@@ -365,5 +371,39 @@ mod tests {
         let ecu_stat = eac.ecu_map.get(&m.ecu).unwrap();
         let apid_stat = ecu_stat.apids.get(&DltChar4::from_buf(b"APID")).unwrap();
         assert_eq!(apid_stat.desc, Some("desc".to_owned()));
+    }
+
+    #[test]
+    fn remote_types() {
+        let ctid = DltChar4::from_buf(b"CTID");
+        let a_s = ApidStats {
+            desc: Some("apid desc".into()),
+            ctids: vec![(
+                ctid,
+                CtidStats {
+                    desc: Some("ctid desc".into()),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let apid = DltChar4::from_buf(b"APID");
+        let bin_as = remote_types::BinApidInfo::from((&apid, &a_s));
+        assert_eq!(bin_as.apid, apid.as_u32le());
+        assert_eq!(bin_as.desc.as_deref(), Some("apid desc"));
+        assert_eq!(bin_as.ctids.len(), 1);
+        assert_eq!(bin_as.ctids[0].ctid, ctid.as_u32le());
+        assert_eq!(bin_as.ctids[0].desc.as_deref(), Some("ctid desc"));
+
+        let e_s = EcuStats {
+            apids: vec![(apid, a_s)].into_iter().collect(),
+            ..Default::default()
+        };
+        let ecu = DltChar4::from_buf(b"Ecu1");
+        let bin_es = remote_types::BinEcuStats::from((&ecu, &e_s));
+        assert_eq!(bin_es.ecu, ecu.as_u32le());
+        assert_eq!(bin_es.apids.len(), 1);
     }
 }
