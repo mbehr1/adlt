@@ -1,9 +1,12 @@
+use crate::utils::eac_stats::EacStats;
+
 use super::{
     non_verbose::NonVerbosePlugin, plugin::Plugin, rewrite::RewritePlugin, someip::SomeipPlugin,
 };
 
 pub fn get_plugin(
     config: &serde_json::Map<String, serde_json::Value>,
+    eac_stats: &mut EacStats,
 ) -> Option<Box<dyn Plugin + Send>> {
     let name = match &config["name"] {
         serde_json::Value::String(s) => Some(s),
@@ -40,7 +43,7 @@ pub fn get_plugin(
                     }
                 }
                 "NonVerbose" => {
-                    let plugin = NonVerbosePlugin::from_json(config);
+                    let plugin = NonVerbosePlugin::from_json(config, eac_stats);
                     if let Ok(plugin) = plugin {
                         Some(Box::new(plugin))
                     } else {

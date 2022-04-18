@@ -1,8 +1,11 @@
 /// todo:
 /// [ ] think about removing 3 hashmaps to 1 or 2 to improve performance (120Melem/s->34Melem/s)
-use crate::dlt::{
-    control_msgs::parse_ctrl_log_info_payload, DltChar4, DltMessage, DltMessageIndexType,
-    SERVICE_ID_GET_LOG_INFO,
+use crate::{
+    dlt::{
+        control_msgs::parse_ctrl_log_info_payload, DltChar4, DltMessage, DltMessageIndexType,
+        SERVICE_ID_GET_LOG_INFO,
+    },
+    utils::remote_types,
 };
 use std::collections::HashMap;
 
@@ -41,6 +44,21 @@ impl Default for ApidStats {
     }
 }
 
+impl From<(&DltChar4, &ApidStats)> for remote_types::BinApidInfo {
+    fn from(e: (&DltChar4, &ApidStats)) -> Self {
+        Self {
+            apid: e.0.as_u32le(),
+            desc: e.1.desc.to_owned(),
+            ctids: e
+                .1
+                .ctids
+                .iter()
+                .map(remote_types::BinCtidInfo::from)
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct CtidStats {
     pub nr_msgs: DltMessageIndexType,
@@ -58,6 +76,16 @@ impl CtidStats {
 impl Default for CtidStats {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl From<(&DltChar4, &CtidStats)> for remote_types::BinCtidInfo {
+    fn from(e: (&DltChar4, &CtidStats)) -> Self {
+        Self {
+            ctid: e.0.as_u32le(),
+            nr_msgs: e.1.nr_msgs,
+            desc: e.1.desc.to_owned(),
+        }
     }
 }
 
@@ -109,6 +137,21 @@ impl EcuStats {
 impl Default for EcuStats {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl From<(&DltChar4, &EcuStats)> for remote_types::BinEcuStats {
+    fn from(e: (&DltChar4, &EcuStats)) -> Self {
+        Self {
+            ecu: e.0.as_u32le(),
+            nr_msgs: e.1.nr_msgs,
+            apids: e
+                .1
+                .apids
+                .iter()
+                .map(remote_types::BinApidInfo::from)
+                .collect(),
+        }
     }
 }
 

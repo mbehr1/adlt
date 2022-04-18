@@ -31,9 +31,32 @@ pub struct BinFileInfo {
     pub nr_msgs: u32, // todo change with index
 }
 
+/// info about the ECU/APIDs/CTIDs
+#[derive(Encode)]
+pub struct BinEcuStats {
+    pub ecu: u32,
+    pub nr_msgs: u32, // todo change with index
+    pub apids: Vec<BinApidInfo>,
+}
+
+#[derive(Encode)]
+pub struct BinApidInfo {
+    pub apid: u32,
+    pub desc: Option<String>,
+    pub ctids: Vec<BinCtidInfo>,
+}
+
+#[derive(Encode)]
+pub struct BinCtidInfo {
+    pub ctid: u32,
+    pub nr_msgs: u32, // todo change with index
+    pub desc: Option<String>,
+}
+
 #[derive(Encode)]
 pub enum BinType {
     FileInfo(BinFileInfo),
     Lifecycles(Vec<BinLifecycle>),
     DltMsgs((u32, Vec<BinDltMsg>)), // stream id and Vec
+    EacInfo(Vec<BinEcuStats>),
 }
