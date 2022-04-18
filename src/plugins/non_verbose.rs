@@ -2,7 +2,6 @@
 //
 // todos:
 // [ ] show frames in dlt-logs tree...
-// [ ] use the ECU/MANUF.EXT APID/CTID desc infos...
 
 use crate::{
     dlt::{
@@ -13,6 +12,7 @@ use crate::{
     },
     //filter::Filter,
     plugins::plugin::Plugin,
+    utils::eac_stats::EacStats,
 };
 use afibex::fibex::{get_all_fibex_in_dir, Ecu, Elements, FibexData, Frame};
 use std::{collections::HashMap, error::Error, fmt, path::Path, str::FromStr};
@@ -339,6 +339,7 @@ impl<'a> Plugin for NonVerbosePlugin {
 impl NonVerbosePlugin {
     pub fn from_json(
         config: &serde_json::Map<String, serde_json::Value>,
+        eac_stats: &mut EacStats,
     ) -> Result<NonVerbosePlugin, Box<dyn Error>> {
         let name = match &config.get("name") {
             Some(serde_json::Value::String(s)) => s.clone(),
@@ -379,6 +380,48 @@ impl NonVerbosePlugin {
                                 .child_by_name("SW_VERSION")
                                 .and_then(|e| e.text.to_owned());
                             if let Some(sw_version) = sw_version {
+                                // add apid/ctid infos if available
+                                let applications = manuf_ext.child_by_name("APPLICATIONS");
+                                if let Some(applications) = applications {
+                                    for application in &applications.children {
+                                        let apid = application
+                                            .child_by_name("APPLICATION_ID")
+                                            .and_then(|e| e.text.as_deref())
+                                            .and_then(|t| DltChar4::from_str(t).ok());
+                                        if let Some(apid) = apid {
+                                            let desc = application
+                                                .child_by_name("APPLICATION_DESCRIPTION")
+                                                .and_then(|e| e.text.as_deref());
+                                            if let Some(desc) = desc {
+                                                eac_stats.add_desc(desc, &ecu_id, &apid, None);
+                                            }
+                                            if let Some(childs) =
+                                                application.child_by_name("CONTEXTS")
+                                            {
+                                                for child in &childs.children {
+                                                    let ctid = child
+                                                        .child_by_name("CONTEXT_ID")
+                                                        .and_then(|e| e.text.as_deref())
+                                                        .and_then(|t| DltChar4::from_str(t).ok());
+                                                    if let Some(ctid) = ctid {
+                                                        let desc = child
+                                                            .child_by_name("CONTEXT_DESCRIPTION")
+                                                            .and_then(|e| e.text.as_deref());
+                                                        if let Some(desc) = desc {
+                                                            eac_stats.add_desc(
+                                                                desc,
+                                                                &ecu_id,
+                                                                &apid,
+                                                                Some(&ctid),
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 if let std::collections::hash_map::Entry::Vacant(e) =
                                     fibex_map_by_ecu.entry(ecu_id)
                                 {
@@ -444,11 +487,13 @@ mod tests {
 
     #[test]
     fn init_plugin() {
+        let mut eac_stats = EacStats::new();
+
         let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         test_dir.push("tests");
         // good case:
         let cfg = json!({"name":"foo","enabled": false, "fibexDir":test_dir});
-        let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap());
+        let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap(), &mut eac_stats);
         assert!(p.is_ok());
         let p = p.unwrap();
         assert_eq!(p.name, "foo");
@@ -467,26 +512,27 @@ mod tests {
 
         // name missing: -> err
         let cfg = json!({"enabled": false, "fibexDir":test_dir});
-        let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap());
+        let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap(), &mut eac_stats);
         assert!(p.is_err());
 
         // enabled missing -> default true
         let cfg = json!({"name": "f", "fibexDir":test_dir});
-        let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap()).unwrap();
+        let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap(), &mut eac_stats).unwrap();
         assert!(p.enabled);
 
         // fibexDir missing -> err
         let cfg = json!({"name": "f"});
-        let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap());
+        let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap(), &mut eac_stats);
         assert!(p.is_err());
     }
 
     #[test]
     fn rewrite_msg() {
+        let mut eac_stats = EacStats::new();
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("tests");
         let cfg = json!({"name":"foo","enabled": true, "fibexDir":d});
-        let mut p = NonVerbosePlugin::from_json(cfg.as_object().unwrap()).unwrap();
+        let mut p = NonVerbosePlugin::from_json(cfg.as_object().unwrap(), &mut eac_stats).unwrap();
 
         let mut m = DltMessage::for_test();
         assert!(!m.is_verbose());
@@ -515,6 +561,28 @@ mod tests {
         assert_eq!(
             m.payload_as_text(),
             Ok("DTC set but env data was not yet fetched, lldErrorStatus= 12345678 , lldStatus= -23456789 , lldBcklTemp= 4711 , lldVccVoltage= 42".to_owned())
+        );
+    }
+
+    #[test]
+    fn eac_stats() {
+        let mut eac_stats = EacStats::new();
+        let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("tests");
+        let cfg = json!({"name":"foo","enabled": true, "fibexDir":d});
+        let _p = NonVerbosePlugin::from_json(cfg.as_object().unwrap(), &mut eac_stats).unwrap();
+
+        // eac_stats are filled with the apid/ctid info from fx:ECU/manuf.ext/...
+        assert_eq!(eac_stats.ecu_map.len(), 1);
+        let ecu_stat = eac_stats.ecu_map.get(&DltChar4::from_buf(b"Ecu1")).unwrap();
+        assert_eq!(ecu_stat.apids.len(), 1); // HLD
+        let apid_stat = ecu_stat.apids.get(&DltChar4::from_buf(b"HLD\0")).unwrap();
+        assert_eq!(apid_stat.desc, Some("Description for apid HLD".to_owned()));
+        assert_eq!(apid_stat.ctids.len(), 2); // ERR, MAIN
+        let ctid_stat = apid_stat.ctids.get(&DltChar4::from_buf(b"MAIN")).unwrap();
+        assert_eq!(
+            ctid_stat.desc,
+            Some("Description for apid:context HLD:MAIN".to_owned())
         );
     }
 }

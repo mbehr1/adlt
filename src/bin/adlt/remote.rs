@@ -2,14 +2,17 @@ use adlt::{
     dlt::{DltMessageIndexType, DLT_MAX_STORAGE_MSG_SIZE},
     lifecycle::LifecycleId,
     plugins::{factory::get_plugin, plugin::Plugin},
-    utils::{get_first_message_from_file, remote_types, DltMessageIterator, LowMarkBufReader},
+    utils::{
+        eac_stats::EacStats, get_first_message_from_file, remote_types, DltMessageIterator,
+        LowMarkBufReader,
+    },
 };
 use clap::{App, Arg, SubCommand};
 use slog::{debug, error, info, warn};
-use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::net::TcpListener;
+use std::{collections::BTreeMap, time::Instant};
 
 use tungstenite::{
     accept_hdr_with_config,
@@ -296,6 +299,11 @@ struct FileContext {
     streams: Vec<StreamContext>,
     /// we did send lifecycles with that max_msg_index_update
     lcs_max_msg_index_update: DltMessageIndexType,
+
+    /// stats like ecu, apid, ctid:
+    eac_stats: EacStats,
+    eac_next_send_time: Instant,
+    eac_last_nr_msgs: DltMessageIndexType,
 }
 
 impl FileContext {
@@ -308,6 +316,8 @@ impl FileContext {
 
         let v = serde_json::from_str::<serde_json::Value>(json_str)?;
         debug!(log, "FileContext::from({}:{}) = {:?}", command, json_str, v);
+
+        let mut eac_stats = EacStats::new();
 
         match &v["files"] {
             serde_json::Value::Array(a) => {
@@ -401,7 +411,7 @@ impl FileContext {
                 for plugin in a {
                     if plugin.is_object() {
                         info!(log, "FileContext plugins got '{:?}'", plugin.as_object());
-                        let p = get_plugin(plugin.as_object().unwrap());
+                        let p = get_plugin(plugin.as_object().unwrap(), &mut eac_stats);
                         if let Some(p) = p {
                             plugins_active.push(p);
                         }
@@ -433,6 +443,9 @@ impl FileContext {
             )),
             streams: Vec::new(),
             lcs_max_msg_index_update: 0,
+            eac_stats,
+            eac_next_send_time: std::time::Instant::now() + std::time::Duration::from_secs(2), // after 2 secs the first update
+            eac_last_nr_msgs: 0,
         })
     }
 }
@@ -821,6 +834,7 @@ fn process_file_context<T: Read + Write>(
             let rm = rx.recv_timeout(std::time::Duration::from_millis(10));
             match rm {
                 Ok(msg) => {
+                    fc.eac_stats.add_msg(&msg);
                     fc.all_msgs.push(msg);
                     got_new_msgs = true;
                 }
@@ -835,6 +849,7 @@ fn process_file_context<T: Read + Write>(
     }
     // inform about new msgs
     if got_new_msgs && websocket.can_write() {
+        // todo debounce this a bit? (eg with eac stats?)
         websocket.write_message(Message::Binary(
             bincode::encode_to_vec(
                 remote_types::BinType::FileInfo(remote_types::BinFileInfo {
@@ -882,6 +897,31 @@ fn process_file_context<T: Read + Write>(
                     websocket.write_message(Message::Binary(encoded))?;
                 }
             }
+        }
+    }
+
+    // send eac stats? if deadline expired and nr_msgs have increased
+    // so if only desc have been updated this wont trigger a resend
+    if fc.eac_next_send_time > deadline {
+        // deadline is slightly off (~40ms), but we dont care
+        fc.eac_next_send_time = std::time::Instant::now() + std::time::Duration::from_secs(3); // every 3s
+        let eac_nr_msgs = fc.eac_stats.nr_msgs();
+        if fc.eac_last_nr_msgs < eac_nr_msgs {
+            fc.eac_last_nr_msgs = eac_nr_msgs;
+            // yes, resend:
+            websocket.write_message(Message::Binary(
+                bincode::encode_to_vec(
+                    remote_types::BinType::EacInfo(
+                        fc.eac_stats
+                            .ecu_map
+                            .iter()
+                            .map(remote_types::BinEcuStats::from)
+                            .collect(),
+                    ),
+                    BINCODE_CONFIG,
+                )
+                .unwrap(), // todo
+            ))?;
         }
     }
 
