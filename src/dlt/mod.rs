@@ -477,9 +477,9 @@ pub enum DltMessageType {
 #[derive(Debug, PartialEq, Clone)]
 pub struct DltExtendedHeader {
     pub verb_mstp_mtin: u8,
-    pub(super) noar: u8,
-    pub(super) apid: DltChar4,
-    pub(super) ctid: DltChar4,
+    pub noar: u8,
+    pub apid: DltChar4,
+    pub ctid: DltChar4,
 }
 impl DltExtendedHeader {
     fn from_buf(buf: &[u8]) -> Option<DltExtendedHeader> {
@@ -1151,6 +1151,36 @@ impl DltMessage {
             payload_text: None,
             lifecycle: 0,
         }
+    }
+
+    #[cfg(test)]
+    /// return a control message
+    pub fn get_testmsg_control(big_endian: bool, noar: u8, payload_buf: &[u8]) -> DltMessage {
+        let sh = DltStorageHeader {
+            secs: 0,
+            micros: 0,
+            ecu: DltChar4::from_str("ECU1").unwrap(),
+        };
+        let exth = DltExtendedHeader {
+            verb_mstp_mtin: 0x3 << 1 | (0x02 << 4),
+            noar,
+            apid: DltChar4::from_buf(b"DA1\0"),
+            ctid: DltChar4::from_buf(b"DC1\0"),
+        };
+        let stdh = DltStandardHeader {
+            htyp: 0x21
+                | (if big_endian {
+                    DLT_STD_HDR_BIG_ENDIAN
+                } else {
+                    0
+                }),
+            mcnt: 0,
+            len: (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + payload_buf.len()) as u16,
+        };
+        let mut add_header_buf = Vec::new();
+        exth.to_write(&mut add_header_buf).unwrap();
+
+        DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
     }
 
     pub fn is_big_endian(&self) -> bool {
@@ -2228,35 +2258,6 @@ mod tests {
         DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
     }
 
-    /// return a control message
-    fn get_testmsg_control(big_endian: bool, noar: u8, payload_buf: &[u8]) -> DltMessage {
-        let sh = DltStorageHeader {
-            secs: 0,
-            micros: 0,
-            ecu: DltChar4::from_str("ECU1").unwrap(),
-        };
-        let exth = DltExtendedHeader {
-            verb_mstp_mtin: 0x3 << 1 | (0x02 << 4),
-            noar,
-            apid: DltChar4::from_buf(b"DA1\0"),
-            ctid: DltChar4::from_buf(b"DC1\0"),
-        };
-        let stdh = DltStandardHeader {
-            htyp: 0x21
-                | (if big_endian {
-                    DLT_STD_HDR_BIG_ENDIAN
-                } else {
-                    0
-                }),
-            mcnt: 0,
-            len: (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + payload_buf.len()) as u16,
-        };
-        let mut add_header_buf = Vec::new();
-        exth.to_write(&mut add_header_buf).unwrap();
-
-        DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
-    }
-
     #[test]
     fn payload_bool() {
         let m = get_testmsg_with_payload(
@@ -2644,7 +2645,7 @@ mod tests {
 
     #[test]
     fn control_msgs_sw_version() {
-        let m = get_testmsg_control(
+        let m = DltMessage::get_testmsg_control(
             false,
             1,
             &[19, 0, 0, 0, 0, 4, 0, 0, 0, b'S', b'W', b' ', b'1'],
@@ -2656,7 +2657,7 @@ mod tests {
             "[get_software_version ok] SW 1"
         );
 
-        let m = get_testmsg_control(
+        let m = DltMessage::get_testmsg_control(
             true,
             1,
             &[0, 0, 0, 19, 0, 0, 0, 0, 4, b'S', b'W', b' ', b'2'],
@@ -2667,7 +2668,7 @@ mod tests {
         );
 
         // len wrong!
-        let m = get_testmsg_control(
+        let m = DltMessage::get_testmsg_control(
             true,
             1,
             &[0, 0, 0, 19, 0, 0, 0, 0, 5, b'S', b'W', b' ', b'2'],
@@ -2675,7 +2676,7 @@ mod tests {
         assert_eq!(m.payload_as_text().unwrap(), "[get_software_version ok]");
 
         // len too short is ok, rest ignored
-        let m = get_testmsg_control(
+        let m = DltMessage::get_testmsg_control(
             true,
             1,
             &[0, 0, 0, 19, 0, 0, 0, 0, 3, b'S', b'W', b' ', b'2'],
@@ -2686,11 +2687,11 @@ mod tests {
         );
 
         // far too short
-        let m = get_testmsg_control(true, 1, &[0, 0, 0, 19, 0]);
+        let m = DltMessage::get_testmsg_control(true, 1, &[0, 0, 0, 19, 0]);
         assert_eq!(m.payload_as_text().unwrap(), "[get_software_version ok]");
-        let m = get_testmsg_control(true, 1, &[0, 0, 0, 19, 0, 1]);
+        let m = DltMessage::get_testmsg_control(true, 1, &[0, 0, 0, 19, 0, 1]);
         assert_eq!(m.payload_as_text().unwrap(), "[get_software_version ok]");
-        let m = get_testmsg_control(true, 1, &[0, 0, 0]);
+        let m = DltMessage::get_testmsg_control(true, 1, &[0, 0, 0]);
         assert_eq!(m.payload_as_text().unwrap(), "[<args missing>]");
     }
 

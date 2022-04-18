@@ -21,6 +21,10 @@ path = "src/lib.rs"
 name = "dlt_benches"
 harness = false
 
+[[bench]]
+name = "util_benches"
+harness = false
+
 [dev-dependencies]
 ntest = "*"
 criterion = "0.3"
