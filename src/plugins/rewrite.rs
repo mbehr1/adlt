@@ -277,7 +277,7 @@ mod tests {
         assert!(tree_items.is_array());
         assert_eq!(tree_items.as_array().unwrap().len(), 1);
         // state can be debug printed:
-        assert!(format!("{:?}", state).len() > 0);
+        assert!(!format!("{:?}", state).is_empty());
 
         // name missing: -> err
         let cfg = json!({"enabled": false, "rewrites":[]});
