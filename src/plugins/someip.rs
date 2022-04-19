@@ -6,11 +6,11 @@
 
 use crate::{
     dlt::{DltChar4, DltMessage, DltMessageNwType, DltMessageType},
-    plugins::plugin::Plugin,
+    plugins::plugin::{Plugin, PluginState},
 };
 use afibex::fibex::{get_all_fibex_in_dir, load_all_fibex, FibexData, FibexError};
 use asomeip::utils::decode_someip_header_and_payload;
-use std::{collections::HashMap, error::Error, fmt, path::Path};
+use std::{collections::HashMap, error::Error, fmt, path::Path, sync::Arc};
 
 #[derive(Debug)]
 struct SomeipPluginError {
@@ -37,6 +37,7 @@ impl Error for SomeipPluginError {}
 pub struct SomeipPlugin {
     name: String,
     enabled: bool,
+    state: Arc<PluginState>,
     _fibex_dir: String,
     mstp: DltMessageType,
     ctid: Option<DltChar4>,
@@ -70,6 +71,10 @@ impl<'a> Plugin for SomeipPlugin {
     }
     fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    fn state(&self) -> Arc<PluginState> {
+        self.state.clone()
     }
 
     fn process_msg(&mut self, msg: &mut DltMessage) -> bool {
@@ -355,6 +360,7 @@ impl SomeipPlugin {
         Ok(SomeipPlugin {
             name: name.unwrap(),
             enabled,
+            state: Arc::new(Default::default()),
             _fibex_dir: fibex_dir,
             mstp: DltMessageType::NwTrace(DltMessageNwType::Ipc),
             ctid,

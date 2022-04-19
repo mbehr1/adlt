@@ -1,7 +1,10 @@
 use adlt::{
     dlt::{DltMessageIndexType, DLT_MAX_STORAGE_MSG_SIZE},
     lifecycle::LifecycleId,
-    plugins::{factory::get_plugin, plugin::Plugin},
+    plugins::{
+        factory::get_plugin,
+        plugin::{Plugin, PluginState},
+    },
     utils::{
         eac_stats::EacStats, get_first_message_from_file, remote_types, DltMessageIterator,
         LowMarkBufReader,
@@ -9,10 +12,10 @@ use adlt::{
 };
 use clap::{App, Arg, SubCommand};
 use slog::{debug, error, info, warn};
-use std::fs::File;
 use std::io::prelude::*;
 use std::net::TcpListener;
 use std::{collections::BTreeMap, time::Instant};
+use std::{fs::File, sync::Arc};
 
 use tungstenite::{
     accept_hdr_with_config,
@@ -292,8 +295,9 @@ impl StreamContext {
 #[derive(Debug)]
 struct FileContext {
     file_names: Vec<String>,
-    sort_by_time: bool, // sort by timestamp
-    plugins_active: Vec<Box<dyn Plugin + Send>>,
+    sort_by_time: bool,                          // sort by timestamp
+    plugins_active: Vec<Box<dyn Plugin + Send>>, // will be moved to parsing_thread
+    plugin_states: Vec<(u32, Arc<PluginState>)>,
     parsing_thread: Option<ParserThreadType>,
     all_msgs: Vec<adlt::dlt::DltMessage>,
     streams: Vec<StreamContext>,
@@ -432,10 +436,13 @@ impl FileContext {
             }
         }
 
+        let plugin_states = plugins_active.iter().map(|p| (0u32, p.state())).collect();
+
         Ok(FileContext {
             file_names,
             sort_by_time,
             plugins_active,
+            plugin_states,
             parsing_thread: None,
             all_msgs: Vec::with_capacity(std::cmp::min(
                 all_msgs_len_estimate as usize,
@@ -918,6 +925,25 @@ fn process_file_context<T: Read + Write>(
                             .map(remote_types::BinEcuStats::from)
                             .collect(),
                     ),
+                    BINCODE_CONFIG,
+                )
+                .unwrap(), // todo
+            ))?;
+        }
+
+        // check plugin states with same frequency:
+        let mut plugin_states: Vec<String> = vec![];
+        for (last_gen, state) in &mut fc.plugin_states {
+            if state.generation != *last_gen {
+                *last_gen = state.generation;
+                let state_value = state.value.to_string();
+                plugin_states.push(state_value);
+            }
+        }
+        if !plugin_states.is_empty() {
+            websocket.write_message(Message::Binary(
+                bincode::encode_to_vec(
+                    remote_types::BinType::PluginState(plugin_states),
                     BINCODE_CONFIG,
                 )
                 .unwrap(), // todo

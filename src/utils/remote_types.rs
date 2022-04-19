@@ -59,4 +59,5 @@ pub enum BinType {
     Lifecycles(Vec<BinLifecycle>),
     DltMsgs((u32, Vec<BinDltMsg>)), // stream id and Vec
     EacInfo(Vec<BinEcuStats>),
+    PluginState(Vec<String>), // serialized json from each plugin with generation update
 }

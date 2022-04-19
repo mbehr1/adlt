@@ -6,7 +6,9 @@
 
 use crate::{dlt::DltMessage, filter::Filter, plugins::plugin::Plugin};
 use fancy_regex::Regex;
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, sync::Arc};
+
+use super::plugin::PluginState;
 
 #[derive(Debug)]
 struct RewritePluginError {
@@ -95,6 +97,7 @@ impl RewriteConfig {
 pub struct RewritePlugin {
     name: String,
     enabled: bool,
+    state: Arc<PluginState>,
     rewrites: Vec<RewriteConfig>,
 }
 
@@ -104,6 +107,10 @@ impl<'a> Plugin for RewritePlugin {
     }
     fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    fn state(&self) -> Arc<PluginState> {
+        self.state.clone()
     }
 
     /// check a msg for rewrite.
@@ -198,6 +205,7 @@ impl RewritePlugin {
         Ok(RewritePlugin {
             name: name.unwrap(),
             enabled,
+            state: Arc::new(Default::default()),
             rewrites,
         })
     }
