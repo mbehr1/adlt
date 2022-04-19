@@ -8,8 +8,9 @@ use crate::{
     dlt::{DltChar4, DltMessage, DltMessageNwType, DltMessageType},
     plugins::plugin::{Plugin, PluginState},
 };
-use afibex::fibex::{get_all_fibex_in_dir, load_all_fibex, FibexData, FibexError};
+use afibex::fibex::{get_all_fibex_in_dir, load_all_fibex, FibexData, FibexError, MethodIdType};
 use asomeip::utils::decode_someip_header_and_payload;
+use serde_json::json;
 use std::{collections::HashMap, error::Error, fmt, path::Path, sync::Arc};
 
 #[derive(Debug)]
@@ -320,6 +321,47 @@ impl<'a> Plugin for SomeipPlugin {
     }
 }
 
+fn sorted_mids(methods: &HashMap<u16, MethodIdType>) -> Vec<(&u16, &MethodIdType)> {
+    let mut v = methods.iter().collect::<Vec<_>>();
+    v.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    v
+}
+
+fn tree_item_for_mid(mid: &u16, method: &MethodIdType) -> serde_json::Value {
+    let no_name = "<no shortname>";
+    let no_desc = "<no desc>";
+    match method {
+        MethodIdType::Method(m) => {
+            let short_name = m.short_name.as_deref().unwrap_or(no_name);
+            json!({ "label": format!("0x{:04x} Method: {}", mid, short_name),
+            "tooltip": format!("description:\n{}\ninput parameter:\n{}\nreturn parameter:\n{}",
+                m.desc.as_deref().unwrap_or(no_desc),
+                m.input_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n"),
+                m.return_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n")
+            )})
+        }
+        MethodIdType::Event(m) => {
+            let short_name = m.short_name.as_deref().unwrap_or(no_name);
+            json!({ "label": format!("0x{:04x} Event: {}", mid, short_name),
+            "tooltip": format!("description:\n{}\ninput parameter:\n{}",
+                m.desc.as_deref().unwrap_or(no_desc),
+                m.input_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n")) })
+        }
+        MethodIdType::Getter { field } => {
+            let short_name = field.short_name.as_deref().unwrap_or(no_name);
+            json!({ "label": format!("0x{:04x} Getter: {}", mid, short_name) })
+        }
+        MethodIdType::Setter { field } => {
+            let short_name = field.short_name.as_deref().unwrap_or(no_name);
+            json!({ "label": format!("0x{:04x} Setter: {}", mid, short_name) })
+        }
+        MethodIdType::Notifier { field } => {
+            let short_name = field.short_name.as_deref().unwrap_or(no_name);
+            json!({ "label": format!("0x{:04x} Notifier: {}", mid, short_name) })
+        }
+    }
+}
+
 impl SomeipPlugin {
     pub fn from_json(
         config: &serde_json::Map<String, serde_json::Value>,
@@ -352,15 +394,58 @@ impl SomeipPlugin {
             );
         };
 
+        let mut state: PluginState = Default::default();
+        let warnings: Vec<String> = Vec::new();
+
         let ctid = Some(DltChar4::from_buf(b"TC\0\0"));
 
         let files = get_all_fibex_in_dir(Path::new(&fibex_dir), false)?; // todo or recursive
         let fibex_data = load_all_fibex(&files)?;
 
+        // update state:
+        let mut services_by_name = fibex_data
+            .elements
+            .services_map_by_sid_major
+            .iter()
+            .collect::<Vec<_>>();
+        services_by_name.sort_unstable_by(|a, b| a.1[0].short_name.cmp(&b.1[0].short_name));
+
+        let mut services_by_id = services_by_name.clone();
+        services_by_id.sort_unstable_by(|a, b| a.0 .0.cmp(&b.0 .0));
+
+        state.value = json!({"name":name, "treeItems":[
+            if !warnings.is_empty() {
+                json!({
+                    "label": format!("Warnings #{}", warnings.len()),
+                    "iconPath":"warning",
+                    "children": warnings.iter().map(|w|{json!({"label":w})}).collect::<Vec<serde_json::Value>>()
+                })
+            } else {
+                json!(null)
+            },
+            {"label":format!("Services #{}, sorted by name", fibex_data.elements.services_map_by_sid_major.len()),
+            "children":services_by_name.iter().map(|((sid, major), service)|{serde_json::json!({
+                "label":format!("{} v{}.{}, service id: {:5} (0x{:04x})", service[0].short_name.as_ref().unwrap_or(&"".to_string()), major, service[0].api_version.1, sid, sid),
+                "tooltip":service[0].desc,
+                "children": sorted_mids(&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid(mid, method)}).collect::<Vec<serde_json::Value>>(),
+            })}).collect::<Vec<serde_json::Value>>(),
+            },
+            {"label":format!("Services #{}, sorted by service id", fibex_data.elements.services_map_by_sid_major.len()),
+            "children":services_by_id.iter().map(|((sid, major), service)|{serde_json::json!({
+                "label":format!("{} v{}.{}, service id: {:5} (0x{:04x})", service[0].short_name.as_ref().unwrap_or(&"".to_string()), major, service[0].api_version.1, sid, sid),
+                "tooltip":service[0].desc,
+                "children": sorted_mids(&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid(mid, method)}).collect::<Vec<serde_json::Value>>(),
+            })}).collect::<Vec<serde_json::Value>>(),
+            },
+            {"label":format!("Datatypes #{}", fibex_data.elements.datatypes_map_by_id.len())},
+            {"label":format!("Codings #{}", fibex_data.pi.codings.len())},
+        ]});
+        state.generation += 1;
+
         Ok(SomeipPlugin {
             name: name.unwrap(),
             enabled,
-            state: Arc::new(Default::default()),
+            state: Arc::new(state),
             _fibex_dir: fibex_dir,
             mstp: DltMessageType::NwTrace(DltMessageNwType::Ipc),
             ctid,
