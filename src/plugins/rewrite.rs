@@ -6,6 +6,7 @@
 
 use crate::{dlt::DltMessage, filter::Filter, plugins::plugin::Plugin};
 use fancy_regex::Regex;
+use serde_json::json;
 use std::{error::Error, fmt, sync::Arc};
 
 use super::plugin::PluginState;
@@ -183,8 +184,15 @@ impl RewritePlugin {
             return Err(RewritePluginError::from("config 'rewrites' not an array").into());
         };
 
-        //println!("RewritePlugin: have {} rewrites!", rewrites.len());
-
+        let state = PluginState {
+            value: serde_json::json!({"name":name, "treeItems":
+                rewrites.iter().map(|r|{json!({
+                    "label":format!("{}",r.name),
+                    "tooltip":format!("for msgs matching '{:?}' replace regex: '{}'", r.filter, r.payload_regex),
+                })}).collect::<Vec<serde_json::Value>>()
+            }),
+            generation: 1,
+        };
         /*
             "rewrites":[
                 {
@@ -205,7 +213,7 @@ impl RewritePlugin {
         Ok(RewritePlugin {
             name: name.unwrap(),
             enabled,
-            state: Arc::new(Default::default()),
+            state: Arc::new(state),
             rewrites,
         })
     }
