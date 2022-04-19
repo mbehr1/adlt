@@ -1,10 +1,12 @@
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use crate::dlt::DltMessage;
 
 pub trait Plugin {
     fn name(&self) -> &str;
     fn enabled(&self) -> bool;
+
+    fn state(&self) -> Arc<PluginState>;
 
     /// process a single msg
     /// this can modify the msg (and is expected for most plugins)
@@ -24,5 +26,33 @@ impl fmt::Debug for dyn Plugin + Send {
             .field("name", &self.name())
             .field("enabled", &self.enabled())
             .finish()
+    }
+}
+
+/// status/state from a plugin. Can be updated and be shared across threads
+///
+/// The state consists of a json object (value) with at least the members:
+/// - name: <name of the plugin>
+/// optional:
+/// - treeItems: Array of objects with
+///  - label:String
+///  - children -> json objects with similar structure
+///  optional members:
+///  - tooltip:String
+///  - description:String
+///  - iconPath:String (see https://code.visualstudio.com/api/references/icons-in-labels#icon-listing)
+///  to ease presentation in a treeview (https://code.visualstudio.com/api/references/vscode-api#TreeItem)
+#[derive(Debug)]
+pub struct PluginState {
+    pub generation: u32, // 0 initial, 1 = 1st,...
+    pub value: serde_json::Value,
+}
+
+impl Default for PluginState {
+    fn default() -> Self {
+        PluginState {
+            generation: 0,
+            value: serde_json::Value::Null,
+        }
     }
 }

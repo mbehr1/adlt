@@ -11,11 +11,11 @@ use crate::{
         DLT_TYPE_INFO_UINT,
     },
     //filter::Filter,
-    plugins::plugin::Plugin,
+    plugins::plugin::{Plugin, PluginState},
     utils::eac_stats::EacStats,
 };
 use afibex::fibex::{get_all_fibex_in_dir, Ecu, Elements, FibexData, Frame};
-use std::{collections::HashMap, error::Error, fmt, path::Path, str::FromStr};
+use std::{collections::HashMap, error::Error, fmt, path::Path, str::FromStr, sync::Arc};
 
 #[derive(Debug)]
 struct NonVerboseFibexData {
@@ -149,7 +149,7 @@ impl NonVerboseFibexData {
         pdus
     }
 
-    fn insert_frames(&mut self, fd: &FibexData) {
+    fn insert_frames(&mut self, fd: &FibexData, mut warnings: Option<&mut Vec<String>>) {
         for frame in &fd.elements.frames_map_by_id {
             if frame.1.id.starts_with("ID_") {
                 let id = frame.1.id[3..].parse::<u32>();
@@ -157,10 +157,15 @@ impl NonVerboseFibexData {
                     let pdus = NonVerboseFibexData::parse_pdus(frame.1, &fd.elements);
 
                     // todo verify here that byte_length matches sum of pdu byte_length
-                    if frame.1.byte_length as usize
-                        != pdus.iter().map(|p| p.byte_length).sum::<usize>()
-                    {
+                    let pdu_sum = pdus.iter().map(|p| p.byte_length).sum::<usize>();
+                    if frame.1.byte_length as usize != pdu_sum {
                         // todo warn
+                        if let Some(ref mut warnings) = warnings {
+                            warnings.push(format!(
+                                "frame ID_{} has byte_length mismatch. Expected {} vs {} from PDUs",
+                                id, frame.1.byte_length, pdu_sum
+                            ));
+                        }
                     } else {
                         let frame = frame.1;
                         let apid = frame
@@ -219,16 +224,32 @@ impl NonVerboseFibexData {
                             None
                         };
 
-                        self.frames_map_by_id.insert(
-                            id,
-                            NVFrame {
-                                byte_length: frame.byte_length,
-                                ext_header,
-                                _source_file: source_file,
-                                _line_number: line_number,
-                                pdus,
-                            },
-                        );
+                        match self.frames_map_by_id.entry(id) {
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(NVFrame {
+                                    byte_length: frame.byte_length,
+                                    ext_header,
+                                    _source_file: source_file,
+                                    _line_number: line_number,
+                                    pdus,
+                                });
+                            }
+                            std::collections::hash_map::Entry::Occupied(e) => {
+                                // throw warning if the entries are different!
+                                let ex_frame = e.get();
+                                if ex_frame.byte_length != frame.byte_length
+                                    && ex_frame.ext_header != ext_header
+                                    && ex_frame.pdus.len() != pdus.len()
+                                {
+                                    if let Some(ref mut warnings) = warnings {
+                                        warnings.push(format!(
+                                            "frame ID_{} {:?} exists already with different content. Ignoring!",
+                                            id, if let Some(ext_header)=ext_header {format!("apid: '{}', ctid: '{}'", ext_header.apid, ext_header.ctid)} else {"<no apid/ctid>".to_string()}
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -238,7 +259,7 @@ impl NonVerboseFibexData {
     fn from_fibex(fd: FibexData) -> NonVerboseFibexData {
         let frames_map_by_id = HashMap::with_capacity(fd.elements.frames_map_by_id.len());
         let mut s = NonVerboseFibexData { frames_map_by_id };
-        s.insert_frames(&fd);
+        s.insert_frames(&fd, None);
         s
     }
 }
@@ -247,6 +268,7 @@ impl NonVerboseFibexData {
 pub struct NonVerbosePlugin {
     name: String,
     enabled: bool,
+    state: Arc<PluginState>,
     pub fibex_dir: String,
     //mstp: DltMessageType,
     //fibex_data: FibexData,
@@ -260,6 +282,10 @@ impl<'a> Plugin for NonVerbosePlugin {
     }
     fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    fn state(&self) -> Arc<PluginState> {
+        self.state.clone()
     }
 
     fn process_msg(&mut self, msg: &mut DltMessage) -> bool {
@@ -351,6 +377,8 @@ impl NonVerbosePlugin {
             _ => return Err(NonVerbosePluginError::from("config 'enabled' not an bool").into()),
         };
 
+        let mut state: PluginState = Default::default();
+
         let fibex_dir = if let Some(serde_json::Value::String(s)) = &config.get("fibexDir") {
             s.clone()
         } else {
@@ -359,13 +387,17 @@ impl NonVerbosePlugin {
             );
         };
 
+        let mut warnings: Vec<String> = Vec::new();
+
         let files = get_all_fibex_in_dir(Path::new(&fibex_dir), false)?; // todo or recursive
         let mut fibex_map_by_ecu: HashMap<DltChar4, Vec<(String, NonVerboseFibexData)>> =
             HashMap::new();
         for file in files {
             let mut fd = FibexData::new();
             if let Err(e) = fd.load_fibex_file(&file) {
-                println!("load_fibex_file(file={:?}) failed with:{}", file, e);
+                let warning = format!("load_fibex_file(file={:?}) failed with:{}", file, e);
+                println!("{}", warning);
+                warnings.push(warning);
             } else {
                 // is it a non-verbose describing fibex?
 
@@ -436,7 +468,7 @@ impl NonVerbosePlugin {
                                     match versions.binary_search_by(|a| sw_version.cmp(&a.0)) {
                                         Ok(idx) => {
                                             // add to existing one
-                                            versions[idx].1.insert_frames(&fd);
+                                            versions[idx].1.insert_frames(&fd, Some(&mut warnings));
                                         }
                                         Err(idx) => {
                                             // insert at proper position
@@ -448,31 +480,54 @@ impl NonVerbosePlugin {
                                     };
                                 }
                             } else {
-                                println!(
+                                warnings.push(format!(
                                     "NonVerbosePlugin ignoring ECU '{}' due to missing SW_VERSION",
                                     ecu.id
-                                );
+                                ));
                             }
                         } else {
-                            println!("NonVerbosePlugin ignoring ECU '{}' due to missing MANUFACTURER-EXTENSION", ecu.id);
+                            warnings.push(format!("NonVerbosePlugin ignoring ECU '{}' due to missing MANUFACTURER-EXTENSION", ecu.id));
                         }
                     } else {
-                        println!(
+                        warnings.push(format!(
                             "NonVerbosePlugin ignoring ECU '{}' due to wrongly formatted id",
                             ecu.id
-                        );
+                        ));
                     }
                 }
-
-                // and then all FRAMES with ID_<u32>
             }
         }
-
-        // todo sort versions by youngest first
+        // update state:
+        state.value = serde_json::json!({"name":name, "treeItems":[
+            if !warnings.is_empty() {
+                serde_json::json!({
+                    "label": format!("Warnings #{}", warnings.len()),
+                    "iconPath":"warning",
+                    "children": warnings.iter().map(|w|{serde_json::json!({"label":w})}).collect::<Vec<serde_json::Value>>()
+                })
+            } else {
+                serde_json::json!(null)
+            },
+            {"label": format!("ECUs #{}", fibex_map_by_ecu.len()),
+            "children":
+                fibex_map_by_ecu.iter().map(|(ecu, versions)|{serde_json::json!(
+                    {"label":format!("ECU '{}', SW-versions #{}",ecu, versions.len()),
+                    "children": versions.iter().map(|(v, nfd)|{serde_json::json!(
+                        {"label":format!("SW: '{}', frames #{}", v, nfd.frames_map_by_id.len()),
+                        "children":nfd.frames_map_by_id.iter().map(|(id,frame)|{serde_json::json!(
+                            {"label":format!("ID_{}: {}", id, if let Some(exth) = &frame.ext_header {format!("apid: {}, ctid: {}", exth.apid, exth.ctid)}else{"<no apid/ctid>".to_owned()})}
+                        )}).collect::<Vec<serde_json::Value>>()
+                    })}).collect::<Vec<serde_json::Value>>()
+                })})
+                .collect::<Vec<serde_json::Value>>()
+            }
+        ]});
+        state.generation += 1;
 
         Ok(NonVerbosePlugin {
             name,
             enabled,
+            state: Arc::new(state),
             fibex_dir,
             fibex_map_by_ecu, //fibex_data,
         })
