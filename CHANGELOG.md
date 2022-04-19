@@ -2,6 +2,21 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.16.0 - 2022-04-19
+#### Bug Fixes
+- **(nonverbose)** support MTIN/APID/CTID setting - (8649b1c) - Matthias Behr
+- **(nonverbose)** support multiple fibex for same sw - (a12c934) - Matthias Behr
+#### Features
+- **(eac)** collect and send full EAC info - (661a052) - Matthias Behr
+- **(eacstats)** first impl of EAC stats - (9df471f) - Matthias Behr
+- **(rewrite)** basic PluginState support - (9e4286d) - Matthias Behr
+- **(someip)** broadcast status for services - (3c1ff1c) - Matthias Behr
+- plugin state broadcasted - (8d50c38) - Matthias Behr
+#### Tests
+- **(eac_stats)** improve coverage - (b7ddba2) - Matthias Behr
+- basic tests for pluginstate - (f2fda12) - Matthias Behr
+- - -
+
 ## v0.15.0 - 2022-04-16
 #### Features
 - **(nonverbose)** add NonVerbose plugin - (1031821) - Matthias Behr
