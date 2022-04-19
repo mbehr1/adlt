@@ -266,6 +266,19 @@ mod tests {
         assert!(!p.enabled);
         assert_eq!(1, p.rewrites.len());
 
+        let state = p.state();
+        assert_eq!(state.generation, 1); // first update done
+        let state_value = &state.value;
+        assert!(state_value.is_object());
+        let state_obj = state_value.as_object().unwrap();
+        assert!(state_obj.contains_key("name"));
+        assert!(state_obj.contains_key("treeItems"));
+        let tree_items = state_obj.get("treeItems").unwrap();
+        assert!(tree_items.is_array());
+        assert_eq!(tree_items.as_array().unwrap().len(), 1);
+        // state can be debug printed:
+        assert!(format!("{:?}", state).len() > 0);
+
         // name missing: -> err
         let cfg = json!({"enabled": false, "rewrites":[]});
         let p = RewritePlugin::from_json(cfg.as_object().unwrap());
