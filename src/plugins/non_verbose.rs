@@ -565,6 +565,14 @@ mod tests {
         let frame = versions[0].1.frames_map_by_id.get(&805312382).unwrap();
         assert_eq!(0, frame.byte_length);
 
+        let state = p.state();
+        assert_eq!(state.generation, 1); // first update done
+        let state_value = &state.value;
+        assert!(state_value.is_object());
+        let state_obj = state_value.as_object().unwrap();
+        assert!(state_obj.contains_key("name"));
+        assert!(state_obj.contains_key("treeItems"));
+
         // name missing: -> err
         let cfg = json!({"enabled": false, "fibexDir":test_dir});
         let p = NonVerbosePlugin::from_json(cfg.as_object().unwrap(), &mut eac_stats);

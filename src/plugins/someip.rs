@@ -454,3 +454,31 @@ impl SomeipPlugin {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn init_plugin() {
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        // good case:
+        let cfg = json!({"name":"foo","enabled": true, "fibexDir":test_dir});
+        let p = SomeipPlugin::from_json(cfg.as_object().unwrap());
+        assert!(p.is_ok());
+        let p = p.unwrap();
+        assert_eq!(p.name, "foo");
+        assert!(p.enabled);
+        assert_eq!(p.ctid, Some(DltChar4::from_buf(b"TC\0\0")));
+
+        let state = p.state();
+        assert_eq!(state.generation, 1); // first update done
+        let state_value = &state.value;
+        assert!(state_value.is_object());
+        let state_obj = state_value.as_object().unwrap();
+        assert!(state_obj.contains_key("name"));
+        assert!(state_obj.contains_key("treeItems"));
+    }
+}
