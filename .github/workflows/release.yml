@@ -30,15 +30,15 @@ jobs:
     name: create-release
     runs-on: ubuntu-latest
     env:
-      # Set to force version number, e.g., when no tag exists.
-      ADLT_VERSION: TEST-0.0.3
+      # version number used if branch event and not tag event
+      ADLT_VERSION: TEST-0.0.4
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
     steps:
       - name: Get the release version from the tag
         shell: bash
-        if: env.ADLT_VERSION == ''
+        if: github.ref_type == 'tag'
         run: |
           # Apparently, this is the right way to get a tag name. Really?
           #
