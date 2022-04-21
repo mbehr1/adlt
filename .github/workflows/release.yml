@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Set to force version number, e.g., when no tag exists.
-      ADLT_VERSION: TEST-0.0.2
+      ADLT_VERSION: TEST-0.0.3
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
