@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.16.1 - 2022-04-21
+#### Continuous Integration
+- release remove complete folder - (9049722) - Matthias Behr
+- use tag version on tag trigger - (93ce774) - Matthias Behr
+- link statically for windows msvc - (e7834db) - Matthias Behr
+- build macos-arm aarch64 as well - (c22477d) - Matthias Behr
+- change to ubuntu-latest - (ceb24b0) - Matthias Behr
+- automate release binaries generation - (05273ac) - Matthias Behr
+#### Tests
+- fix clippy warning - (84a912f) - Matthias Behr
+- - -
+
 ## v0.16.0 - 2022-04-19
 #### Bug Fixes
 - **(nonverbose)** support MTIN/APID/CTID setting - (8649b1c) - Matthias Behr
