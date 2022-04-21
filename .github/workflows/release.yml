@@ -14,6 +14,8 @@
 #
 # Reference:
 # https://eugene-babichenko.github.io/blog/2020/05/09/github-actions-cross-platform-auto-releases/
+#
+# todo: strip macos-arm binary
 
 name: release
 on:
@@ -29,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Set to force version number, e.g., when no tag exists.
-      ADLT_VERSION: TEST-0.0.1
+      ADLT_VERSION: TEST-0.0.2
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
@@ -68,7 +70,7 @@ jobs:
       RUST_BACKTRACE: 1
     strategy:
       matrix:
-        build: [linux, linux-arm, macos, win-msvc, win-gnu, win32-msvc]
+        build: [linux, linux-arm, macos, macos-arm, win-msvc, win-gnu, win32-msvc]
         include:
         - build: linux
           os: ubuntu-latest
@@ -82,6 +84,10 @@ jobs:
           os: macos-latest
           rust: nightly
           target: x86_64-apple-darwin
+        - build: macos-arm
+          os: macos-latest
+          rust: nightly
+          target: aarch64-apple-darwin
         - build: win-msvc
           os: windows-2019
           rust: nightly
@@ -135,6 +141,12 @@ jobs:
 
     - name: Build release binary
       run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
+
+    - name: Build release (Mac aarch64)
+      if: startsWith(matrix.config.target, 'aarch64-apple-darwin')
+      run: |
+        rustup target add aarch64-apple-darwin
+        ${{ env.CARGO }} build -verbose --release --target aarch64-apple-darwin
 
     - name: Strip release binary (linux and macos)
       if: matrix.build == 'linux' || matrix.build == 'macos'
