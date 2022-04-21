@@ -55,6 +55,10 @@ adlt convert -f <filter_file> -o <new_file> <dlt_file> # export all messages fit
 
 Work in progress...
 
+## How to install binaries
+
+You can use the pre-build binaries from [adlt/releases](https://github.com/mbehr1/adlt/releases) or build your own ones:
+
 ## How to build
 
 ```
