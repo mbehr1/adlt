@@ -166,7 +166,7 @@ jobs:
       run: |
         outdir="$(ci/cargo-out-dir "${{ env.TARGET_DIR }}")"
         staging="adlt-${{ needs.create-release.outputs.adlt_version }}-${{ matrix.target }}"
-        mkdir -p "$staging"/{complete,doc}
+        mkdir -p "$staging"/doc
 
         cp README.md "$staging/"
         cp CHANGELOG.md "$staging/doc/"
