@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.16.3 - 2022-04-22
+#### Continuous Integration
+- build linux-aarch64 - (76dd411) - Matthias Behr
+- - -
+
 ## v0.16.2 - 2022-04-21
 #### Documentation
 - add install hint to pre-build binaries - (c84600c) - Matthias Behr
