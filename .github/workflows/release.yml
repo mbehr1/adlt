@@ -15,14 +15,14 @@
 # Reference:
 # https://eugene-babichenko.github.io/blog/2020/05/09/github-actions-cross-platform-auto-releases/
 #
-# todo: strip macos-arm binary
+# todo: strip macos-arm, linux-aarch64 binary
 
 name: release
 on:
   push:
     # Enable when testing release infrastructure on a branch.
     branches:
-    - ci/release_binaries
+    - ci/release*
     tags:
     - "v[0-9]+.[0-9]+.[0-9]+"
 jobs:
@@ -70,7 +70,7 @@ jobs:
       RUST_BACKTRACE: 1
     strategy:
       matrix:
-        build: [linux, linux-arm, macos, macos-arm, win-msvc, win-gnu, win32-msvc]
+        build: [linux, linux-arm, linux-aarch64, macos, macos-arm, win-msvc, win-gnu, win32-msvc]
         include:
         - build: linux
           os: ubuntu-latest
@@ -80,6 +80,10 @@ jobs:
           os: ubuntu-latest
           rust: nightly
           target: arm-unknown-linux-gnueabihf
+        - build: linux-aarch64
+          os: ubuntu-latest
+          rust: nightly
+          target: aarch64-unknown-linux-gnu
         - build: macos
           os: macos-latest
           rust: nightly
