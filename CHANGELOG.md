@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.16.5 - 2022-04-26
+#### Bug Fixes
+- non verbose output format - (00cee5e) - Matthias Behr
+- - -
+
 ## v0.16.4 - 2022-04-26
 #### Bug Fixes
 - lc end time and nr. msgs not correct - (cf7f0bc) - Matthias Behr
