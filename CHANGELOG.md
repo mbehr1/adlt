@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.16.4 - 2022-04-26
+#### Bug Fixes
+- lc end time and nr. msgs not correct - (cf7f0bc) - Matthias Behr
+- - -
+
 ## v0.16.3 - 2022-04-22
 #### Continuous Integration
 - build linux-aarch64 - (76dd411) - Matthias Behr
