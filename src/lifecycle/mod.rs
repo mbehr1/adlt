@@ -399,7 +399,6 @@ where
             match lc2.update(&mut msg) {
                 None => {
                     // lc2 was updated
-
                     // now we have to check whether it overlaps with the prev. one and needs to be merged:
                     if ecu_lcs_len > 1 {
                         let prev_lc = rest_lcs.last_mut().unwrap(); // : &mut Lifecycle = &mut last_lcs[ecu_lcs_len - 2];
@@ -457,6 +456,13 @@ where
                         }
                     }
 
+                    // quick fix for wrong lifecycle end/nr msgs, otherwise the next .contains_key might be wrong!
+                    // happens when the lc2.id is not in buffered_lcs anymore.
+                    // todo refresh logic needed, e.g. by option every x sec or every x msgs
+                    if lcs_w_needs_refresh {
+                        lcs_w.refresh();
+                        lcs_w_needs_refresh = false;
+                    }
                     if lcs_w.contains_key(&lc2.id) {
                         // this assert is met. so we can ignore the above prev_lc merge part assert!(!buffered_lcs.contains(&lc2.id));
                         // and prev_lc is still buffered as well to as well not contained.
@@ -464,7 +470,6 @@ where
                         lcs_w.update(lc2.id, lc2.clone());
                         lcs_w_needs_refresh = true;
                     }
-                    // todo refresh logic needed, e.g. by option every x sec or every x msgs
                 }
                 Some(lc3) => {
                     // new lc was created (as calc. lc start_time was past prev lc end time)
@@ -483,8 +488,8 @@ where
                 }
             }
             if remove_last_lc {
-                let removed = ecu_lcs.remove(ecu_lcs_len - 1);
-                assert!(!buffered_lcs.contains(&removed.id));
+                let _removed = ecu_lcs.remove(ecu_lcs_len - 1);
+                // assert!(!buffered_lcs.contains(&removed.id));
             }
         } else {
             // msg.ecu not known yet:
@@ -518,7 +523,7 @@ where
                             for lc in &buffered_lcs {
                                 println!(" buffered_lc={}", lc);
                             }*/
-                            lcs_w.insert(lc.id, new_lifecycle_item(lc.clone()));
+                            lcs_w.update(lc.id, new_lifecycle_item(lc.clone())); // update is safer and handles add case as well lcs_w.insert(lc.id, new_lifecycle_item(lc.clone()));
                             lcs_w_needs_refresh = true;
 
                             // if the first msg in buffered_msgs belongs to this confirmed lc
@@ -584,7 +589,7 @@ where
         'outer: for vs in ecu_map.values() {
             for v in vs {
                 if v.id == lc_id {
-                    lcs_w.insert(lc_id, new_lifecycle_item(v.clone()));
+                    lcs_w.update(lc_id, new_lifecycle_item(v.clone()));
                     // println!("lcs_w content added at end id={:?} lc={:?}", lc_id, *v);
                     break 'outer;
                 }
