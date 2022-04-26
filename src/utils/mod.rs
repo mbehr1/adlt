@@ -28,6 +28,23 @@ static CHARS_HEX_LOW: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 ];
 
+/// output as buffer as printable ascii to a (char) writer.
+/// Each byte between [0x20...=0x7e] is printed. Others are replaced by the replacement_char.
+pub fn buf_as_printable_ascii_to_write(
+    writer: &mut impl std::fmt::Write,
+    buf: &[u8],
+    replacement_char: char,
+) -> Result<(), std::fmt::Error> {
+    for item in buf.iter() {
+        if *item >= 0x20 && *item <= 0x7e {
+            writer.write_char(*item as char)?;
+        } else {
+            writer.write_char(replacement_char)?;
+        }
+    }
+    Ok(())
+}
+
 /// output a buffer as hex dump to a (char) writer.
 /// Each byte is output as two lower-case digits.
 /// A space is output between each byte.
@@ -442,6 +459,21 @@ mod tests {
         assert_eq!(utc_time.date().day(), 1);
         assert_eq!(utc_time.date().month(), 1);
         assert_eq!(utc_time.date().year(), 1970);
+    }
+
+    #[test]
+    fn buf_as_ascii() {
+        let mut s = String::new();
+        buf_as_printable_ascii_to_write(&mut s, &[], '-').unwrap();
+        assert_eq!(s.len(), 0);
+
+        buf_as_printable_ascii_to_write(
+            &mut s,
+            &[0x00_u8, 0x1f, 0x20, 0x40, 0x7c, 0x7e, 0x7f, 0xff],
+            '-',
+        )
+        .unwrap();
+        assert_eq!(s, "-- @|~--");
     }
 
     #[test]
