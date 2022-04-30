@@ -6,7 +6,7 @@ use adlt::{
         plugin::{Plugin, PluginState},
     },
     utils::{
-        eac_stats::EacStats, get_first_message_from_file, remote_types, DltMessageIterator,
+        eac_stats::EacStats, get_dlt_message_iterator, get_first_message_from_file, remote_types,
         LowMarkBufReader,
     },
 };
@@ -365,9 +365,10 @@ impl FileContext {
             match fi {
                 Ok(mut f) => {
                     let file_len = f.metadata().map_or(0, |m|m.len());
-                    let m1 = get_first_message_from_file(&mut f, 512 * 1024);
+                    let file_ext = std::path::Path::new(f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
+                    let m1 = get_first_message_from_file(file_ext, &mut f, 512 * 1024);
                     if m1.is_none() {
-                        warn!(log, "file {} doesn't contain a DLT message in first 0.5MB. Skipping!", f_name;);
+                        warn!(log, "file {} (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
                     }
                     (f_name, m1, file_len)
                 }
@@ -1227,7 +1228,6 @@ fn create_parser_thread(
         parse_thread: std::thread::spawn(
             move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 info!(log, "parser_thread started");
-                let mut bytes_processed: u64 = 0;
                 let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
 
                 const BUFREADER_CAPACITY: usize = 512 * 1024;
@@ -1236,30 +1236,37 @@ fn create_parser_thread(
 
                 for ref input_file_name in input_file_names {
                     let fi = File::open(input_file_name)?;
+                    let file_ext = std::path::Path::new(input_file_name)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default();
                     info!(log, "opened file {} {:?}", input_file_name, &fi);
                     let buf_reader =
                         LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
-                    let mut it = DltMessageIterator::new(messages_processed, buf_reader);
-                    it.log = Some(&log);
+                    let mut it = get_dlt_message_iterator(
+                        file_ext,
+                        messages_processed,
+                        buf_reader,
+                        Some(&log),
+                    );
                     loop {
                         match it.next() {
                             Some(msg) => {
+                                messages_processed += 1;
                                 if let Err(e) = tx_for_parse_thread.send(msg) {
-                                    info!(log, "parser_thread aborted on err={}", e; "bytes_processed" => bytes_processed, "msgs_processed" => messages_processed);
+                                    info!(log, "parser_thread aborted on err={}", e; "msgs_processed" => messages_processed);
                                     return Err(Box::new(e));
                                 }
                             }
                             None => {
-                                messages_processed = it.index;
-                                debug!(log, "finished processing a file"; "bytes_processed"=>it.bytes_processed, "bytes_skipped"=>it.bytes_skipped, "messages_processed"=>messages_processed);
-                                bytes_processed += (it.bytes_processed + it.bytes_skipped) as u64;
+                                debug!(log, "finished processing a file"; "messages_processed"=>messages_processed);
                                 break;
                             }
                         }
                     }
                 }
                 drop(tx_for_parse_thread);
-                info!(log, "parser_thread stopped"; "bytes_processed" => bytes_processed);
+                info!(log, "parser_thread stopped");
                 Ok(())
             },
         ),

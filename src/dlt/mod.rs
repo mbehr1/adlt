@@ -212,13 +212,13 @@ impl DltStorageHeader {
 }
 
 // dlt standard header htyp bitfield:
-const DLT_STD_HDR_HAS_EXT_HDR: u8 = 1;
+pub(crate) const DLT_STD_HDR_HAS_EXT_HDR: u8 = 1;
 pub(crate) const DLT_STD_HDR_BIG_ENDIAN: u8 = 1 << 1;
-const DLT_STD_HDR_HAS_ECU_ID: u8 = 1 << 2;
-const DLT_STD_HDR_HAS_SESSION_ID: u8 = 1 << 3;
-const DLT_STD_HDR_HAS_TIMESTAMP: u8 = 1 << 4;
+pub(crate) const DLT_STD_HDR_HAS_ECU_ID: u8 = 1 << 2;
+pub(crate) const DLT_STD_HDR_HAS_SESSION_ID: u8 = 1 << 3;
+pub(crate) const DLT_STD_HDR_HAS_TIMESTAMP: u8 = 1 << 4;
 
-const DLT_STD_HDR_VERSION: u8 = 0x1 << 5; // 3 bits (5,6,7) max.  [Dlt299]
+pub(crate) const DLT_STD_HDR_VERSION: u8 = 0x1 << 5; // 3 bits (5,6,7) max.  [Dlt299]
 
 #[derive(Debug, PartialEq)]
 pub struct DltStandardHeader {

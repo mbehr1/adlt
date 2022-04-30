@@ -8,7 +8,7 @@ use std::sync::mpsc::channel;
 
 use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
 use adlt::filter::functions::{filters_from_convert_format, filters_from_dlf};
-use adlt::utils::{buf_as_hex_to_io_write, DltMessageIterator, LowMarkBufReader};
+use adlt::utils::{buf_as_hex_to_io_write, get_dlt_message_iterator, LowMarkBufReader};
 
 #[derive(Clone, Copy)]
 enum OutputStyle {
@@ -193,9 +193,10 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             let fi = File::open(f_name);
             match fi {
                 Ok(mut f) => {
-                    let m1 = adlt::utils::get_first_message_from_file(&mut f, 512 * 1024);
+                    let file_ext = std::path::Path::new(f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
+                    let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024);
                     if m1.is_none() {
-                        warn!(log, "file {} doesn't contain a DLT message in first 0.5MB. Skipping!", f_name;);
+                        warn!(log, "file {} (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
                     }
                     (f_name, m1)
                 }
@@ -349,7 +350,6 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     //assert!(BUFREADER_CAPACITY > DLT_MAX_STORAGE_MSG_SIZE);
 
-    let mut bytes_processed: u64 = 0;
     let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
     let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
 
@@ -357,17 +357,23 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         let fi = File::open(input_file_name)?;
         info!(log, "opened file {} {:?}", &input_file_name, &fi);
         let buf_reader = LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
-        let mut it = DltMessageIterator::new(messages_processed, buf_reader);
-        it.log = Some(log);
+        let mut it = get_dlt_message_iterator(
+            std::path::Path::new(input_file_name)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or(""),
+            messages_processed,
+            buf_reader,
+            Some(log),
+        );
         loop {
             match it.next() {
                 Some(msg) => {
+                    messages_processed += 1;
                     tx.send(msg).unwrap(); // todo handle error
                 }
                 None => {
-                    messages_processed = it.index;
-                    debug!(log, "finished processing a file"; "bytes_processed"=>it.bytes_processed, "bytes_skipped"=>it.bytes_skipped, "messages_processed"=>messages_processed);
-                    bytes_processed += (it.bytes_processed + it.bytes_skipped) as u64;
+                    debug!(log, "finished processing a file";"messages_processed"=>messages_processed);
                     break;
                 }
             }
@@ -406,7 +412,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         }
     };
 
-    info!(log, "finished processing"; "bytes_processed"=>bytes_processed, "messages_processed"=>messages_processed);
+    info!(log, "finished processing"; "messages_processed"=>messages_processed);
 
     // print lifecycles:
     if let OutputStyle::None = output_style {

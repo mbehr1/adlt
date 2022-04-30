@@ -173,12 +173,68 @@ pub fn dlt_bench2(c: &mut Criterion) {
     group.finish();
 }
 
+pub fn dlt_iterator1(c: &mut Criterion) {
+    // create a test file with 1M DLT messages:
+    let mut file = NamedTempFile::new().unwrap();
+    let file_path = String::from(file.path().to_str().unwrap());
+
+    let persisted_msgs: adlt::dlt::DltMessageIndexType = 1_000_000;
+    let ecu = DltChar4::from_buf(b"ECU1");
+    for i in 0..persisted_msgs {
+        let sh = adlt::dlt::DltStorageHeader {
+            secs: (1640995200000000 / US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+            micros: 0,
+            ecu,
+        };
+        let standard_header = adlt::dlt::DltStandardHeader {
+            htyp: 1 << 5, // vers 1
+            mcnt: (i % 256) as u8,
+            len: 4,
+        };
+
+        let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+        m.to_write(&mut file).unwrap(); // will persist with timestamp
+    }
+    file.flush().unwrap();
+    let file_size = std::fs::metadata(&file_path).unwrap().len();
+
+    // benchmark opening the file, reading the content and parsing the header:
+    let mut group = c.benchmark_group("dlt_iterator");
+    // group.measurement_time(dur)
+    group.sample_size(10);
+    {
+        let buf_capacity = 512 * 1024usize;
+        group.throughput(Throughput::Bytes(file_size));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(buf_capacity),
+            &buf_capacity,
+            |b, &buf_capacity| {
+                b.iter(|| {
+                    let fi = File::open(&file_path).unwrap();
+                    let buf_reader =
+                        LowMarkBufReader::new(fi, buf_capacity, DLT_MAX_STORAGE_MSG_SIZE);
+                    let mut messages_processed = 0;
+                    let mut it =
+                        get_dlt_message_iterator("dlt", messages_processed, buf_reader, None);
+                    for msg in it.by_ref() {
+                        messages_processed += 1;
+                        drop(msg);
+                    }
+                    assert_eq!(persisted_msgs, messages_processed);
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     dlt_benches,
     dlt_bench_is_storage_header_pattern,
     dlt_bench_buf_as_hex_to_write,
     dlt_header_as_text_to_write,
     dlt_bench1,
-    dlt_bench2
+    dlt_bench2,
+    dlt_iterator1
 );
 criterion_main!(dlt_benches);
