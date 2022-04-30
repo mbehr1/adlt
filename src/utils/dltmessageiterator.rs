@@ -2,6 +2,8 @@ use crate::dlt::{parse_dlt_with_storage_header, DltMessage, DltMessageIndexType}
 use slog::debug;
 use std::io::{BufRead, BufReader, Read};
 
+use super::get_dlt_message_iterator;
+
 pub struct DltMessageIterator<'a, R> {
     reader: R,
     pub index: DltMessageIndexType,
@@ -56,14 +58,8 @@ where
     }
 }
 
-pub fn get_first_message(reader: impl BufRead) -> Option<DltMessage> {
-    let mut it = DltMessageIterator {
-        index: 0,
-        bytes_processed: 0,
-        bytes_skipped: 0,
-        reader,
-        log: None,
-    };
+pub fn get_first_message(file_ext: &str, reader: impl BufRead) -> Option<DltMessage> {
+    let mut it = get_dlt_message_iterator(file_ext, 0, reader, None);
     it.next()
 }
 
@@ -71,13 +67,14 @@ pub fn get_first_message(reader: impl BufRead) -> Option<DltMessage> {
 ///
 /// Reads read_size bytes into a buf and searches for the first DltMessage there
 pub fn get_first_message_from_file(
+    file_ext: &str,
     file: &mut std::fs::File,
     read_size: usize,
 ) -> Option<DltMessage> {
     let mut buf = vec![0u8; read_size];
     let res = file.read(&mut buf);
     match res {
-        Ok(res) => get_first_message(BufReader::with_capacity(read_size, &buf[0..res])),
+        Ok(res) => get_first_message(file_ext, BufReader::with_capacity(read_size, &buf[0..res])),
         _ => None,
     }
 }
@@ -134,14 +131,15 @@ mod tests {
         assert_eq!(it.bytes_processed, file_size as usize);
         assert_eq!(it.index, start_index + iterated_msgs);
 
-        let m1 = get_first_message(BufReader::with_capacity(
-            512 * 1024,
-            File::open(&file_path).unwrap(),
-        ));
+        let m1 = get_first_message(
+            "dlt",
+            BufReader::with_capacity(512 * 1024, File::open(&file_path).unwrap()),
+        );
         assert!(m1.is_some());
         assert_eq!(m1.unwrap().mcnt(), 0);
 
-        let m1 = get_first_message_from_file(&mut File::open(&file_path).unwrap(), 512 * 1024);
+        let m1 =
+            get_first_message_from_file("dlt", &mut File::open(&file_path).unwrap(), 512 * 1024);
         assert!(m1.is_some());
         assert_eq!(m1.unwrap().mcnt(), 0);
     }

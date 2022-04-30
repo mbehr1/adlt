@@ -1,11 +1,35 @@
-use std::sync::mpsc::{Receiver, Sender};
+use crate::dlt::{DltMessage, DltMessageIndexType};
+use std::{
+    io::BufRead,
+    sync::mpsc::{Receiver, Sender},
+};
 mod lowmarkbufreader;
 pub use self::lowmarkbufreader::LowMarkBufReader;
+mod asc2dltmsgiterator;
+use self::asc2dltmsgiterator::Asc2DltMsgIterator;
 mod dltmessageiterator;
-pub use self::dltmessageiterator::get_first_message_from_file;
-pub use self::dltmessageiterator::DltMessageIterator;
+pub use self::dltmessageiterator::{get_first_message_from_file, DltMessageIterator};
 pub mod eac_stats;
 pub mod remote_types;
+
+/// return the proper dlt message iterator for a file type/extension
+///
+/// Does this currently by extension:
+pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
+    file_ext: &str,
+    start_index: DltMessageIndexType,
+    reader: R,
+    log: Option<&'a slog::Logger>,
+) -> Box<dyn Iterator<Item = DltMessage> + 'a> {
+    match file_ext.to_lowercase().as_str() {
+        "asc" => Box::new(Asc2DltMsgIterator::new(start_index, reader, log)),
+        _ => Box::new({
+            let mut it = DltMessageIterator::new(start_index, reader);
+            it.log = log;
+            it
+        }),
+    }
+}
 
 // const MS_PER_SEC:u32 = 1_000;
 
@@ -441,6 +465,16 @@ mod tests {
     use std::sync::mpsc::channel;
     //    use std::time::Instant;
     use chrono::{Datelike, Timelike};
+
+    #[test]
+    fn get_dlt_message_it() {
+        // todo provide some real test data to see whether proper it is returned!
+        let mut it_asc = get_dlt_message_iterator("asc", 0, &[] as &[u8], None);
+        assert!(it_asc.next().is_none());
+
+        let mut it_dlt = get_dlt_message_iterator("dlt", 0, &[] as &[u8], None);
+        assert!(it_dlt.next().is_none());
+    }
 
     #[test]
     fn time_utc() {
