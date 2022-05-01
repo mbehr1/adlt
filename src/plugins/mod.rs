@@ -1,3 +1,4 @@
+pub mod can;
 pub mod factory;
 pub mod non_verbose;
 pub mod plugin;
