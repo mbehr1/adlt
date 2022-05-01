@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.17.0 - 2022-05-01
+#### Features
+- **(can_asc)** basic support of CAN files in asc format - (c34ad4e) - Matthias Behr
+- **(can_plugin)** add CAN plugin to decode payload - (32461ef) - Matthias Behr
+- - -
+
 ## v0.16.5 - 2022-04-26
 #### Bug Fixes
 - non verbose output format - (00cee5e) - Matthias Behr
