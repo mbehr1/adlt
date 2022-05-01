@@ -257,14 +257,14 @@ where
                                     );
                                     }
                                     let apid = self.apid.to_owned(); // or special ones DA1 DA1?
-                                    let ctid = self.ctid.to_owned();
+                                    let ctid = self.ctid.to_owned(); // CAN plugin checks for that apid as well!
                                     let mut payload: Vec<u8> =
                                         SERVICE_ID_GET_LOG_INFO.to_ne_bytes().into();
                                     let apid_buf = apid.as_buf();
                                     payload.extend(
                                         [7u8]
                                             .into_iter()
-                                            .chain(1u16.to_ne_bytes().into_iter()) // 1 app id
+                                            .chain(1u16.to_ne_bytes().into_iter()) // 1 app id, CAN plugin expects == 1
                                             .chain(apid_buf.iter().copied())
                                             .chain(0u16.to_ne_bytes().into_iter()) // 0 ctx ids
                                             .chain((name.len() as u16).to_ne_bytes().into_iter()) // len of apid desc
