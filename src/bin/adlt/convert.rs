@@ -431,9 +431,15 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                         "LC#{:3}: {:4} {} - {} #{:8}{} {}",
                         lc.id(),
                         lc.ecu,
-                        Local
-                            .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
-                            .format("%Y/%m/%d %H:%M:%S%.6f"),
+                        if lc.is_resume() {
+                            Local
+                                .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.resume_time()))
+                                .format("%Y/%m/%d %H:%M:%S RESUME")
+                        } else {
+                            Local
+                                .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.start_time))
+                                .format("%Y/%m/%d %H:%M:%S%.6f")
+                        },
                         Local
                             .from_utc_datetime(&adlt::utils::utc_time_from_us(lc.end_time()))
                             .format("%H:%M:%S"),

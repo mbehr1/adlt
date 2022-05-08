@@ -8,6 +8,7 @@ pub struct BinLifecycle {
     pub start_time: u64,
     pub end_time: u64,
     pub sw_version: Option<String>,
+    pub resume_time: Option<u64>, // if it was a resumed lifecycle. start_time refers to the reference time for the timestamp_dms of the msgs. This time should be shown to the user.
 }
 
 #[derive(Encode)]

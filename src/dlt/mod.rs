@@ -8,6 +8,7 @@ use std::fmt;
 use std::fmt::Write;
 use std::str::FromStr;
 
+use crate::utils::US_PER_SEC;
 use control_msgs::{parse_ctrl_log_info_payload, parse_ctrl_sw_version_payload};
 
 /// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
@@ -203,7 +204,7 @@ impl DltStorageHeader {
     }
 
     fn reception_time_us(&self) -> u64 {
-        (self.secs as u64 * 1_000_000) + self.micros as u64
+        (self.secs as u64 * US_PER_SEC) + self.micros as u64
     }
     #[allow(dead_code)]
     fn reception_time_ms(&self) -> u64 {
@@ -239,14 +240,14 @@ impl DltStandardHeader {
             len: u16::from_be_bytes([buf[2], buf[3]]), // all big endian includes std.header, ext header and the payload
         };
         // [Dlt104] check the version number. We expect 0x1 currently
-        let dlt_vers = sh.dlt_vers();
+        /* let dlt_vers = sh.dlt_vers();
         match dlt_vers {
             1 => (),
             _ => {
-                eprintln!("DltStandardHeader with unsupported version {}!", dlt_vers);
+                // eprintln!("DltStandardHeader with unsupported version {}!", dlt_vers);
                 // todo return None? / set len to 0, exthdr,... to false
             }
-        }
+        } */
 
         Some(sh)
     }
@@ -331,7 +332,7 @@ impl DltStandardHeader {
     }
 
     /// returns the dlt version from header. Currently only 0x1 should be supported.
-    fn dlt_vers(&self) -> u8 {
+    pub fn dlt_vers(&self) -> u8 {
         (self.htyp >> 5) & 0x07
     }
 
@@ -1683,7 +1684,7 @@ mod tests {
         #[test]
         fn from_msg1() {
             let mut m = DltMessage::for_test_rcv_tms_ms(0, 0);
-            m.reception_time_us = (1585231328 * 1_000_000) + 1_000;
+            m.reception_time_us = (1585231328 * US_PER_SEC) + 1_000;
             m.ecu = DltChar4::from_buf(b"ECU1");
             let shdr = DltStorageHeader::from_msg(&m);
             assert_eq!(shdr.secs, 1585231328); // 26.3.2020 14:02:08 gmt
