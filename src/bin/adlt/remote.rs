@@ -475,6 +475,13 @@ impl FileContext {
 ///   - Stop streaming from the requested stream_id.
 /// - `close`
 ///   - Closes the file and releases any resources associated. Afterwards new files can be opened.
+/// - `query`
+///   - Similar as stream but stops automatically.
+/// - `stream_binary_search`
+///   - binary search e.g. with time within the msgs returning closest index of a msg of the stream
+/// - `stream_window`
+///   - change the window for an existing stream
+
 fn process_incoming_text_message<T: Read + Write>(
     log: &slog::Logger,
     t: String,
@@ -886,6 +893,11 @@ fn process_file_context<T: Read + Write>(
                                 ecu: lc.ecu.as_u32le(),
                                 nr_msgs: lc.nr_msgs,
                                 start_time: lc.start_time,
+                                resume_time: if lc.is_resume() {
+                                    Some(lc.resume_time())
+                                } else {
+                                    None
+                                },
                                 end_time: lc.end_time(),
                                 sw_version: lc.sw_version.to_owned(),
                             })

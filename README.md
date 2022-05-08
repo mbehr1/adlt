@@ -10,7 +10,7 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 ## Features
 
 - Open DLT files of any size.
-- **Lifecycle detection** feature.
+- **Lifecycle detection** feature including detection (a bit heuristic) of "SUSPEND/RESUME" lifecycles for ECUs with suspend-to-ram implementations.
 - **Sorting by timestamp** taking the lifecycles into account.
 - **Filter**...
 
@@ -35,7 +35,7 @@ adlt convert <dlt_file>
 ...
 have 3 lifecycles:
 LC#  1: ECU1 2021/06/24 08:50:58.529663 - 08:53:51 #   26523 <sw version if contained as GET_SW_VERSION response>
-LC#  2: ECU1 2021/06/24 08:54:29.957936 - 08:55:08 #  181337 <sw version>
+LC#  2: ECU1 2021/06/24 08:54:29 RESUME - 08:55:08 #  181337 <sw version>
 LC#  3: DLOG 2021/06/24 08:54:44.945600 - 08:54:44 #       1
 ```
 Output/extract a specific lifecycle into file sorted by timestamps per lifecycle:

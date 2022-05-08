@@ -4,9 +4,12 @@
 // https://lib.rs/crates/arccstr or https://lib.rs/crates/arcstr
 // once_cell for one time inits.
 // use chrono::{Local, TimeZone};
-use crate::dlt::{
-    control_msgs::parse_ctrl_sw_version_payload, DltChar4, DltMessage, DltMessageIndexType,
-    SERVICE_ID_GET_SOFTWARE_VERSION,
+use crate::{
+    dlt::{
+        control_msgs::parse_ctrl_sw_version_payload, DltChar4, DltMessage, DltMessageIndexType,
+        SERVICE_ID_GET_SOFTWARE_VERSION,
+    },
+    utils::US_PER_SEC,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender};
@@ -22,6 +25,13 @@ fn new_lifecycle_item(lc: Lifecycle) -> LifecycleItem {
     lc
     //LifecycleItem::from(lc) // Box::from(lc)
     //std::sync::Arc::new(std::cell::Cell::from(lc))
+}
+
+#[derive(Debug, Clone)]
+pub struct ResumeLcInfo {
+    pub id: LifecycleId,
+    max_timestamp_us: u64,
+    start_time: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -44,8 +54,12 @@ pub struct Lifecycle {
     ///
     pub start_time: u64, // start time in us.
     initial_start_time: u64,
+    min_timestamp_us: u64, // min. timestamp of the messages assigned to this lifecycle.
     max_timestamp_us: u64, // max. timestamp of the messages assigned to this lifecycle. Used to determine end_time()
     last_reception_time: u64, // last (should be max.) reception_time (i.e. from last message)
+
+    /// was this a resumed lifecycle from another one?
+    resume_lc: Option<ResumeLcInfo>,
 
     /// sw version detected for this lifecycle
     /// this is parsed from the control messages GET_SW_VERSION
@@ -104,10 +118,46 @@ impl Lifecycle {
         }
     }
 
+    /// returns the resume time of this lifecycle in us.
+    /// If no resume was detected this is equal to the start_time
+    pub fn resume_time(&self) -> u64 {
+        if let Some(resume_lc) = &self.resume_lc {
+            self.start_time + self.min_timestamp_us
+                - if resume_lc.start_time < self.start_time {
+                    self.start_time - resume_lc.start_time
+                } else {
+                    0
+                }
+        } else {
+            self.start_time
+        }
+    }
+
+    /// returns the suspend duration of this lifecycle in us.
+    /// If no resume was detected this is 0.
+    /// Gets calculated by the distance of the calculated start times
+    /// of this lc vs. the resumed one.
+    pub fn suspend_duration(&self) -> u64 {
+        if let Some(resume_lc) = &self.resume_lc {
+            if resume_lc.start_time < self.start_time {
+                self.start_time - resume_lc.start_time
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    }
+
     /// returns whether this lifecycle contains only control request messages.
     /// ### Note: the info is wrong on merged lifecycles (we want to get rid of them anyhow)
     pub fn only_control_requests(&self) -> bool {
         self.nr_control_req_msgs >= self.nr_msgs
+    }
+
+    /// returns whether this lifecycle is a "suspend/resume" lifecycle.
+    pub fn is_resume(&self) -> bool {
+        self.resume_lc.is_some()
     }
 
     /// create a new lifecycle with the first msg passed as parameter
@@ -132,8 +182,10 @@ impl Lifecycle {
             nr_control_req_msgs: if is_ctrl_request { 1 } else { 0 },
             start_time: msg.reception_time_us - timestamp_us,
             initial_start_time: msg.reception_time_us - timestamp_us,
+            min_timestamp_us: timestamp_us,
             max_timestamp_us: timestamp_us,
             last_reception_time: msg.reception_time_us,
+            resume_lc: None,
             sw_version: None, // might be wrongif the first message is a GET_SW_VERSION but we ignore this case
             max_msg_index_update: msg.index,
         };
@@ -151,6 +203,9 @@ impl Lifecycle {
         lc_to_merge.nr_msgs = 0; // this indicates a merged lc
         if lc_to_merge.max_timestamp_us > self.max_timestamp_us {
             self.max_timestamp_us = lc_to_merge.max_timestamp_us;
+        }
+        if lc_to_merge.min_timestamp_us < self.min_timestamp_us {
+            self.min_timestamp_us = lc_to_merge.min_timestamp_us;
         }
         if lc_to_merge.start_time < self.start_time {
             self.start_time = lc_to_merge.start_time;
@@ -209,34 +264,83 @@ impl Lifecycle {
         // 2) the reception_time - timestamp <= reception_time from last msg
         // rationale for 2): there must be at least a gap of timestamp_us to last message if the message is from a new lifecycle
         // 3) msg has 0 timestamp (todo. this is not ok if a "perfect" ecu starts the first msg with a 0 timestamp
-
         let msg_timestamp_us = msg.timestamp_us();
+        let msg_reception_time_us = msg.reception_time_us;
         let msg_lc_start = msg.reception_time_us - msg_timestamp_us;
         let cur_end_time = self.end_time();
-        if msg_lc_start <= cur_end_time
+
+        let is_part_of_cur_lc = msg_lc_start <= cur_end_time
             || msg_lc_start <= self.last_reception_time
-            || msg_timestamp_us == 0
-        {
+            || msg_timestamp_us == 0;
+
+        // resume (e.g. from Android STR) detection:
+        // - a gap of >MIN_RESUME_RECEPTION_TIME_GAP s in reception time
+        // - msg.timestamp ~> last_timestamp
+        // - a shift in the calc start time >MIN_RESUME_RECEPTION_TIME_GAP s (otherwise it was just e.g. a logger interuption)
+        // - gap in reception time > gap in calc start time (as reception time consists of suspend_time + reconnect_time)
+        //
+        // note: with this we might identify a new lifecycle after a short lifecycle as a resume case. We handle this later and might "unresume" the lifecycle later.
+
+        const MIN_RESUME_RECEPTION_TIME_GAP_US: u64 = US_PER_SEC * 10;
+        let is_resume = (msg_reception_time_us
+            >= self.last_reception_time + MIN_RESUME_RECEPTION_TIME_GAP_US)
+            && (msg_timestamp_us >= self.max_timestamp_us)
+            && (msg_lc_start >= self.start_time + MIN_RESUME_RECEPTION_TIME_GAP_US)
+            && (msg_reception_time_us - self.last_reception_time > msg_lc_start - self.start_time);
+
+        if !is_resume && is_part_of_cur_lc {
             // ok belongs to this lifecycle
+            if self.min_timestamp_us > msg_timestamp_us {
+                if let Some(resume_lc) = &self.resume_lc {
+                    if msg_timestamp_us > resume_lc.max_timestamp_us {
+                        // we ignore the buffered msgs from prev lc...
+                        self.min_timestamp_us = msg_timestamp_us;
+                    }
+                } else {
+                    self.min_timestamp_us = msg_timestamp_us;
+                }
+            }
 
             if self.max_timestamp_us < msg_timestamp_us {
                 self.max_timestamp_us = msg_timestamp_us;
+            } else if let Some(resume_lc) = &self.resume_lc {
+                // we sometimes get in a resume case prev. msgs that had been buffered before the
+                // suspend.
+                // Best case we'd add those to the prev lc... (todo)
+                // (those msgs will have a wrong calculated time in the resume lc...)
+                // For now we consider them part of the resume lc as long as their timestamp
+                // is >= half of the timestamp of prev lc:
+                if msg_timestamp_us
+                    < (resume_lc.max_timestamp_us - (resume_lc.max_timestamp_us / 8))
+                {
+                    // this was not a resume but a new lifecycle as condition 2 is not met any longer
+                    /*println!(
+                        "update: untagged resume lifecycle with msg with timestamp diff={}\n{:?}\nLC:{:?}",
+                        resume_lc.max_timestamp_us - msg_timestamp_us,
+                        msg, &self
+                    );*/
+                    self.resume_lc = None;
+                    // afterwards we might be merged into prev lc as well
+                }
             }
 
-            if self.last_reception_time > msg.reception_time_us {
-                // seems like a bug in dltviewer...
+            /* if self.last_reception_time > msg_reception_time_us {
+                // bug in dlt viewer: https://github.com/COVESA/dlt-viewer/issues/232
                 // println!("msg.update reception time going backwards! LC:{:?} {:?} {}", self.last_reception_time, msg.reception_time_us, msg.index);
-            }
-            self.last_reception_time = msg.reception_time_us;
+            } */
+            self.last_reception_time = msg_reception_time_us;
 
             // does it move the start to earlier? (e.g. has a smaller buffering delay)
             // todo this can as well be caused by clock drift. Need to add clock_drift detection/compensation.
             // the clock drift is relative to the recording devices time clock.
+            /* not needed as for buffered msgs the buffering delay is larger: if let Some(resume_lc) = &self.resume_lc {
+                // for a resume case we take only msgs with timestamp > resume_lc.max_timestamp into account
+                // so we do ignore the msgs that had been buffered before resume
+                if msg_timestamp_us > resume_lc.max_timestamp_us && msg_lc_start < self.start_time {
+                    self.start_time = msg_lc_start;
+                }
+            } else */
             if msg_lc_start < self.start_time {
-                /*println!(
-                    "update: lc {} #{} moving lc start_time by {}us to {} initial diff {}us",
-                    self.id, self.nr_msgs, self.start_time - msg_lc_start, msg_lc_start, self.initial_start_time - msg_lc_start
-                );*/
                 self.start_time = msg_lc_start;
             }
             msg.lifecycle = self.id;
@@ -244,7 +348,6 @@ impl Lifecycle {
             if msg.index > self.max_msg_index_update {
                 self.max_msg_index_update = msg.index;
             }
-            // println!("update: lifecycle updated by {:?} to LC:{:?}", msg, &self);
 
             // sw-version contained?
             if self.sw_version.is_none() && msg.is_ctrl_response() {
@@ -278,16 +381,25 @@ impl Lifecycle {
 
             None
         } else {
-            /*println!(
-                "update: new lifecycle created by {:?} as msg_lc_start {} > {} LC:{:?}",
-                msg, chrono::Local
-                .from_utc_datetime(&crate::utils::utc_time_from_us(msg_lc_start))
-                .format("%Y/%m/%d %H:%M:%S%.6f"), chrono::Local
-                .from_utc_datetime(&crate::utils::utc_time_from_us(cur_end_time))
-                .format("%Y/%m/%d %H:%M:%S%.6f"), &self
-            );*/
+            /* if is_resume && is_part_of_cur_lc
+            {
+                println!(
+                    "update: new resume lifecycle created by\n{:?}\ntimestamp_diff={}\nlc_start_diff= {}\nrecp_time_diff={}\nLC:{:?}",
+                    msg, msg_timestamp_us - self.max_timestamp_us, msg_lc_start - self.start_time,
+                    msg_reception_time_us - self.last_reception_time, &self
+                );
+                // assert!(false, "is_resume!");
+            } */
             // new lifecycle:
-            Some(Lifecycle::new(msg))
+            let mut lc = Lifecycle::new(msg);
+            if is_resume {
+                lc.resume_lc = Some(ResumeLcInfo {
+                    id: self.id,
+                    start_time: self.start_time,
+                    max_timestamp_us: self.max_timestamp_us,
+                });
+            }
+            Some(lc)
         }
     }
 }
@@ -402,7 +514,7 @@ where
                     // now we have to check whether it overlaps with the prev. one and needs to be merged:
                     if ecu_lcs_len > 1 {
                         let prev_lc = rest_lcs.last_mut().unwrap(); // : &mut Lifecycle = &mut last_lcs[ecu_lcs_len - 2];
-                        if lc2.start_time <= prev_lc.end_time() {
+                        if lc2.start_time <= prev_lc.end_time() && !lc2.is_resume() {
                             // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
                             //println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
                             // we merge into the prev. one (so use the prev.one only)
@@ -560,7 +672,7 @@ where
                         }
                     }
                 }
-                next_buffer_check_time = msg_reception_time + 1_000_000; // in 1s again
+                next_buffer_check_time = msg_reception_time + US_PER_SEC; // in 1s again
             }
         }
 

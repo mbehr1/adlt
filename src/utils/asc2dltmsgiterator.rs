@@ -9,7 +9,7 @@ use crate::{
         DLT_STD_HDR_HAS_ECU_ID, DLT_STD_HDR_HAS_EXT_HDR, DLT_STD_HDR_HAS_TIMESTAMP,
         DLT_STD_HDR_VERSION, SERVICE_ID_GET_LOG_INFO,
     },
-    utils::hex_to_bytes,
+    utils::{hex_to_bytes, US_PER_SEC},
 };
 use chrono::NaiveDateTime;
 use lazy_static::lazy_static;
@@ -129,7 +129,7 @@ where
                         let timestamp = &cap_str[loc_timestamp.0..loc_timestamp.1];
                         let dot_idx = timestamp.find('.').unwrap_or_default();
                         let timestamp_us: u64 =
-                            (timestamp[0..dot_idx].parse::<u64>().unwrap_or_default() * 1_000_000)
+                            (timestamp[0..dot_idx].parse::<u64>().unwrap_or_default() * US_PER_SEC)
                                 + timestamp[dot_idx + 1..].parse::<u64>().unwrap_or_default();
                         let loc_can_id = self.capture_locations.get(2).unwrap();
                         // we map the can_id to the ECU to be used:
