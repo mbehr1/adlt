@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.18.0 - 2022-05-08
+#### Features
+- **(suspend)** add detection of suspend/resume lifecycles - (a3c83b7) - Matthias Behr
+- - -
+
 ## v0.17.0 - 2022-05-01
 #### Features
 - **(can_asc)** basic support of CAN files in asc format - (c34ad4e) - Matthias Behr
