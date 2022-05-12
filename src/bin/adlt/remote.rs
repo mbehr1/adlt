@@ -1,3 +1,6 @@
+// todos
+// [ ] sort by time is only per lifecycle. could interleave lifecycles from different ecus as well (eg bugs-41250)
+
 use adlt::{
     dlt::{DltMessageIndexType, DLT_MAX_STORAGE_MSG_SIZE},
     lifecycle::LifecycleId,

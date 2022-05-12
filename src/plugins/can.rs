@@ -9,10 +9,13 @@ use crate::{
     },
     plugins::plugin::{Plugin, PluginState},
 };
-use afibex::fibex::{get_all_fibex_in_dir, load_all_fibex, FibexData, PduInstance, SignalInstance};
+use afibex::fibex::{
+    get_all_fibex_in_dir, load_all_fibex, CompuCategory, CompuMethod, FibexData, PduInstance,
+    SignalInstance, XsDouble,
+};
 use asomeip::utils_can::decode_can_frame;
 use serde_json::json;
-use std::{collections::HashMap, error::Error, fmt, path::Path, sync::Arc};
+use std::{collections::HashMap, error::Error, fmt, ops::Bound, path::Path, sync::Arc};
 
 #[derive(Debug)]
 struct CanPluginError {
@@ -105,6 +108,8 @@ impl<'a> Plugin for CanPlugin {
                             &channel_id,
                             frame_id,
                             arg.payload_raw,
+                            true,
+                            false,
                         ));
                         break; // done with arg parsing, ignore any further
                     }
@@ -237,14 +242,94 @@ fn tree_item_for_signal(fd: &FibexData, signal_instance: &SignalInstance) -> ser
             .map(|bp| format!("bit {:2}.. ", bp))
             .unwrap_or_else(|| "         ".to_string());
         json!({ "label": format!("{}: {}", bit_pos_str, short_name),
-            "tooltip": format!("description:\n{}\ncoding ref: {}",
+            "tooltip": format!("description:\n{}\n\n{}",
                 signal.desc.as_deref().unwrap_or(no_desc),
-                signal.coding_ref,
+                md_for_coding(fd, &signal.coding_ref)
             ),
         })
     } else {
         json!({ "label": format!("pdu ref {} unknown!", signal_instance.signal_ref) })
     }
+}
+
+fn md_for_coding(fd: &FibexData, coding_ref: &str) -> String {
+    let no_name = "<no shortname>";
+
+    if let Some(cod) = fd.pi.codings.get(coding_ref) {
+        // .coded_type, .compu_methods
+        format!(
+            "Coding '{}'\nCOMPU-METHODS:#{}\n{}",
+            cod.short_name.as_deref().unwrap_or(no_name),
+            cod.compu_methods.len(),
+            md_for_compu_methods(&cod.compu_methods),
+        )
+    } else {
+        format!("<unknown coding_ref '{}'>", coding_ref)
+    }
+}
+
+fn md_for_compu_methods(compu_methods: &Vec<CompuMethod>) -> String {
+    let mut r = String::with_capacity(1024);
+    for cm in compu_methods {
+        match cm.category {
+            CompuCategory::TextTable => {
+                r += "Text table:\n";
+                r += &cm
+                    .internal_to_phys_scales
+                    .iter()
+                    .map(|cs| format!("{}", cs))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            CompuCategory::BitfieldTextTable => {
+                r += "Bitfield text table:\n";
+                // sort by mask value for now
+
+                let mut masks = cm
+                    .internal_to_phys_scales
+                    .iter()
+                    .filter(|cs| cs.mask.is_some())
+                    .filter(|cs| {
+                        if let Some(lower_limit) = &cs.lower_limit {
+                            if let Some(upper_limit) = &cs.upper_limit {
+                                return lower_limit.0 == upper_limit.0
+                                    && !(lower_limit.0 == Bound::Included(XsDouble::I64(0)));
+                            }
+                        }
+                        false
+                    })
+                    .map(|cs| (cs.mask.unwrap(), &cs.lower_limit.as_ref().unwrap().0, cs))
+                    .collect::<Vec<_>>();
+                masks.sort_by(|a, b| a.0.cmp(&b.0));
+                let def_v = XsDouble::I64(0);
+                r += &masks
+                    .iter()
+                    .map(|cs| {
+                        format!(
+                            "{} -> {}",
+                            if let Bound::Included(v) = &cs.1 {
+                                v
+                            } else {
+                                &def_v
+                            },
+                            if let Some(cc) = &cs.2.compu_const {
+                                format!("{}", cc)
+                            } else {
+                                "<none>".to_string()
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            _ => {
+                r += format!("'{:?}': nyi!", cm.category).as_str();
+            }
+        }
+        r += "\n";
+    }
+    r += "\n";
+    r
 }
 
 impl CanPlugin {
