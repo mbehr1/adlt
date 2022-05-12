@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.19.0 - 2022-05-12
+#### Features
+- **(can)** provide more COMPU_METHODS based info - (5fa9d2d) - Matthias Behr
+- - -
+
 ## v0.18.0 - 2022-05-08
 #### Features
 - **(suspend)** add detection of suspend/resume lifecycles - (a3c83b7) - Matthias Behr
