@@ -1,8 +1,13 @@
 /// integration tests for full binary
+use adlt::utils::remote_types::{self, BinType};
 use assert_cmd::Command;
 use portpicker::pick_unused_port;
 use predicates::prelude::*;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+use tungstenite::Message;
 
 #[test]
 fn bin_version() {
@@ -217,6 +222,229 @@ fn bin_remote_validport_connect() {
         )))
         .stderr(predicate::str::contains("err: close failed"))
         .failure(); // fails on windows: .interrupted();
+    println!("{:?}", assert.get_output());
+    t.join().unwrap();
+}
+
+use bincode::config;
+
+const BINCODE_CONFIG: config::Configuration<
+    config::LittleEndian,
+    config::Fixint,
+    config::WriteFixedArrayLength,
+    config::NoLimit,
+> = config::legacy(); // todo choose local endianess
+
+#[test]
+fn bin_remote_ex002_open() {
+    let port: u16 = pick_unused_port().expect("no ports free");
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file.push("tests");
+    test_file.push("lc_ex002.dlt");
+
+    // start the client that connects, sends open with file, checks for mandatory infos (no stream yet) and closes
+    let t = std::thread::spawn(move || {
+        let mut ws;
+        let start_time = Instant::now();
+        loop {
+            match tungstenite::client::connect(format!("wss://127.0.0.1:{}", port)) {
+                Ok(p) => {
+                    ws = p.0;
+                    break;
+                }
+                Err(_e) => {
+                    if start_time.elapsed() > Duration::from_secs(1) {
+                        panic!("couldnt connect");
+                    } else {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+            }
+        }
+        ws.write_message(tungstenite::protocol::Message::Text(format!(
+            r#"open {{"files":[{}]}}"#,
+            serde_json::json!(test_file.to_str().unwrap()),
+        )))
+        .unwrap();
+        let answer = ws.read_message().unwrap();
+        assert!(answer.is_text());
+        assert_eq!(
+            answer.into_text().unwrap(),
+            "ok: open {\"plugins_active\":[]}"
+        );
+        // check for the expected msgs:
+        // FileInfo with up the proper nr_msgs
+        // lifecycle info for 3 lifecycles (one is ctrl_request only)
+
+        let mut got_file_info = false;
+        let mut got_lcs = HashMap::new();
+        let mut got_eac = HashMap::new();
+
+        while let Ok(msg) = ws.read_message() {
+            match msg {
+                Message::Binary(d) => {
+                    if let Ok((btype, _)) =
+                        bincode::decode_from_slice::<remote_types::BinType, _>(&d, BINCODE_CONFIG)
+                    {
+                        match btype {
+                            BinType::FileInfo(s) => {
+                                println!("got binary msg FileInfo: {}", s.nr_msgs);
+                                got_file_info = s.nr_msgs == 11696;
+                            }
+                            BinType::Lifecycles(lcs) => {
+                                println!("got binary msg Lifecycles: {}", lcs.len());
+                                for lc in lcs {
+                                    got_lcs.insert(lc.id, ());
+                                }
+                            }
+                            BinType::EacInfo(eacs) => {
+                                println!("got binary msg EacInfo: {}", eacs.len());
+                                for eac in eacs {
+                                    println!(
+                                        " eac ecu={:x} nr_msgs={}, #apids={}",
+                                        eac.ecu,
+                                        eac.nr_msgs,
+                                        eac.apids.len()
+                                    );
+                                    got_eac.insert(eac.ecu, (eac.nr_msgs, eac.apids.len()));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {} // ignore
+            }
+            if got_file_info
+                && got_lcs.len() == 3
+                && got_eac.values().map(|a| a.0).sum::<u32>() == 11696 // nr msgs
+                && /* apids */ got_eac.values().map(|a| a.1).sum::<usize>() == 14
+            {
+                break;
+            }
+        }
+        // send close
+        ws.write_message(tungstenite::protocol::Message::Text("close".to_string()))
+            .unwrap();
+        let answer = ws.read_message().unwrap();
+        assert!(answer.is_text(), "answer={:?}", answer);
+        assert_eq!(answer.into_text().unwrap(), "ok: 'close'!");
+        ws.close(None).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+    });
+
+    let assert = cmd
+        .args(&["remote", "-v", "-p", &format!("{}", port)])
+        .timeout(std::time::Duration::from_secs(3))
+        .assert()
+        .stderr(predicate::str::ends_with("websocket thread done\n"))
+        .failure();
+    println!("{:?}", assert.get_output());
+    t.join().unwrap();
+}
+
+#[test]
+fn bin_remote_ex002_stream() {
+    let port: u16 = pick_unused_port().expect("no ports free");
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file.push("tests");
+    test_file.push("lc_ex002.dlt");
+
+    // start the client that connects, sends open with file, checks for mandatory infos (no stream yet) and closes
+    let t = std::thread::spawn(move || {
+        let mut ws;
+        let start_time = Instant::now();
+        loop {
+            match tungstenite::client::connect(format!("wss://127.0.0.1:{}", port)) {
+                Ok(p) => {
+                    ws = p.0;
+                    break;
+                }
+                Err(_e) => {
+                    if start_time.elapsed() > Duration::from_secs(1) {
+                        panic!("couldnt connect");
+                    } else {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+            }
+        }
+        ws.write_message(tungstenite::protocol::Message::Text(format!(
+            r#"open {{"files":[{}]}}"#,
+            serde_json::json!(test_file.to_str().unwrap()),
+        )))
+        .unwrap();
+        let answer = ws.read_message().unwrap();
+        assert!(answer.is_text());
+        assert_eq!(
+            answer.into_text().unwrap(),
+            "ok: open {\"plugins_active\":[]}"
+        );
+
+        ws.write_message(tungstenite::protocol::Message::Text(format!(
+            r#"stream {{"window":[1000,2000], "binary":true}}"#
+        )))
+        .unwrap();
+        // check for the expected # of streamed msgs:
+
+        let mut got_stream_ok = false;
+        let mut got_msgs = 0usize;
+
+        while let Ok(msg) = ws.read_message() {
+            match msg {
+                Message::Binary(d) => {
+                    if let Ok((btype, _)) =
+                        bincode::decode_from_slice::<remote_types::BinType, _>(&d, BINCODE_CONFIG)
+                    {
+                        match btype {
+                            BinType::FileInfo(s) => {
+                                println!("got binary msg FileInfo: {}", s.nr_msgs);
+                            }
+                            BinType::Lifecycles(lcs) => {
+                                println!("got binary msg Lifecycles: {}", lcs.len());
+                            }
+                            BinType::EacInfo(eacs) => {
+                                println!("got binary msg EacInfo: {}", eacs.len());
+                            }
+                            BinType::DltMsgs((_stream_id, msgs)) => {
+                                println!("got binary msg DltMsgs: #{}", msgs.len());
+                                got_msgs += msgs.len();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Message::Text(s) => {
+                    println!("got text msg: {}", s);
+                    if s.starts_with("ok: stream") {
+                        // todo check stream id {"id":x,...} and compare with DltMsgs stream_id
+                        got_stream_ok = true;
+                    }
+                }
+                _ => {} // ignore
+            }
+            if got_stream_ok && got_msgs == 1000 {
+                break;
+            }
+        }
+        // send close
+        ws.write_message(tungstenite::protocol::Message::Text("close".to_string()))
+            .unwrap();
+        let answer = ws.read_message().unwrap();
+        assert!(answer.is_text(), "answer={:?}", answer);
+        assert_eq!(answer.into_text().unwrap(), "ok: 'close'!");
+        ws.close(None).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+    });
+
+    let assert = cmd
+        .args(&["remote", "-v", "-p", &format!("{}", port)])
+        .timeout(std::time::Duration::from_secs(3))
+        .assert()
+        .stderr(predicate::str::ends_with("websocket thread done\n"))
+        .failure();
     println!("{:?}", assert.get_output());
     t.join().unwrap();
 }

@@ -1,6 +1,6 @@
 use bincode::Encode;
 // we use bincode serialization
-#[derive(Encode)]
+#[derive(Encode, bincode::Decode)]
 pub struct BinLifecycle {
     pub id: u32,
     pub ecu: u32, // Vec<u8>, // todo bincode-typescript doesn't support [u8;4] ... add support or misuse as u32
@@ -11,7 +11,7 @@ pub struct BinLifecycle {
     pub resume_time: Option<u64>, // if it was a resumed lifecycle. start_time refers to the reference time for the timestamp_dms of the msgs. This time should be shown to the user.
 }
 
-#[derive(Encode)]
+#[derive(Encode, bincode::Decode)]
 pub struct BinDltMsg {
     pub index: u32, // todo use DltMessageIndexType!
     pub reception_time: u64,
@@ -27,34 +27,34 @@ pub struct BinDltMsg {
     pub payload_as_text: String, // todo and option for payload as vec[u8]?
 }
 
-#[derive(Encode)]
+#[derive(Encode, bincode::Decode)]
 pub struct BinFileInfo {
     pub nr_msgs: u32, // todo change with index
 }
 
 /// info about the ECU/APIDs/CTIDs
-#[derive(Encode)]
+#[derive(Encode, bincode::Decode)]
 pub struct BinEcuStats {
     pub ecu: u32,
     pub nr_msgs: u32, // todo change with index
     pub apids: Vec<BinApidInfo>,
 }
 
-#[derive(Encode)]
+#[derive(Encode, bincode::Decode)]
 pub struct BinApidInfo {
     pub apid: u32,
     pub desc: Option<String>,
     pub ctids: Vec<BinCtidInfo>,
 }
 
-#[derive(Encode)]
+#[derive(Encode, bincode::Decode)]
 pub struct BinCtidInfo {
     pub ctid: u32,
     pub nr_msgs: u32, // todo change with index
     pub desc: Option<String>,
 }
 
-#[derive(Encode)]
+#[derive(Encode, bincode::Decode)]
 pub enum BinType {
     FileInfo(BinFileInfo),
     Lifecycles(Vec<BinLifecycle>),
