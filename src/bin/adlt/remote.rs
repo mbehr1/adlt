@@ -7,6 +7,7 @@ use adlt::{
     plugins::{
         factory::get_plugin,
         plugin::{Plugin, PluginState},
+        plugins_process_msgs,
     },
     utils::{
         eac_stats::EacStats, get_dlt_message_iterator, get_first_message_from_file, remote_types,
@@ -1158,28 +1159,6 @@ struct ParserThreadType {
     rx: std::sync::mpsc::Receiver<adlt::dlt::DltMessage>,
 }
 
-fn plugin_thread(
-    inflow: std::sync::mpsc::Receiver<adlt::dlt::DltMessage>,
-    outflow: std::sync::mpsc::Sender<adlt::dlt::DltMessage>,
-    mut plugins_active: Vec<Box<dyn Plugin + Send>>,
-) -> Result<Vec<Box<dyn Plugin + Send>>, std::sync::mpsc::SendError<adlt::dlt::DltMessage>> {
-    for mut msg in inflow {
-        // pass the message through the plugins (sequentially, not parallel)
-        let mut forward_msg = true;
-        for plugin in &mut plugins_active {
-            let plugin = plugin.as_mut();
-            if !plugin.process_msg(&mut msg) {
-                forward_msg = false;
-                break;
-            }
-        }
-        if forward_msg {
-            outflow.send(msg)?;
-        }
-    }
-    Ok(plugins_active)
-}
-
 /// create a parser thread including a channel
 ///
 /// The thread reads data from the BufReader, parses the DLT messages via `parse_dlt_with_storage_header`
@@ -1211,7 +1190,7 @@ fn create_parser_thread(
         let (tx_for_plugin_thread, rx_from_plugin_thread) = std::sync::mpsc::channel();
         (
             Some(std::thread::spawn(move || {
-                plugin_thread(rx_from_lc_thread, tx_for_plugin_thread, plugins_active)
+                plugins_process_msgs(rx_from_lc_thread, tx_for_plugin_thread, plugins_active)
             })),
             rx_from_plugin_thread,
         )

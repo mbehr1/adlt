@@ -140,6 +140,20 @@ pub fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
     }
 }
 
+/// convert a type that supports to_be/le_bytes into a vec
+/// first param is the type to be output as vec
+/// 2nd param indicates whether big_endianess is to be used.
+#[macro_export]
+macro_rules! to_endian_vec {
+    ($x:expr, $i:expr) => {
+        if $i {
+            $x.to_be_bytes().to_vec()
+        } else {
+            $x.to_le_bytes().to_vec()
+        }
+    };
+}
+
 pub enum BufferElementsAmount {
     NumberElements(usize),
 }

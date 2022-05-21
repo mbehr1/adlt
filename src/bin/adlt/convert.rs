@@ -6,9 +6,12 @@ use std::io::prelude::*;
 use std::io::BufWriter;
 use std::sync::mpsc::channel;
 
-use adlt::dlt::DLT_MAX_STORAGE_MSG_SIZE;
-use adlt::filter::functions::{filters_from_convert_format, filters_from_dlf};
-use adlt::utils::{buf_as_hex_to_io_write, get_dlt_message_iterator, LowMarkBufReader};
+use adlt::{
+    dlt::DLT_MAX_STORAGE_MSG_SIZE,
+    filter::functions::{filters_from_convert_format, filters_from_dlf},
+    plugins::{anonymize::AnonymizePlugin, plugin::Plugin, plugins_process_msgs},
+    utils::{buf_as_hex_to_io_write, get_dlt_message_iterator, LowMarkBufReader},
+};
 
 #[derive(Clone, Copy)]
 enum OutputStyle {
@@ -89,6 +92,12 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
                 .long("sort")
                 .takes_value(false)
                 .help("sort by timestamp. Sorts by timestamp per lifecycle.")
+            )
+            .arg(
+                Arg::with_name("anon")
+                .long("anon")
+                .takes_value(false)
+                .help("anonymize the output. Rewrite APID, CTIDs,sw_versiona and payload. Useful only for lifecycle detection tests.")
             ),
     )
 }
@@ -125,6 +134,8 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     };
 
     let sort_by_time = sub_m.is_present("sort");
+
+    let do_anonimize = sub_m.is_present("anon");
 
     let index_first: adlt::dlt::DltMessageIndexType = match sub_m.value_of("index_first") {
         None => 0,
@@ -217,25 +228,47 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
     }
 
-    // setup (thread) filter chain:
-    let (tx, rx) = channel(); // msg -> parse_lifecycles (t2)
-    let (tx2, rx2) = channel(); // parse_lifecycles -> buffer_sort_messages (t3)
-                                // let (tx3, rx3) = channel(); // buffer_sort_messages -> print/output (t4)
+    // determine plugins
+    let plugins_active: Vec<Box<dyn Plugin + Send>> = if do_anonimize {
+        vec![Box::new(AnonymizePlugin::new("anon"))]
+    } else {
+        vec![]
+    };
 
+    // setup (thread) filter chain:
+    let (tx_for_parse_thread, rx_from_parse_thread) = channel(); // msg -> parse_lifecycles (t2)
+    let (tx_for_lc_thread, rx_from_lc_thread) = channel(); // parse_lifecycles -> buffer_sort_messages (t3)
     let (lcs_r, lcs_w) =
         evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
-    let t2 = std::thread::spawn(move || {
-        adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2)
+    let lc_thread = std::thread::spawn(move || {
+        adlt::lifecycle::parse_lifecycles_buffered_from_stream(
+            lcs_w,
+            rx_from_parse_thread,
+            tx_for_lc_thread,
+        )
     });
-    let t3_lcs_r = lcs_r.clone();
-    let (t3, t4_input) = if sort_by_time {
-        let (tx3, rx3) = channel();
+
+    let (_plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
+        let (tx_for_plugin_thread, rx_from_plugin_thread) = std::sync::mpsc::channel();
+        (
+            Some(std::thread::spawn(move || {
+                plugins_process_msgs(rx_from_lc_thread, tx_for_plugin_thread, plugins_active)
+            })),
+            rx_from_plugin_thread,
+        )
+    } else {
+        (None, rx_from_lc_thread)
+    };
+
+    let sort_thread_lcs_r = lcs_r.clone();
+    let (sort_thread, rx_final) = if sort_by_time {
+        let (tx_for_sort_thread, rx_from_sort_thread) = channel();
         (
             Some(std::thread::spawn(move || {
                 adlt::utils::buffer_sort_messages(
-                    rx2,
-                    tx3,
-                    &t3_lcs_r,
+                    rx_from_plugin_thread,
+                    tx_for_sort_thread,
+                    &sort_thread_lcs_r,
                     3,
                     2 * adlt::utils::US_PER_SEC,
                 )
@@ -250,10 +283,10 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     },
                 )*/
             })),
-            rx3,
+            rx_from_sort_thread,
         )
     } else {
-        (None, rx2)
+        (None, rx_from_plugin_thread)
     };
 
     // if we have filters we use a filter thread:
@@ -261,12 +294,12 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         let (tx_filter, rx_filter) = channel();
         (
             Some(std::thread::spawn(move || {
-                adlt::filter::functions::filter_as_streams(&filters, &t4_input, &tx_filter)
+                adlt::filter::functions::filter_as_streams(&filters, &rx_final, &tx_filter)
             })),
             rx_filter,
         )
     } else {
-        (None, t4_input)
+        (None, rx_final)
     };
 
     let t4 = std::thread::spawn(
@@ -370,7 +403,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             match it.next() {
                 Some(msg) => {
                     messages_processed += 1;
-                    tx.send(msg).unwrap(); // todo handle error
+                    tx_for_parse_thread.send(msg).unwrap(); // todo handle error
                 }
                 None => {
                     debug!(log, "finished processing a file";"messages_processed"=>messages_processed);
@@ -379,10 +412,10 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             }
         }
     }
-    drop(tx);
-    let _lcs_w = t2.join().unwrap();
+    drop(tx_for_parse_thread);
+    let _lcs_w = lc_thread.join().unwrap();
 
-    if let Some(t) = t3 {
+    if let Some(t) = sort_thread {
         match t.join() {
             Err(s) => error!(log, "t3 join got Error {:?}", s),
             Ok(s) => debug!(log, "t3 join was Ok {:?}", s),
