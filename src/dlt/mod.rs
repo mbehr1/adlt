@@ -331,26 +331,34 @@ impl DltStandardHeader {
         length
     }
 
+    #[inline(always)]
     /// returns the dlt version from header. Currently only 0x1 should be supported.
     pub fn dlt_vers(&self) -> u8 {
         (self.htyp >> 5) & 0x07
     }
 
-    fn has_ext_hdr(&self) -> bool {
+    #[inline(always)]
+    pub fn has_ext_hdr(&self) -> bool {
         (self.htyp & DLT_STD_HDR_HAS_EXT_HDR) > 0
     }
 
-    fn is_big_endian(&self) -> bool {
+    #[inline(always)]
+    pub fn is_big_endian(&self) -> bool {
         (self.htyp & DLT_STD_HDR_BIG_ENDIAN) > 0
     }
 
-    fn has_ecu_id(&self) -> bool {
+    #[inline(always)]
+    pub fn has_ecu_id(&self) -> bool {
         (self.htyp & DLT_STD_HDR_HAS_ECU_ID) > 0
     }
-    fn has_session_id(&self) -> bool {
+
+    #[inline(always)]
+    pub fn has_session_id(&self) -> bool {
         (self.htyp & DLT_STD_HDR_HAS_SESSION_ID) > 0
     }
-    fn has_timestamp(&self) -> bool {
+
+    #[inline(always)]
+    pub fn has_timestamp(&self) -> bool {
         (self.htyp & DLT_STD_HDR_HAS_TIMESTAMP) > 0
     }
 
@@ -1128,7 +1136,7 @@ impl DltMessage {
             ecu: DltChar4::from_buf(b"TEST"),
             timestamp_dms: (timestamp_us / 100) as u32,
             standard_header: DltStandardHeader {
-                htyp: 1,
+                htyp: DLT_STD_HDR_HAS_TIMESTAMP,
                 len: 0,
                 mcnt: 0,
             },
@@ -1147,7 +1155,7 @@ impl DltMessage {
             ecu: DltChar4::from_buf(b"TEST"),
             timestamp_dms: (timestamp_ms * 10) as u32,
             standard_header: DltStandardHeader {
-                htyp: 1,
+                htyp: DLT_STD_HDR_HAS_TIMESTAMP,
                 len: 0,
                 mcnt: 0,
             },

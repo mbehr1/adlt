@@ -263,7 +263,7 @@ impl Lifecycle {
         // or
         // 2) the reception_time - timestamp <= reception_time from last msg
         // rationale for 2): there must be at least a gap of timestamp_us to last message if the message is from a new lifecycle
-        // 3) msg has 0 timestamp (todo. this is not ok if a "perfect" ecu starts the first msg with a 0 timestamp
+        // 3) msg has no timestamp. This is for logs without a timestamp (e.g. from SER) where no lifecycle detection is possible.
         let msg_timestamp_us = msg.timestamp_us();
         let msg_reception_time_us = msg.reception_time_us;
         let msg_lc_start = msg.reception_time_us - msg_timestamp_us;
@@ -271,7 +271,7 @@ impl Lifecycle {
 
         let is_part_of_cur_lc = msg_lc_start <= cur_end_time
             || msg_lc_start <= self.last_reception_time
-            || msg_timestamp_us == 0;
+            || !msg.standard_header.has_timestamp() /*(msg_timestamp_us == 0 && self.max_timestamp_us == 0)*/;
 
         // resume (e.g. from Android STR) detection:
         // - a gap of >MIN_RESUME_RECEPTION_TIME_GAP s in reception time
@@ -771,7 +771,10 @@ mod tests {
     //use super::*;
     use crate::dlt::*;
     use crate::lifecycle::*;
+    use crate::utils::get_dlt_message_iterator;
+    use crate::utils::LowMarkBufReader;
     use ntest::timeout;
+    use std::fs::File;
     use std::str::FromStr;
     use std::sync::mpsc::channel;
     use std::time::Instant;
@@ -1224,7 +1227,7 @@ mod tests {
                         lifecycle: 0,
                         ecu: options.ecu,
                         standard_header: crate::dlt::DltStandardHeader {
-                            htyp: 1,
+                            htyp: DLT_STD_HDR_HAS_TIMESTAMP,
                             len: 0,
                             mcnt: 0,
                         },
@@ -1659,4 +1662,91 @@ mod tests {
         assert!(lc.sw_version.is_some());
         assert_eq!(lc.sw_version.unwrap(), "SW 2");
     }
+
+    fn nr_lcs_for_file(file_name: &str) -> (DltMessageIndexType, usize) {
+        let (tx_for_parse_thread, rx_from_parse_thread) = channel();
+        let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
+
+        let (tx_for_lc_thread, rx_from_lc_thread) = channel();
+        let lc_thread = std::thread::spawn(move || {
+            parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, tx_for_lc_thread)
+        });
+        let junk_thread = std::thread::spawn(move || for _msg in rx_from_lc_thread {});
+
+        let fi = File::open(file_name).unwrap();
+        const BUFREADER_CAPACITY: usize = 512 * 1024;
+        let mut messages_processed: DltMessageIndexType = 0;
+        let buf_reader = LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
+        let mut it = get_dlt_message_iterator(
+            std::path::Path::new(file_name)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or(""),
+            messages_processed,
+            buf_reader,
+            None,
+        );
+        loop {
+            match it.next() {
+                Some(msg) => {
+                    messages_processed += 1;
+                    tx_for_parse_thread.send(msg).unwrap(); // todo handle error
+                }
+                None => {
+                    //debug!(log, "finished processing a file";"messages_processed"=>messages_processed);
+                    break;
+                }
+            }
+        }
+        drop(tx_for_parse_thread);
+
+        // wait for the threads
+        junk_thread.join().unwrap();
+        let _lcs_w = lc_thread.join().unwrap();
+        let nr_lcs = if let Some(a) = lcs_r.read() {
+            let sorted_lcs = get_sorted_lifecycles_as_vec(&a);
+            sorted_lcs.len()
+        } else {
+            0
+        };
+
+        (messages_processed, nr_lcs)
+    }
+
+    fn get_tests_filename(file_name: &str) -> std::path::PathBuf {
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push(file_name);
+        test_dir
+    }
+
+    #[test]
+    fn lc_ex001() {
+        // lc_ex001 should have 426464 msgs and 26 lifecycles:
+        let ex001 = get_tests_filename("lc_ex001.dlt");
+        if ex001.exists() {
+            assert_eq!(nr_lcs_for_file(&ex001.to_string_lossy()), (426464, 26));
+        } else {
+            // consider adding to github...
+            println!("skipped test lc_ex001 as file not available!");
+        }
+    }
+
+    #[test]
+    fn lc_ex002() {
+        // very short lifecycle that start with timestamp 0
+        assert_eq!(
+            nr_lcs_for_file(&get_tests_filename("lc_ex002.dlt").to_string_lossy()),
+            (11696, 4)
+        );
+    }
+    #[test]
+    fn lc_ex003() {
+        // timestamp not available on all msgs -> 1 LC
+        assert_eq!(
+            nr_lcs_for_file(&get_tests_filename("lc_ex003.dlt").to_string_lossy()),
+            (8045, 1)
+        );
+    }
+
 }
