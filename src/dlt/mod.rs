@@ -1587,7 +1587,7 @@ pub fn parse_dlt_with_storage_header(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::*;
+    use crate::{to_endian_vec, utils::*};
 
     mod dlt_char4 {
         use super::*;
@@ -2356,16 +2356,6 @@ mod tests {
             m.payload_as_text().unwrap(),
             "42 -21555 304297029 -1152355238854392056"
         );
-    }
-
-    macro_rules! to_endian_vec {
-        ($x:expr, $i:expr) => {
-            if $i {
-                $x.to_be_bytes().to_vec()
-            } else {
-                $x.to_le_bytes().to_vec()
-            }
-        };
     }
 
     #[test]
