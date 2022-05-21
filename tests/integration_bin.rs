@@ -20,6 +20,124 @@ fn bin_convert_notext() {
     assert.failure();
 }
 
+#[test]
+fn bin_convert_ex2() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file.push("tests");
+    test_file.push("lc_ex002.dlt");
+    // convert command only -> just show lifecycles
+    let assert = cmd
+        .args(&["convert", &test_file.to_string_lossy()])
+        .assert();
+    assert
+        .stdout(predicate::str::contains("have 4 lifecycles"))
+        .success();
+}
+
+#[test]
+fn bin_convert_ex2_lc_filter() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file.push("tests");
+    test_file.push("lc_ex002.dlt");
+    // convert filter for a lifecycle
+    let assert = cmd
+        .args(&["convert", "-l", "3", "-a", &test_file.to_string_lossy()])
+        .assert();
+    assert
+        .stdout(predicate::str::contains(
+            "15:16.560007          0 001 E002 A001 C001 log info N 0 [[13] |]\n",
+        ))
+        .stderr(predicate::str::is_empty())
+        .success();
+}
+
+#[test]
+fn bin_convert_ex3() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file.push("tests");
+    test_file.push("lc_ex003.dlt");
+    // convert cmd with -a ascii and end but not start index
+    let assert = cmd
+        .args(&["convert", "-a", "-e", "2", &test_file.to_string_lossy()])
+        .assert();
+    assert
+        .stdout(predicate::str::contains(
+            "   0 056 ECU- SER- ASC- log info V 1 [Only NL!]",
+        ))
+        .success();
+}
+
+#[test]
+fn bin_convert_ex3_mixed() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file.push("tests");
+    test_file.push("lc_ex003.dlt");
+    // convert cmd with -x hex output and begin and end index
+    let assert = cmd
+        .args(&[
+            "convert",
+            "-x",
+            "-b",
+            "2",
+            "-e",
+            "2",
+            &test_file.to_string_lossy(),
+        ])
+        .assert();
+    assert
+        .stdout(predicate::str::contains(
+            "47:13.142000          0 056 ECU- SER- ASC- log info V 1 [00 02 00 00 09 00 4f 6e 6c 79 20 4e 4c 21 00]",
+        ))
+        .success();
+}
+
+#[test]
+fn bin_convert_ex3_headers() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file.push("tests");
+    test_file.push("lc_ex003.dlt");
+    // convert cmd with -x hex output and begin and end index
+    let assert = cmd
+        .args(&[
+            "convert",
+            "-s",
+            "-b",
+            "2",
+            "-e",
+            "2",
+            &test_file.to_string_lossy(),
+        ])
+        .assert();
+    assert
+        .stdout(predicate::str::contains(
+            "47:13.142000          0 056 ECU- SER- ASC- log info V 1\n",
+        ))
+        .success();
+}
+
+#[test]
+fn bin_convert_can() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    test_file.push("tests");
+    test_file.push("can_example1.asc");
+    // convert command only -> just show lifecycles
+    let assert = cmd
+        .args(&["convert", &test_file.to_string_lossy()])
+        .assert();
+    assert
+        .stdout(predicate::str::contains(
+            "have 1 lifecycles:\nLC#  1: CAN1 ",
+        )) // we omit the times due to local format
+        .stdout(predicate::str::contains(":55:38 #     101 \n"))
+        .success();
+}
+
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn bin_remote_invalidport() {
