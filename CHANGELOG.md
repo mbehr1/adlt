@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.20.0 - 2022-05-22
+#### Bug Fixes
+- **(lifecycle)** detect lifecycles with timestamp 0 - (620ab17) - Matthias Behr
+#### Features
+- **(anon)** add anon option to convert - (d8398f5) - Matthias Behr
+#### Tests
+- add remote integration tests - (69d28ad) - Matthias Behr
+- add convert integration tests - (0bee8b2) - Matthias Behr
+- - -
+
 ## v0.19.0 - 2022-05-12
 #### Features
 - **(can)** provide more COMPU_METHODS based info - (5fa9d2d) - Matthias Behr
