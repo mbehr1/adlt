@@ -7,7 +7,11 @@
 use crate::{dlt::DltMessage, filter::Filter, plugins::plugin::Plugin};
 use fancy_regex::Regex;
 use serde_json::json;
-use std::{error::Error, fmt, sync::Arc};
+use std::{
+    error::Error,
+    fmt,
+    sync::{Arc, RwLock},
+};
 
 use super::plugin::PluginState;
 
@@ -98,7 +102,7 @@ impl RewriteConfig {
 pub struct RewritePlugin {
     name: String,
     enabled: bool,
-    state: Arc<PluginState>,
+    state: Arc<RwLock<PluginState>>,
     rewrites: Vec<RewriteConfig>,
 }
 
@@ -110,7 +114,7 @@ impl<'a> Plugin for RewritePlugin {
         self.enabled
     }
 
-    fn state(&self) -> Arc<PluginState> {
+    fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
 
@@ -192,6 +196,7 @@ impl RewritePlugin {
                 })}).collect::<Vec<serde_json::Value>>()
             }),
             generation: 1,
+            ..Default::default()
         };
         /*
             "rewrites":[
@@ -213,7 +218,7 @@ impl RewritePlugin {
         Ok(RewritePlugin {
             name: name.unwrap(),
             enabled,
-            state: Arc::new(state),
+            state: Arc::new(RwLock::new(state)),
             rewrites,
         })
     }
@@ -267,6 +272,7 @@ mod tests {
         assert_eq!(1, p.rewrites.len());
 
         let state = p.state();
+        let state = state.read().unwrap();
         assert_eq!(state.generation, 1); // first update done
         let state_value = &state.value;
         assert!(state_value.is_object());

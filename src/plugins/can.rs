@@ -15,7 +15,14 @@ use afibex::fibex::{
 };
 use asomeip::utils_can::decode_can_frame;
 use serde_json::json;
-use std::{collections::HashMap, error::Error, fmt, ops::Bound, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt,
+    ops::Bound,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 #[derive(Debug)]
 struct CanPluginError {
@@ -42,7 +49,7 @@ impl Error for CanPluginError {}
 pub struct CanPlugin {
     name: String,
     enabled: bool,
-    state: Arc<PluginState>,
+    state: Arc<RwLock<PluginState>>,
     _fibex_dir: String,
     mstp: DltMessageType,
     ctid: Option<DltChar4>,
@@ -61,7 +68,7 @@ impl<'a> Plugin for CanPlugin {
         self.enabled
     }
 
-    fn state(&self) -> Arc<PluginState> {
+    fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
 
@@ -409,7 +416,7 @@ impl CanPlugin {
         Ok(CanPlugin {
             name: name.unwrap(),
             enabled,
-            state: Arc::new(state),
+            state: Arc::new(RwLock::new(state)),
             _fibex_dir: fibex_dir,
             mstp: DltMessageType::NwTrace(DltMessageNwType::Can),
             ctid,
@@ -440,6 +447,7 @@ mod tests {
         assert_eq!(p.ctid, Some(DltChar4::from_buf(b"TC\0\0")));
 
         let state = p.state();
+        let state = state.read().unwrap();
         assert_eq!(state.generation, 1); // first update done
         let state_value = &state.value;
         assert!(state_value.is_object());
