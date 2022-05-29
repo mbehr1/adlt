@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.21.0 - 2022-05-29
+#### Features
+- **(filetransfer)** add FileTransferPlugin for remote - (bc0aec1) - Matthias Behr
+- - -
+
 ## v0.20.0 - 2022-05-22
 #### Bug Fixes
 - **(lifecycle)** detect lifecycles with timestamp 0 - (620ab17) - Matthias Behr
