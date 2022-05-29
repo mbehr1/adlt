@@ -34,3 +34,32 @@ pub fn plugins_process_msgs(
     }
     Ok(plugins_active)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::utils::eac_stats::EacStats;
+
+    use super::{factory::get_plugin, *};
+    use serde_json::json;
+
+    #[test]
+    fn end_and_return_plugins() {
+        let mut eac_stats = EacStats::default();
+        let plugin = get_plugin(
+            json!({"name":"FileTransfer"}).as_object().unwrap(),
+            &mut eac_stats,
+        )
+        .unwrap();
+
+        let plugins_active = vec![plugin];
+
+        let (to_fn, inflow) = std::sync::mpsc::channel();
+        let (outflow, _from_fn) = std::sync::mpsc::channel();
+
+        let t1 = std::thread::spawn(move || plugins_process_msgs(inflow, outflow, plugins_active));
+        drop(to_fn);
+        let plugins_returned = t1.join().unwrap().unwrap();
+
+        assert_eq!(plugins_returned.len(), 1);
+    }
+}
