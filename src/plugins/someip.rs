@@ -11,7 +11,13 @@ use crate::{
 use afibex::fibex::{get_all_fibex_in_dir, load_all_fibex, FibexData, FibexError, MethodIdType};
 use asomeip::utils::decode_someip_header_and_payload;
 use serde_json::json;
-use std::{collections::HashMap, error::Error, fmt, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 #[derive(Debug)]
 struct SomeipPluginError {
@@ -38,7 +44,7 @@ impl Error for SomeipPluginError {}
 pub struct SomeipPlugin {
     name: String,
     enabled: bool,
-    state: Arc<PluginState>,
+    state: Arc<RwLock<PluginState>>,
     _fibex_dir: String,
     mstp: DltMessageType,
     ctid: Option<DltChar4>,
@@ -74,7 +80,7 @@ impl<'a> Plugin for SomeipPlugin {
         self.enabled
     }
 
-    fn state(&self) -> Arc<PluginState> {
+    fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
 
@@ -445,7 +451,7 @@ impl SomeipPlugin {
         Ok(SomeipPlugin {
             name: name.unwrap(),
             enabled,
-            state: Arc::new(state),
+            state: Arc::new(RwLock::new(state)),
             _fibex_dir: fibex_dir,
             mstp: DltMessageType::NwTrace(DltMessageNwType::Ipc),
             ctid,
@@ -474,6 +480,7 @@ mod tests {
         assert_eq!(p.ctid, Some(DltChar4::from_buf(b"TC\0\0")));
 
         let state = p.state();
+        let state = state.read().unwrap();
         assert_eq!(state.generation, 1); // first update done
         let state_value = &state.value;
         assert!(state_value.is_object());

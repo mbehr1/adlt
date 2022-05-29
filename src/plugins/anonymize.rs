@@ -9,7 +9,11 @@ use crate::{
     },
     plugins::plugin::{Plugin, PluginState},
 };
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
 #[derive(Debug)]
 pub struct ApidData {
@@ -26,7 +30,7 @@ pub struct EcuData {
 pub struct AnonymizePlugin {
     name: String,
     enabled: bool,
-    state: Arc<PluginState>,
+    state: Arc<RwLock<PluginState>>,
     ecu_map: HashMap<DltChar4, EcuData>,
     apid_maps: HashMap<DltChar4, HashMap<DltChar4, ApidData>>, // map new_ecu ->map old_apid -> new ApidData
 }
@@ -36,7 +40,7 @@ impl AnonymizePlugin {
         AnonymizePlugin {
             name: name.to_owned(),
             enabled: true,
-            state: Arc::new(PluginState::default()),
+            state: Arc::new(RwLock::new(PluginState::default())),
             ecu_map: HashMap::new(),
             apid_maps: HashMap::new(),
         }
@@ -156,7 +160,7 @@ impl<'a> Plugin for AnonymizePlugin {
         self.enabled
     }
 
-    fn state(&self) -> Arc<PluginState> {
+    fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
 

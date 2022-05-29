@@ -16,10 +16,10 @@ use adlt::{
 };
 use clap::{App, Arg, SubCommand};
 use slog::{debug, error, info, warn};
-use std::io::prelude::*;
 use std::net::TcpListener;
 use std::{collections::BTreeMap, time::Instant};
 use std::{fs::File, sync::Arc};
+use std::{io::prelude::*, sync::RwLock};
 
 use tungstenite::{
     accept_hdr_with_config,
@@ -301,7 +301,7 @@ struct FileContext {
     file_names: Vec<String>,
     sort_by_time: bool,                          // sort by timestamp
     plugins_active: Vec<Box<dyn Plugin + Send>>, // will be moved to parsing_thread
-    plugin_states: Vec<(u32, Arc<PluginState>)>,
+    plugin_states: Vec<(u32, Arc<RwLock<PluginState>>)>,
     parsing_thread: Option<ParserThreadType>,
     all_msgs: Vec<adlt::dlt::DltMessage>,
     streams: Vec<StreamContext>,
@@ -485,6 +485,8 @@ impl FileContext {
 ///   - binary search e.g. with time within the msgs returning closest index of a msg of the stream
 /// - `stream_window`
 ///   - change the window for an existing stream
+/// - `plugin_cmd`
+///   - execute a command for a plugin (e.g. FileTransfer save file)
 
 fn process_incoming_text_message<T: Read + Write>(
     log: &slog::Logger,
@@ -826,6 +828,105 @@ fn process_incoming_text_message<T: Read + Write>(
                 }
             }
         }
+        "plugin_cmd" => {
+            match file_context {
+                Some(fc) => {
+                    let params = serde_json::from_str::<serde_json::Value>(params);
+                    if let Ok(params) = params {
+                        if let Some(params) = params.as_object() {
+                            if let (Some(cmd), Some(plugin_name)) = (
+                                params.get("cmd").and_then(serde_json::Value::as_str),
+                                params.get("name").and_then(serde_json::Value::as_str),
+                            ) {
+                                let mut found_plugin = false;
+                                for plugin_state in &fc.plugin_states {
+                                    // find the plugin with the matching name:
+                                    let plugin_state = plugin_state.1.read().unwrap();
+                                    if let Some(name) = plugin_state
+                                        .value
+                                        .as_object()
+                                        .and_then(|s| s.get("name"))
+                                        .and_then(serde_json::Value::as_str)
+                                    {
+                                        if name.eq(plugin_name) {
+                                            // got it
+                                            if let Some(apply_command) = plugin_state.apply_command
+                                            {
+                                                let r = apply_command(
+                                                    &plugin_state.internal_data,
+                                                    cmd,
+                                                    params
+                                                        .get("params")
+                                                        .and_then(serde_json::Value::as_object),
+                                                    params
+                                                        .get("cmdCtx")
+                                                        .and_then(serde_json::Value::as_object),
+                                                );
+                                                websocket
+                                                    .write_message(Message::Text(format!(
+                                                        "ok: {} {}",
+                                                        command, r
+                                                    )))
+                                                    .unwrap(); // todo
+                                            } else {
+                                                websocket
+                                                                .write_message(Message::Text(
+                                                                    format!(
+                                                                        "err: {} plugin '{}' does not support commands",
+                                                                        command, plugin_name
+                                                                    ),
+                                                                ))
+                                                                .unwrap(); // todo
+                                            }
+                                            found_plugin = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !found_plugin {
+                                    websocket
+                                        .write_message(Message::Text(format!(
+                                            "err: {} plugin '{}' not found!",
+                                            command, plugin_name
+                                        )))
+                                        .unwrap(); // todo
+                                }
+                            } else {
+                                websocket
+                                    .write_message(Message::Text(format!(
+                                        "err: {} params misses cmd or name!",
+                                        command,
+                                    )))
+                                    .unwrap(); // todo
+                            }
+                        } else {
+                            websocket
+                                .write_message(Message::Text(format!(
+                                    "err: {} params not an object!",
+                                    command,
+                                )))
+                                .unwrap(); // todo
+                        }
+                    } else {
+                        websocket
+                            .write_message(Message::Text(format!(
+                                "err: {} failed parsing params with '{}'!",
+                                command,
+                                params.err().unwrap()
+                            )))
+                            .unwrap(); // todo
+                    }
+                }
+                None => {
+                    websocket
+                        .write_message(Message::Text(format!(
+                            "err: {} failed as no file open. open first!",
+                            command
+                        )))
+                        .unwrap(); // todo
+                }
+            }
+        }
         _ => {
             websocket
                 .write_message(Message::Text(format!("unknown command '{}'!", t)))
@@ -951,6 +1052,7 @@ fn process_file_context<T: Read + Write>(
         // check plugin states with same frequency:
         let mut plugin_states: Vec<String> = vec![];
         for (last_gen, state) in &mut fc.plugin_states {
+            let state = state.read().unwrap();
             if state.generation != *last_gen {
                 *last_gen = state.generation;
                 let state_value = state.value.to_string();

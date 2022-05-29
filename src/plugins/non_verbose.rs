@@ -15,7 +15,14 @@ use crate::{
     utils::eac_stats::EacStats,
 };
 use afibex::fibex::{get_all_fibex_in_dir, Ecu, Elements, FibexData, Frame};
-use std::{collections::HashMap, error::Error, fmt, path::Path, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt,
+    path::Path,
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
 #[derive(Debug)]
 struct NonVerboseFibexData {
@@ -268,7 +275,7 @@ impl NonVerboseFibexData {
 pub struct NonVerbosePlugin {
     name: String,
     enabled: bool,
-    state: Arc<PluginState>,
+    state: Arc<RwLock<PluginState>>,
     pub fibex_dir: String,
     //mstp: DltMessageType,
     //fibex_data: FibexData,
@@ -284,7 +291,7 @@ impl<'a> Plugin for NonVerbosePlugin {
         self.enabled
     }
 
-    fn state(&self) -> Arc<PluginState> {
+    fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
 
@@ -527,7 +534,7 @@ impl NonVerbosePlugin {
         Ok(NonVerbosePlugin {
             name,
             enabled,
-            state: Arc::new(state),
+            state: Arc::new(RwLock::new(state)),
             fibex_dir,
             fibex_map_by_ecu, //fibex_data,
         })
@@ -566,6 +573,7 @@ mod tests {
         assert_eq!(0, frame.byte_length);
 
         let state = p.state();
+        let state = state.read().unwrap();
         assert_eq!(state.generation, 1); // first update done
         let state_value = &state.value;
         assert!(state_value.is_object());

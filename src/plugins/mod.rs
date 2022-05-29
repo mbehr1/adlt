@@ -1,6 +1,7 @@
 pub mod anonymize;
 pub mod can;
 pub mod factory;
+pub mod file_transfer;
 pub mod non_verbose;
 pub mod plugin;
 pub mod rewrite;

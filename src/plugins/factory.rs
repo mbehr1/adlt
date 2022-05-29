@@ -1,8 +1,8 @@
 use crate::utils::eac_stats::EacStats;
 
 use super::{
-    can::CanPlugin, non_verbose::NonVerbosePlugin, plugin::Plugin, rewrite::RewritePlugin,
-    someip::SomeipPlugin,
+    can::CanPlugin, file_transfer::FileTransferPlugin, non_verbose::NonVerbosePlugin,
+    plugin::Plugin, rewrite::RewritePlugin, someip::SomeipPlugin,
 };
 
 pub fn get_plugin(
@@ -54,6 +54,16 @@ pub fn get_plugin(
                 }
                 "CAN" => {
                     let plugin = CanPlugin::from_json(config);
+                    if let Ok(plugin) = plugin {
+                        Some(Box::new(plugin))
+                    } else {
+                        // todo log error properly
+                        println!("plugin:{} got err {:?}", name, plugin.unwrap_err());
+                        None
+                    }
+                }
+                "FileTransfer" => {
+                    let plugin = FileTransferPlugin::from_json(config);
                     if let Ok(plugin) = plugin {
                         Some(Box::new(plugin))
                     } else {
