@@ -354,12 +354,12 @@ impl<'a> Plugin for FileTransferPlugin {
                                         {
                                             self.update_state();
                                         }
-                                    } else if package_nr == 0 {
+                                    } else if package_nr == 1 {
                                         // incomplete, but can recover as this is the first package
                                         let mut file_transfer = FileTransfer {
                                             ecu: msg.ecu,
                                             lifecycle: msg.lifecycle,
-                                            state: FileTransferState::Started,
+                                            state: FileTransferState::MissingStart,
                                             serial,
                                             file_name: "<missing_flst>".to_owned(),
                                             file_size: 0,
@@ -400,7 +400,7 @@ impl<'a> Plugin for FileTransferPlugin {
                         let args = msg.into_iter();
                         for (i, arg) in args.enumerate() {
                             match i {
-                                0 => {} // FLDA
+                                0 => {} // FLFI
                                 1 => {
                                     if let Ok(s) = arg_as_uint(&arg) {
                                         serial = s;
@@ -797,11 +797,16 @@ fn arg_as_string(arg: &crate::dlt::DltArg) -> Result<String, ()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::dlt::{
+        DLT_TYLE_16BIT, DLT_TYLE_32BIT, DLT_TYLE_64BIT, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_STRG,
+    };
+
     use super::*;
     use serde_json::json;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn init_plugin() {
+    fn init_plugin_and_recover() {
         // good case:
         let cfg = json!({"name":"foo","enabled": false, });
         let p = FileTransferPlugin::from_json(cfg.as_object().unwrap());
@@ -841,12 +846,442 @@ mod tests {
 
         // complete example
         let cfg =
-            json!({"name": "f", "apid":"apid", "ctid":"ctid", "allowSave":false, "keepFLDA":true});
-        let p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
+            json!({"name": "f", "apid":"APID", "ctid":"CTID", "allowSave":false, "keepFLDA":true});
+        let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
+        println!("p={:?}", p); // we can debug print?
         assert!(p.enabled);
         assert!(!p.allow_save);
         assert!(p.keep_flda);
         assert!(p.apid.is_some());
         assert!(p.ctid.is_some());
+
+        // process a msg FLDA and FLFI -> recovered transfer:
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"FLDA\0",
+        };
+
+        let arg2 = DltArg {
+            type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+            is_big_endian: true,
+            payload_raw: &42u32.to_be_bytes(),
+        };
+
+        let arg3 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
+            is_big_endian: true,
+            payload_raw: &1i32.to_be_bytes(),
+        };
+
+        let arg4 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"data",
+        };
+
+        let arg5 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"FLDA\0",
+        };
+        let payload = payload_from_args(&[arg1, arg2, arg3, arg4, arg5]);
+        let mut m = DltMessage::get_testmsg_with_payload(true, 5, &payload);
+
+        let arg21 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"FLFI\0",
+        };
+
+        let arg22 = DltArg {
+            type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+            is_big_endian: true,
+            payload_raw: &42u32.to_be_bytes(),
+        };
+
+        let arg23 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"FLFI\0",
+        };
+
+        let payload = payload_from_args(&[arg21, arg22, arg23]);
+        let mut m2 = DltMessage::get_testmsg_with_payload(true, 3, &payload);
+
+        assert!(p.process_msg(&mut m)); // keep_flda is true
+        assert!(p.process_msg(&mut m2));
+
+        let cfg =
+            json!({"name": "f", "apid":"APID", "ctid":"CTID", "allowSave":true, "keepFLDA":false});
+        let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
+        assert!(p.enabled);
+        assert!(p.allow_save);
+        assert!(!p.keep_flda);
+        assert!(m.is_verbose());
+        assert_eq!(m.mstp(), DltMessageType::Log(DltMessageLogType::Info));
+
+        assert_eq!(p.state.read().unwrap().generation, 1);
+
+        assert!(!p.process_msg(&mut m)); // keep_flda is false
+        assert!(p.process_msg(&mut m2));
+
+        assert!(!p.transfers.is_empty());
+        assert_eq!(p.transfers_idx.get(&(m.ecu, m.lifecycle, 42)), Some(&0));
+        let transfer = p.transfers.get(0).unwrap();
+        println!("transfer={:?}", transfer); // we can debug print it
+        assert_eq!(transfer.state, FileTransferState::Complete);
+
+        let state = p.state.read().unwrap();
+        assert_eq!(state.generation, 3); // +1 for flda -> missingstart, +1 for FLFI
+
+        match state
+            .internal_data
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<FileTransferStateData>()
+        {
+            Some(state_data) => {
+                assert_eq!(state_data.completed_transfers.len(), 1);
+                assert_eq!(
+                    state_data.completed_transfers.get(&0),
+                    Some(&b"data".to_vec())
+                );
+            }
+            _ => {
+                panic!()
+            }
+        }
+
+        // can we save the file?
+        let file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+        assert!(FileTransferPlugin::apply_command(
+            &state.internal_data,
+            "save",
+            Some(json!({ "saveAs": file_path }).as_object().unwrap()),
+            Some(json!({"save":{"idx":0}}).as_object().unwrap()),
+        ));
+        assert_eq!(
+            std::fs::metadata(&file_path).unwrap().len(),
+            b"data".len() as u64
+        );
+    }
+
+    #[test]
+    fn regular_transfer() {
+        // good case:
+        let cfg =
+            json!({"name": "f", "apid":"APID", "ctid":"CTID", "allowSave":true, "keepFLDA":false});
+        let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
+
+        let payload = payload_from_args(
+            &vec![
+                (DLT_TYPE_INFO_STRG, b"FLST\0" as &[u8]),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &17u32.to_le_bytes(), // serial
+                ),
+                (DLT_TYPE_INFO_STRG, b"test_file.bin\0" as &[u8]), // file name
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &4u32.to_le_bytes(), // filesize
+                ),
+                (DLT_TYPE_INFO_STRG, b"2022-06-02 21:54:00\0"), // creation date
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &1u32.to_le_bytes(), // nr packages
+                ),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &512u32.to_le_bytes(), // buffer size
+                ),
+                (DLT_TYPE_INFO_STRG, b"FLST\0"),
+            ]
+            .iter()
+            .map(|a| DltArg {
+                type_info: a.0,
+                is_big_endian: false,
+                payload_raw: a.1,
+            })
+            .collect::<Vec<DltArg>>(),
+        );
+        let mut m_flst = DltMessage::get_testmsg_with_payload(false, 8, &payload);
+
+        let payload = payload_from_args(
+            &vec![
+                (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &17u32.to_le_bytes(),
+                ),
+                (
+                    DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
+                    &1i32.to_le_bytes(),
+                ),
+                (DLT_TYPE_INFO_RAWD, b"data"),
+                (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
+            ]
+            .iter()
+            .map(|a| DltArg {
+                type_info: a.0,
+                is_big_endian: false,
+                payload_raw: a.1,
+            })
+            .collect::<Vec<DltArg>>(),
+        );
+
+        let mut m_flda = DltMessage::get_testmsg_with_payload(false, 5, &payload);
+
+        let arg21 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLFI\0",
+        };
+
+        let arg22 = DltArg {
+            type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+            is_big_endian: false,
+            payload_raw: &17u32.to_le_bytes(),
+        };
+
+        let arg23 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLFI\0",
+        };
+
+        let payload = payload_from_args(&[arg21, arg22, arg23]);
+        let mut m_flfi = DltMessage::get_testmsg_with_payload(false, 3, &payload);
+
+        assert!(p.process_msg(&mut m_flst));
+        assert!(!p.process_msg(&mut m_flda));
+        assert!(p.process_msg(&mut m_flfi));
+
+        assert!(!p.transfers.is_empty());
+        assert_eq!(
+            p.transfers_idx.get(&(m_flst.ecu, m_flst.lifecycle, 17)),
+            Some(&0)
+        );
+        let transfer = p.transfers.get(0).unwrap();
+        assert_eq!(transfer.state, FileTransferState::Complete);
+
+        let state = p.state.read().unwrap();
+        assert_eq!(state.generation, 3); // +1 for flst -> start, +1 for FLFI
+
+        match state
+            .internal_data
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<FileTransferStateData>()
+        {
+            Some(state_data) => {
+                assert_eq!(state_data.completed_transfers.len(), 1);
+                assert_eq!(
+                    state_data.completed_transfers.get(&0),
+                    Some(&b"data".to_vec())
+                );
+            }
+            _ => {
+                panic!()
+            }
+        }
+
+        // can we save the file?
+        let file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+        assert!(FileTransferPlugin::apply_command(
+            &state.internal_data,
+            "save",
+            Some(json!({ "saveAs": file_path }).as_object().unwrap()),
+            Some(json!({"save":{"idx":0}}).as_object().unwrap()),
+        ));
+        assert_eq!(
+            std::fs::metadata(&file_path).unwrap().len(),
+            b"data".len() as u64
+        );
+    }
+
+    // todo could make this a real lib function (serialize DltArg)
+    fn payload_from_args<'a>(args: &'a [DltArg<'a>]) -> Vec<u8> {
+        if !args.is_empty() {
+            let mut payload = Vec::new();
+
+            // use endianess from first one:
+            let big_endian = args[0].is_big_endian;
+            // serialize the args
+            // type_info, len and payload
+            for arg in args {
+                let persist_len_u16 =
+                    if arg.type_info & (DLT_TYPE_INFO_STRG | DLT_TYPE_INFO_RAWD) != 0 {
+                        arg.payload_raw.len() as u16
+                    } else {
+                        0u16
+                    };
+
+                let type_info = if big_endian {
+                    arg.type_info.to_be_bytes()
+                } else {
+                    arg.type_info.to_le_bytes()
+                };
+                payload.extend_from_slice(&type_info);
+                if persist_len_u16 > 0 {
+                    payload.extend_from_slice(&if big_endian {
+                        persist_len_u16.to_be_bytes()
+                    } else {
+                        persist_len_u16.to_le_bytes()
+                    })
+                };
+                payload.extend_from_slice(arg.payload_raw);
+            }
+
+            payload
+        } else {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn is_type() {
+        // invalid:
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLST\0",
+        };
+        let payload = payload_from_args(&[arg1]);
+        let m = DltMessage::get_testmsg_with_payload(false, 1, &payload);
+
+        assert!(!FileTransferPlugin::is_type(&m, "FLST"));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLST\0",
+        };
+        let arg2 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLSQ\0",
+        };
+        assert_eq!(arg_as_string(&arg1), Ok("FLST".into()));
+        let payload = payload_from_args(&[arg1, arg2]);
+        let m = DltMessage::get_testmsg_with_payload(false, 2, &payload);
+
+        assert!(!FileTransferPlugin::is_type(&m, "FLST"));
+
+        // valid
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLST\0",
+        };
+        let arg2 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLST\0",
+        };
+        assert_eq!(arg_as_string(&arg1), Ok("FLST".into()));
+        let payload = payload_from_args(&[arg1, arg2]);
+        let m = DltMessage::get_testmsg_with_payload(false, 2, &payload);
+
+        assert!(FileTransferPlugin::is_type(&m, "FLST"));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"FLST\0",
+        };
+
+        let arg2 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"data",
+        };
+
+        let arg3 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"FLST\0",
+        };
+        assert_eq!(arg_as_string(&arg1), Ok("FLST".into()));
+        let payload = payload_from_args(&[arg1, arg2, arg3]);
+        let m = DltMessage::get_testmsg_with_payload(true, 3, &payload);
+
+        assert!(FileTransferPlugin::is_type(&m, "FLST"));
+    }
+
+    #[test]
+    fn arg_as_uint_test() {
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: true,
+            payload_raw: b"FLST\0",
+        };
+        assert_eq!(arg_as_uint(&arg1), Err(()));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_16BIT as u32,
+            is_big_endian: true,
+            payload_raw: &42u16.to_be_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(42));
+        assert_eq!(arg_as_string(&arg1), Err(()));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+            is_big_endian: true,
+            payload_raw: &42u32.to_be_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(42));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_64BIT as u32,
+            is_big_endian: false,
+            payload_raw: &42u64.to_le_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(42));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_16BIT as u32,
+            is_big_endian: true,
+            payload_raw: &42i16.to_be_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(42));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_16BIT as u32,
+            is_big_endian: true,
+            payload_raw: &(-42i16).to_be_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Err(()));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
+            is_big_endian: true,
+            payload_raw: &42i32.to_be_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(42));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
+            is_big_endian: true,
+            payload_raw: &(-42i32).to_be_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Err(()));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_64BIT as u32,
+            is_big_endian: false,
+            payload_raw: &42u64.to_le_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(42));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_64BIT as u32,
+            is_big_endian: true,
+            payload_raw: &(-42i64).to_be_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Err(()));
     }
 }

@@ -1196,6 +1196,36 @@ impl DltMessage {
         DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
     }
 
+    #[cfg(test)]
+    /// return a verbose dltmessage with the noar and payload
+    pub fn get_testmsg_with_payload(big_endian: bool, noar: u8, payload_buf: &[u8]) -> DltMessage {
+        let sh = DltStorageHeader {
+            secs: 0,
+            micros: 0,
+            ecu: DltChar4::from_str("ECU1").unwrap(),
+        };
+        let exth = DltExtendedHeader {
+            verb_mstp_mtin: 0x41,
+            noar,
+            apid: DltChar4::from_buf(b"APID"),
+            ctid: DltChar4::from_buf(b"CTID"),
+        };
+        let stdh = DltStandardHeader {
+            htyp: 0x21
+                | (if big_endian {
+                    DLT_STD_HDR_BIG_ENDIAN
+                } else {
+                    0
+                }),
+            mcnt: 0,
+            len: (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + payload_buf.len()) as u16,
+        };
+        let mut add_header_buf = Vec::new();
+        exth.to_write(&mut add_header_buf).unwrap();
+
+        DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
+    }
+
     pub fn is_big_endian(&self) -> bool {
         self.standard_header.is_big_endian()
     }
@@ -2242,33 +2272,8 @@ mod tests {
         }
     }
 
-    /// return a verbose dltmessage with the noar and payload
     fn get_testmsg_with_payload(big_endian: bool, noar: u8, payload_buf: &[u8]) -> DltMessage {
-        let sh = DltStorageHeader {
-            secs: 0,
-            micros: 0,
-            ecu: DltChar4::from_str("ECU1").unwrap(),
-        };
-        let exth = DltExtendedHeader {
-            verb_mstp_mtin: 0x1,
-            noar,
-            apid: DltChar4::from_buf(b"APID"),
-            ctid: DltChar4::from_buf(b"CTID"),
-        };
-        let stdh = DltStandardHeader {
-            htyp: 0x21
-                | (if big_endian {
-                    DLT_STD_HDR_BIG_ENDIAN
-                } else {
-                    0
-                }),
-            mcnt: 0,
-            len: (DLT_MIN_STD_HEADER_SIZE + DLT_EXT_HEADER_SIZE + payload_buf.len()) as u16,
-        };
-        let mut add_header_buf = Vec::new();
-        exth.to_write(&mut add_header_buf).unwrap();
-
-        DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
+        DltMessage::get_testmsg_with_payload(big_endian, noar, payload_buf)
     }
 
     #[test]
