@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.21.2 - 2022-07-04
+#### Continuous Integration
+- use cross v0.2.1 - (4948ff0) - Matthias Behr
+- change to stable instead of nightly - (3b029a3) - Matthias Behr
+- - -
+
 ## v0.21.1 - 2022-07-04
 #### Bug Fixes
 - **(can)** parse PM dates properly - (cd6228d) - Matthias Behr
