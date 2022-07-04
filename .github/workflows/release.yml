@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # version number used if branch event and not tag event
-      ADLT_VERSION: TEST-0.0.4
+      ADLT_VERSION: TEST-0.0.5
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
@@ -74,35 +74,35 @@ jobs:
         include:
         - build: linux
           os: ubuntu-latest
-          rust: nightly
+          rust: stable
           target: x86_64-unknown-linux-musl
         - build: linux-arm
           os: ubuntu-latest
-          rust: nightly
+          rust: stable
           target: arm-unknown-linux-gnueabihf
         - build: linux-aarch64
           os: ubuntu-latest
-          rust: nightly
+          rust: stable
           target: aarch64-unknown-linux-gnu
         - build: macos
           os: macos-latest
-          rust: nightly
+          rust: stable
           target: x86_64-apple-darwin
         - build: macos-arm
           os: macos-latest
-          rust: nightly
+          rust: stable
           target: aarch64-apple-darwin
         - build: win-msvc
           os: windows-2019
-          rust: nightly
+          rust: stable
           target: x86_64-pc-windows-msvc
         - build: win-gnu
           os: windows-2019
-          rust: nightly-x86_64-gnu
+          rust: stable-x86_64-gnu
           target: x86_64-pc-windows-gnu
         - build: win32-msvc
           os: windows-2019
-          rust: nightly
+          rust: stable
           target: i686-pc-windows-msvc
 
     steps:
