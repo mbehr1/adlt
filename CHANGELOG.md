@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.21.1 - 2022-07-04
+#### Bug Fixes
+- **(can)** parse PM dates properly - (cd6228d) - Matthias Behr
+#### Tests
+- add FileTransferPlugin tests - (09d00df) - Matthias Behr
+- add basic plugins_process_msgs test - (621885a) - Matthias Behr
+- add plugin factory tests - (580698d) - Matthias Behr
+- - -
+
 ## v0.21.0 - 2022-05-29
 #### Features
 - **(filetransfer)** add FileTransferPlugin for remote - (bc0aec1) - Matthias Behr
