@@ -1,7 +1,6 @@
 /// todos
 /// [] check timezone/time shift
 /// [] check extended frames
-/// [] add support to someip plugin (or a new CAN plugin)
 use crate::{
     dlt::{
         DltChar4, DltExtendedHeader, DltMessage, DltMessageIndexType, DltStandardHeader,
@@ -108,6 +107,11 @@ lazy_static! {
     pub(crate) static ref RE_DATE: Regex = Regex::new(r"^date (.*)$").unwrap();
     pub(crate) static ref RE_MSG: Regex =
         Regex::new(r"^(\d+\.\d{6}) (\d+) ([0-9a-fx]+) (Rx|Tx) d (\d+)").unwrap();
+}
+
+fn asc_parse_date(date_str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
+    // we expect them in the following format:
+    NaiveDateTime::parse_from_str(date_str, "%a %b %d %I:%M:%S %p %Y")
 }
 
 impl<'a, R> Iterator for Asc2DltMsgIterator<'a, R>
@@ -223,10 +227,7 @@ where
                         });
                     } else if let Some(captures) = RE_DATE.captures(line) {
                         if let Some(date) = captures.get(1) {
-                            let nt = NaiveDateTime::parse_from_str(
-                                date.as_str(),
-                                "%a %b %d %H:%M:%S %p %Y",
-                            );
+                            let nt = asc_parse_date(date.as_str());
                             if let Ok(nt) = nt {
                                 self.date_us = (nt.timestamp_nanos() / 1000) as u64;
                             }
@@ -326,7 +327,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::Asc2DltMsgIterator;
+    use super::{asc_parse_date, Asc2DltMsgIterator};
     use crate::{
         dlt::{DltMessageControlType, DltMessageNwType, DltMessageType, DLT_MAX_STORAGE_MSG_SIZE},
         utils::LowMarkBufReader,
@@ -339,6 +340,24 @@ mod tests {
         let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         Logger::root(drain, o!())
+    }
+
+    #[test]
+    fn date1() {
+        assert_eq!(
+            Ok(NaiveDateTime::new(
+                NaiveDate::from_ymd(2022, 4, 12),
+                NaiveTime::from_hms_micro(8, 55, 37, 0)
+            )),
+            asc_parse_date("Tue Apr 12 08:55:37 AM 2022")
+        );
+
+        let nt = NaiveDateTime::new(
+            NaiveDate::from_ymd(2022, 5, 25),
+            NaiveTime::from_hms_micro(15, 7, 31, 0),
+        );
+        // println!("nt formatted = '{}'", nt.format("%a %b %d %I:%M:%S %p %Y"));
+        assert_eq!(Ok(nt), asc_parse_date("Wed May 25 03:07:31 PM 2022"));
     }
 
     #[test]
