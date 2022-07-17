@@ -14,6 +14,7 @@ use afibex::fibex::{
     SignalInstance, XsDouble,
 };
 use asomeip::utils_can::decode_can_frame;
+use lazy_static::lazy_static;
 use serde_json::json;
 use std::{
     collections::HashMap,
@@ -23,6 +24,10 @@ use std::{
     path::Path,
     sync::{Arc, RwLock},
 };
+
+lazy_static! {
+    static ref EMPTY_STATIC_STRING: String = "".to_string();
+}
 
 #[derive(Debug)]
 struct CanPluginError {
@@ -192,7 +197,12 @@ fn sorted_frames(frames: &HashMap<u32, String>) -> Vec<(&u32, &String)> {
     v
 }
 
-fn tree_item_for_frame(fd: &FibexData, identifier: &u32, frame_ref: &String) -> serde_json::Value {
+fn tree_item_for_frame(
+    fd: &FibexData,
+    channel_short_name: &str,
+    identifier: &u32,
+    frame_ref: &String,
+) -> serde_json::Value {
     let no_name = "<no shortname>";
     let no_desc = "<no desc>";
 
@@ -206,6 +216,8 @@ fn tree_item_for_frame(fd: &FibexData, identifier: &u32, frame_ref: &String) -> 
                 frame.byte_length,
                 frame.pdu_instances.iter().map(|p|format!("{}:tbd", p.pdu_ref.as_str(), )).collect::<Vec<_>>().join("\n")
             ),
+            "filterFrag":
+                serde_json::json!({"apid":"CAN", "ctid":"TC", "payloadRegex":format!("^. {} 0x{:03x} ", channel_short_name, identifier)}),
             "children": frame.pdu_instances.iter().map(|pdu_instance|{tree_item_for_pdu(fd, pdu_instance)}).collect::<Vec<serde_json::Value>>(),
         })
     } else {
@@ -394,10 +406,12 @@ impl CanPlugin {
                 json!(null)
             },
             {"label":format!("Channels #{}", fibex_data.elements.channels.len()),
-            "children":channels_by_name.iter().map(|channel|{serde_json::json!({
-                "label":format!("{}, channel id: {}", channel.short_name.as_ref().unwrap_or(&"".to_string()), channel.id),
+            "children":channels_by_name.iter().map(|channel|{
+                let channel_short_name = channel.short_name.as_ref().unwrap_or(&EMPTY_STATIC_STRING);
+                serde_json::json!({
+                "label":format!("{}, channel id: {}", channel_short_name, channel.id),
                 "tooltip":channel.desc,
-                "children": sorted_frames(&channel.frame_ref_by_frame_triggering_identifier).iter().map(|(identifier, frame)|{tree_item_for_frame(&fibex_data, identifier, frame)}).collect::<Vec<serde_json::Value>>(),
+                "children": sorted_frames(&channel.frame_ref_by_frame_triggering_identifier).iter().map(|(identifier, frame)|{tree_item_for_frame(&fibex_data, channel_short_name, identifier, frame)}).collect::<Vec<serde_json::Value>>(),
             })}).collect::<Vec<serde_json::Value>>(),
             },
             /*{"label":format!("Channels #{}, sorted by name", fibex_data.elements.services_map_by_sid_major.len()),
