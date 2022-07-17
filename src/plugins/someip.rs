@@ -370,6 +370,32 @@ fn tree_item_for_mid(mid: &u16, method: &MethodIdType) -> serde_json::Value {
     }
 }
 
+// todo fix BigInt conversion "23n" -> BigInt("23n") ? (can report handle really big ints?)
+/**
+A very simple javascript function that is used as conversionFunction (see dlt-logs/report-generation)
+to parse the json data from fields to a report.
+
+It should be extended/replaced by a better mechanism where more type info from the fibex is used
+(e.g. invalid values, *bitfields*, min/max,...)
+ */
+const JS_FIELD_CONVERSION_FUNCTION: &str = r##"
+const r=/\.(?:changed|set|get)_.*?_field{"(.+?)":(.+)}\[OK\]$/;
+const m=r.exec(params.msg.payloadString);
+let o={};
+if(m!==null){
+    const v=JSON.parse(m[2]);
+    const fn=(p,v,o)=> {
+        switch(typeof v){
+            case 'number': o[p]=v;break;
+            case 'string': o[`STATE_${p}`]=v;break;
+            case 'object': Object.keys(v).forEach(vc=>{fn(`${p}.${vc}`, v[vc],o);}); break;
+        }
+    };
+    fn(m[1],v,o);
+}
+return o;
+"##;
+
 fn tree_item_for_service(
     ((sid, major), service): &(&(u16, u8), &Vec<Service>),
 ) -> serde_json::Value {
@@ -377,7 +403,13 @@ fn tree_item_for_service(
         "label":format!("{} v{}.{}, service id: {:5} (0x{:04x})", service[0].short_name.as_ref().unwrap_or(&"".to_string()), major, service[0].api_version.1, sid, sid),
         "tooltip":service[0].desc,
         "filterFrag": if let Some(short_name)=service[0].short_name.as_ref() {
-            serde_json::json!({"ctid":"TC", "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)", short_name)}) // todo use ctid var and better filter for payload_raw!
+            serde_json::json!({
+                "ctid":"TC",
+                "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)", short_name), // todo use ctid var and better filter for payload_raw!
+                "reportOptions":{ // todo add only (set to null) if fields (others than methods are available)
+                    "conversionFunction": JS_FIELD_CONVERSION_FUNCTION
+                }
+        })
         }else{
             serde_json::Value::Null
         },
