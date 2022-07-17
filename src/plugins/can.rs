@@ -197,6 +197,32 @@ fn sorted_frames(frames: &HashMap<u32, String>) -> Vec<(&u32, &String)> {
     v
 }
 
+// todo fix BigInt conversion "23n" -> BigInt("23n") ? (can report handle really big ints?)
+/**
+A very simple javascript function that is used as conversionFunction (see dlt-logs/report-generation)
+to parse the json data from the textual representation of a frame to a report.
+
+It should be extended/replaced by a better mechanism where more type info from the fibex is used
+(e.g. invalid values, *bitfields*, min/max, mapping to enums (as they are not printed)...)
+ */
+const JS_FRAME_CONVERSION_FUNCTION: &str = r##"
+const r=/]:{"(.+?)":(.+)}$/;
+const m=r.exec(params.msg.payloadString);
+let o={};
+if(m!==null){
+    const v=JSON.parse(m[2]);
+    const fn=(p,v,o)=> {
+        switch(typeof v){
+            case 'number': o[p]=v;break;
+            case 'string': o[`STATE_${p}`]=v;break;
+            case 'object': Object.keys(v).forEach(vc=>{fn(`${p}.${vc}`, v[vc],o);}); break;
+        }
+    };
+    fn(m[1],v,o);
+}
+return o;
+"##;
+
 fn tree_item_for_frame(
     fd: &FibexData,
     channel_short_name: &str,
@@ -217,7 +243,14 @@ fn tree_item_for_frame(
                 frame.pdu_instances.iter().map(|p|format!("{}:tbd", p.pdu_ref.as_str(), )).collect::<Vec<_>>().join("\n")
             ),
             "filterFrag":
-                serde_json::json!({"apid":"CAN", "ctid":"TC", "payloadRegex":format!("^. {} 0x{:03x} ", channel_short_name, identifier)}),
+                serde_json::json!({
+                    "apid":"CAN",
+                    "ctid":"TC",
+                    "payloadRegex":format!("^. {} 0x{:03x} ", channel_short_name, identifier),
+                    "reportOptions":{ // todo add only (set to null) if fields (others than methods are available)
+                        "conversionFunction": JS_FRAME_CONVERSION_FUNCTION
+                    }
+                }),
             "children": frame.pdu_instances.iter().map(|pdu_instance|{tree_item_for_pdu(fd, pdu_instance)}).collect::<Vec<serde_json::Value>>(),
         })
     } else {
