@@ -8,7 +8,9 @@ use crate::{
     dlt::{DltChar4, DltMessage, DltMessageNwType, DltMessageType},
     plugins::plugin::{Plugin, PluginState},
 };
-use afibex::fibex::{get_all_fibex_in_dir, load_all_fibex, FibexData, FibexError, MethodIdType};
+use afibex::fibex::{
+    get_all_fibex_in_dir, load_all_fibex, FibexData, FibexError, MethodIdType, Service,
+};
 use asomeip::utils::decode_someip_header_and_payload;
 use serde_json::json;
 use std::{
@@ -368,6 +370,21 @@ fn tree_item_for_mid(mid: &u16, method: &MethodIdType) -> serde_json::Value {
     }
 }
 
+fn tree_item_for_service(
+    ((sid, major), service): &(&(u16, u8), &Vec<Service>),
+) -> serde_json::Value {
+    serde_json::json!({
+        "label":format!("{} v{}.{}, service id: {:5} (0x{:04x})", service[0].short_name.as_ref().unwrap_or(&"".to_string()), major, service[0].api_version.1, sid, sid),
+        "tooltip":service[0].desc,
+        "filterFrag": if let Some(short_name)=service[0].short_name.as_ref() {
+            serde_json::json!({"ctid":"TC", "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)", short_name)}) // todo use ctid var and better filter for payload_raw!
+        }else{
+            serde_json::Value::Null
+        },
+        "children": sorted_mids(&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid(mid, method)}).collect::<Vec<serde_json::Value>>(),
+    })
+}
+
 impl SomeipPlugin {
     pub fn from_json(
         config: &serde_json::Map<String, serde_json::Value>,
@@ -430,18 +447,10 @@ impl SomeipPlugin {
                 json!(null)
             },
             {"label":format!("Services #{}, sorted by name", fibex_data.elements.services_map_by_sid_major.len()),
-            "children":services_by_name.iter().map(|((sid, major), service)|{serde_json::json!({
-                "label":format!("{} v{}.{}, service id: {:5} (0x{:04x})", service[0].short_name.as_ref().unwrap_or(&"".to_string()), major, service[0].api_version.1, sid, sid),
-                "tooltip":service[0].desc,
-                "children": sorted_mids(&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid(mid, method)}).collect::<Vec<serde_json::Value>>(),
-            })}).collect::<Vec<serde_json::Value>>(),
+            "children":services_by_name.iter().map(tree_item_for_service).collect::<Vec<serde_json::Value>>(),
             },
             {"label":format!("Services #{}, sorted by service id", fibex_data.elements.services_map_by_sid_major.len()),
-            "children":services_by_id.iter().map(|((sid, major), service)|{serde_json::json!({
-                "label":format!("{} v{}.{}, service id: {:5} (0x{:04x})", service[0].short_name.as_ref().unwrap_or(&"".to_string()), major, service[0].api_version.1, sid, sid),
-                "tooltip":service[0].desc,
-                "children": sorted_mids(&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid(mid, method)}).collect::<Vec<serde_json::Value>>(),
-            })}).collect::<Vec<serde_json::Value>>(),
+            "children":services_by_id.iter().map(tree_item_for_service).collect::<Vec<serde_json::Value>>(),
             },
             {"label":format!("Datatypes #{}", fibex_data.elements.datatypes_map_by_id.len())},
             {"label":format!("Codings #{}", fibex_data.pi.codings.len())},
