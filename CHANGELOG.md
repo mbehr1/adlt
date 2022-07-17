@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.23.0 - 2022-07-17
+#### Features
+- **(can)** add JS reportOptions.conversionFunction - (792ccd4) - Matthias Behr
+- **(someip)** add JS reportOptions.conversionFunction - (fe8014a) - Matthias Behr
+- - -
+
 ## v0.22.0 - 2022-07-17
 #### Features
 - **(can)** provide filterFrag for frames - (453add7) - Matthias Behr
