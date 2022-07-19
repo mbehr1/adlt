@@ -371,6 +371,8 @@ fn tree_item_for_mid(mid: &u16, method: &MethodIdType) -> serde_json::Value {
 }
 
 // todo fix BigInt conversion "23n" -> BigInt("23n") ? (can report handle really big ints?)
+// todo map someip events to events (EVENT_) and someip fields to STATE_ or values ...
+// field = combination of getter/setter/notifier
 /**
 A very simple javascript function that is used as conversionFunction (see dlt-logs/report-generation)
 to parse the json data from fields to a report.
