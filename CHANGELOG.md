@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.24.0 - 2022-07-19
+#### Features
+- **(can)** basic CANFD support - (0acd6ab) - Matthias Behr
+- - -
+
 ## v0.23.0 - 2022-07-17
 #### Features
 - **(can)** add JS reportOptions.conversionFunction - (792ccd4) - Matthias Behr
