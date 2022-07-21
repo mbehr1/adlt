@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.25.0 - 2022-07-21
+#### Features
+- **(can)** add CANFD error frame support - (e2ab41f) - Matthias Behr
+- - -
+
 ## v0.24.0 - 2022-07-19
 #### Features
 - **(can)** basic CANFD support - (0acd6ab) - Matthias Behr
