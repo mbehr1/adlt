@@ -65,7 +65,7 @@ pub struct CanPlugin {
     channel_id_by_char4: HashMap<DltChar4, String>,
 }
 
-impl<'a> Plugin for CanPlugin {
+impl Plugin for CanPlugin {
     fn name(&self) -> &str {
         &self.name
     }
@@ -131,7 +131,8 @@ impl<'a> Plugin for CanPlugin {
 
             if let Some(Ok(text)) = decoded_header {
                 msg.set_payload_text(text);
-            } else {
+            } else if msg.payload_text.is_none() {
+                // else keep the existing payload_text (e.g. Error Frame)
                 msg.set_payload_text(format!("can plugin! got decoding err={:?}", decoded_header));
             }
         } else if msg.is_ctrl_response()

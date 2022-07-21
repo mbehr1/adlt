@@ -50,6 +50,7 @@ pub struct Asc2DltMsgIterator<'a, R> {
     date_us: u64, // will be parsed from first asc line "date ..."
     capture_locations_can: CaptureLocations,
     capture_locations_canfd: CaptureLocations,
+    capture_locations_canfd_errorframe: CaptureLocations,
     htyp: u8, // std hdr htyp
     len_wo_payload: u16,
     can_id_ecu_map: HashMap<u8, DltChar4>,
@@ -84,6 +85,7 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
             date_us: 0,
             capture_locations_can: RE_MSG.capture_locations(),
             capture_locations_canfd: RE_MSG_CANFD.capture_locations(),
+            capture_locations_canfd_errorframe: RE_MSG_CANFD_ERRORFRAME.capture_locations(),
             htyp,
             len_wo_payload,
             can_id_ecu_map: HashMap::new(),
@@ -114,6 +116,11 @@ lazy_static! {
     pub(crate) static ref RE_MSG_CANFD: Regex =
     // timestamp CANFD channel_id Rx|Tx can_id frame_name&brs_or_brs (todo!) esi dlc data_length data (rest ignored)
         Regex::new(r"^(\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ([0-9a-fx]+)\s+(\d+) (\d+) (\d+) (\d+)").unwrap();
+
+    pub(crate) static ref RE_MSG_CANFD_ERRORFRAME: Regex =
+        // timestamp CANFD channel_id Rx|Tx ErrorFrame (rest ignored)
+        Regex::new(r"^(\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ErrorFrame").unwrap();
+
 }
 
 fn asc_parse_date(date_str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
@@ -328,6 +335,61 @@ where
                             payload_text: None,
                             lifecycle: 0,
                         });
+                    } else if let Some(captures) = RE_MSG_CANFD_ERRORFRAME
+                        .captures_read(&mut self.capture_locations_canfd_errorframe, line)
+                    {
+                        // capture groups:
+                        // 1 = timestamp
+                        // 2 = channel_id
+                        // 3 = dir
+
+                        let cap_str = captures.as_str();
+                        let loc_timestamp = self.capture_locations_canfd_errorframe.get(1).unwrap();
+                        let timestamp = &cap_str[loc_timestamp.0..loc_timestamp.1];
+                        let dot_idx = timestamp.find('.').unwrap_or_default();
+                        let timestamp_us: u64 =
+                            (timestamp[0..dot_idx].parse::<u64>().unwrap_or_default() * US_PER_SEC)
+                                + timestamp[dot_idx + 1..].parse::<u64>().unwrap_or_default();
+                        let loc_can_id = self.capture_locations_canfd_errorframe.get(2).unwrap();
+                        // we map the can_id to the ECU to be used:
+                        let can_id = &cap_str[loc_can_id.0..loc_can_id.1]
+                            .parse::<u8>()
+                            .unwrap_or_default();
+                        let ecu = self.can_id_ecu_map.entry(*can_id).or_insert_with(|| {
+                            if *can_id < 10 {
+                                DltChar4::from_str(format!("CAN{}", can_id).as_str()).unwrap()
+                            } else if *can_id < 100 {
+                                DltChar4::from_str(format!("CA{}", can_id).as_str()).unwrap()
+                            } else {
+                                DltChar4::from_str(format!("C{}", can_id).as_str()).unwrap()
+                            }
+                        });
+
+                        let payload = vec![];
+
+                        // return a DltMessage
+                        let index = self.index;
+                        self.index += 1;
+                        return Some(DltMessage {
+                            index,
+                            reception_time_us: self.date_us + timestamp_us,
+                            ecu: ecu.to_owned(),
+                            timestamp_dms: (timestamp_us / 100) as u32, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
+                            standard_header: DltStandardHeader {
+                                htyp: self.htyp,
+                                mcnt: (index & 0xff) as u8,
+                                len: self.len_wo_payload + (payload.len() as u16),
+                            },
+                            extended_header: Some(DltExtendedHeader {
+                                verb_mstp_mtin: (2u8 << 1) | (2u8 << 4), // NwTrace CAN, non verb.
+                                noar: 2,
+                                apid: self.apid.to_owned(),
+                                ctid: self.ctid.to_owned(),
+                            }),
+                            payload,
+                            payload_text: Some("Error Frame".to_owned()),
+                            lifecycle: 0,
+                        });
                     } else if let Some(captures) = RE_DATE.captures(line) {
                         if let Some(date) = captures.get(1) {
                             let nt = asc_parse_date(date.as_str());
@@ -524,6 +586,21 @@ mod tests {
         let reader = r##"
 //BusMapping: CAN 1 = ECU_CAN_FD
 0.169843 CANFD 1 Rx 135   1 0 8 8 f0 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0"##
+            .as_bytes();
+        let mut it = Asc2DltMsgIterator::new(0, reader, None);
+        let mut iterated_msgs: u32 = 0;
+        for _m in &mut it {
+            iterated_msgs += 1;
+            // todo verify payload println!("m={:?}", m);
+        }
+        assert_eq!(iterated_msgs, 2); // one ctrl and the canfd msg
+    }
+
+    #[test]
+    fn asc_canfd_errorframe() {
+        let reader = r##"
+//BusMapping: CAN 1 = ECU_CAN_FD
+0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0"##
             .as_bytes();
         let mut it = Asc2DltMsgIterator::new(0, reader, None);
         let mut iterated_msgs: u32 = 0;
