@@ -329,17 +329,95 @@ impl Plugin for SomeipPlugin {
     }
 }
 
-fn sorted_mids(methods: &HashMap<u16, MethodIdType>) -> Vec<(&u16, &MethodIdType)> {
-    let mut v = methods.iter().collect::<Vec<_>>();
-    v.sort_unstable_by(|a, b| a.0.cmp(b.0));
+enum MethodTreeType<'a> {
+    Method(&'a afibex::fibex::Method),
+    Event(&'a afibex::fibex::Method),
+    Field {
+        field: &'a Arc<afibex::fibex::Parameter>,
+        getter: Option<u16>,
+        setter: Option<u16>,
+        notifier: Option<u16>,
+    },
+}
+
+/**
+sort the methods into a tree-alike structure with
+* methods first
+* events
+* fields (instead of 3 single items per getter,setter, notifier)
+*/
+fn sorted_mids_by_type(methods: &HashMap<u16, MethodIdType>) -> Vec<(u16, MethodTreeType)> {
+    let mut v = vec![];
+    for method in methods {
+        match method.1 {
+            MethodIdType::Method(m) => v.push((*method.0, MethodTreeType::Method(m))),
+            MethodIdType::Event(m) => v.push((*method.0, MethodTreeType::Event(m))),
+            MethodIdType::Setter { field }
+            | MethodIdType::Getter { field }
+            | MethodIdType::Notifier { field } => {
+                let is_setter = matches!(method.1, MethodIdType::Setter { field: _ });
+                let is_getter = matches!(method.1, MethodIdType::Getter { field: _ });
+                let is_notifier = matches!(method.1, MethodIdType::Notifier { field: _ });
+                // do we have this Parameter already?
+                let nfield = field;
+                let p = v.iter_mut().find(|(_m, p)| {
+                    if let MethodTreeType::Field {
+                        field,
+                        getter: _,
+                        setter: _,
+                        notifier: _,
+                    } = p
+                    {
+                        field.id == nfield.id
+                    } else {
+                        false
+                    }
+                });
+                if let Some(p) = p {
+                    if let MethodTreeType::Field {
+                        field: _,
+                        getter,
+                        setter,
+                        notifier,
+                    } = &mut p.1
+                    {
+                        if is_getter {
+                            *getter = Some(*method.0);
+                        }
+                        if is_setter {
+                            *setter = Some(*method.0);
+                        }
+                        if is_notifier {
+                            *notifier = Some(*method.0);
+                        }
+                        if *method.0 < p.0 {
+                            // update mid in vec used for sorting
+                            p.0 = *method.0;
+                        }
+                    }
+                } else {
+                    v.push((
+                        *method.0,
+                        MethodTreeType::Field {
+                            field,
+                            getter: if is_getter { Some(*method.0) } else { None },
+                            setter: if is_setter { Some(*method.0) } else { None },
+                            notifier: if is_notifier { Some(*method.0) } else { None },
+                        },
+                    ));
+                }
+            }
+        }
+    }
+    v.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     v
 }
 
-fn tree_item_for_mid(mid: &u16, method: &MethodIdType) -> serde_json::Value {
+fn tree_item_for_mid_types(mid: &u16, method: &MethodTreeType) -> serde_json::Value {
     let no_name = "<no shortname>";
     let no_desc = "<no desc>";
     match method {
-        MethodIdType::Method(m) => {
+        MethodTreeType::Method(m) => {
             let short_name = m.short_name.as_deref().unwrap_or(no_name);
             json!({ "label": format!("0x{:04x} Method: {}", mid, short_name),
             "tooltip": format!("description:\n{}\ninput parameter:\n{}\nreturn parameter:\n{}",
@@ -348,24 +426,43 @@ fn tree_item_for_mid(mid: &u16, method: &MethodIdType) -> serde_json::Value {
                 m.return_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n")
             )})
         }
-        MethodIdType::Event(m) => {
+        MethodTreeType::Event(m) => {
             let short_name = m.short_name.as_deref().unwrap_or(no_name);
             json!({ "label": format!("0x{:04x} Event: {}", mid, short_name),
             "tooltip": format!("description:\n{}\ninput parameter:\n{}",
                 m.desc.as_deref().unwrap_or(no_desc),
                 m.input_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n")) })
         }
-        MethodIdType::Getter { field } => {
+        MethodTreeType::Field {
+            field,
+            getter,
+            setter,
+            notifier,
+        } => {
             let short_name = field.short_name.as_deref().unwrap_or(no_name);
-            json!({ "label": format!("0x{:04x} Getter: {}", mid, short_name) })
-        }
-        MethodIdType::Setter { field } => {
-            let short_name = field.short_name.as_deref().unwrap_or(no_name);
-            json!({ "label": format!("0x{:04x} Setter: {}", mid, short_name) })
-        }
-        MethodIdType::Notifier { field } => {
-            let short_name = field.short_name.as_deref().unwrap_or(no_name);
-            json!({ "label": format!("0x{:04x} Notifier: {}", mid, short_name) })
+            json!({
+                "label":
+                    format!(
+                        "0x{:04x} Field: {} - {}{}{}",
+                        mid,
+                        short_name,
+                        if let Some(g) = getter {
+                            format!("Getter({:04x}) ", g)
+                        } else {
+                            "".to_owned()
+                        },
+                        if let Some(g) = setter {
+                            format!("Setter({:04x}) ", g)
+                        } else {
+                            "".to_owned()
+                        },
+                        if let Some(g) = notifier {
+                            format!("Notifier({:04x})", g)
+                        } else {
+                            "".to_owned()
+                        },
+                    )
+            })
         }
     }
 }
@@ -415,7 +512,7 @@ fn tree_item_for_service(
         }else{
             serde_json::Value::Null
         },
-        "children": sorted_mids(&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid(mid, method)}).collect::<Vec<serde_json::Value>>(),
+        "children": sorted_mids_by_type (&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid_types(mid, method)}).collect::<Vec<serde_json::Value>>(),
     })
 }
 
