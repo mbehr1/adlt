@@ -413,7 +413,11 @@ fn sorted_mids_by_type(methods: &HashMap<u16, MethodIdType>) -> Vec<(u16, Method
     v
 }
 
-fn tree_item_for_mid_types(mid: &u16, method: &MethodTreeType) -> serde_json::Value {
+fn tree_item_for_mid_types(
+    mid: &u16,
+    method: &MethodTreeType,
+    service: &Service,
+) -> serde_json::Value {
     let no_name = "<no shortname>";
     let no_desc = "<no desc>";
     match method {
@@ -439,13 +443,13 @@ fn tree_item_for_mid_types(mid: &u16, method: &MethodTreeType) -> serde_json::Va
             setter,
             notifier,
         } => {
-            let short_name = field.short_name.as_deref().unwrap_or(no_name);
+            let field_name = field.short_name.as_deref().unwrap_or(no_name);
             json!({
                 "label":
                     format!(
                         "0x{:04x} Field: {} - {}{}{}",
                         mid,
-                        short_name,
+                        field_name,
                         if let Some(g) = getter {
                             format!("Getter({:04x}) ", g)
                         } else {
@@ -461,7 +465,17 @@ fn tree_item_for_mid_types(mid: &u16, method: &MethodTreeType) -> serde_json::Va
                         } else {
                             "".to_owned()
                         },
-                    )
+                    ),
+                "filterFrag": if let Some(short_name)=service.short_name.as_ref() {
+                    serde_json::json!({
+                        "ctid":"TC",
+                        "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)\\.(?:changed|set|get)_{}_field", short_name, field_name), // todo use ctid var and better filter for payload_raw!
+                        "reportOptions":{
+                            "conversionFunction": JS_FIELD_CONVERSION_FUNCTION
+                        }
+                })}else{
+                    serde_json::Value::Null
+                },
             })
         }
     }
@@ -512,7 +526,7 @@ fn tree_item_for_service(
         }else{
             serde_json::Value::Null
         },
-        "children": sorted_mids_by_type (&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid_types(mid, method)}).collect::<Vec<serde_json::Value>>(),
+        "children": sorted_mids_by_type (&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid_types(mid, method, &service[0])}).collect::<Vec<serde_json::Value>>(),
     })
 }
 
