@@ -106,7 +106,7 @@ pub struct RewritePlugin {
     rewrites: Vec<RewriteConfig>,
 }
 
-impl<'a> Plugin for RewritePlugin {
+impl Plugin for RewritePlugin {
     fn name(&self) -> &str {
         &self.name
     }

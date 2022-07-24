@@ -152,7 +152,7 @@ impl AnonymizePlugin {
     }
 }
 
-impl<'a> Plugin for AnonymizePlugin {
+impl Plugin for AnonymizePlugin {
     fn name(&self) -> &str {
         &self.name
     }

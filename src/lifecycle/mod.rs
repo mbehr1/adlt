@@ -1686,17 +1686,9 @@ mod tests {
             buf_reader,
             None,
         );
-        loop {
-            match it.next() {
-                Some(msg) => {
-                    messages_processed += 1;
-                    tx_for_parse_thread.send(msg).unwrap(); // todo handle error
-                }
-                None => {
-                    //debug!(log, "finished processing a file";"messages_processed"=>messages_processed);
-                    break;
-                }
-            }
+        for msg in it.by_ref() {
+            messages_processed += 1;
+            tx_for_parse_thread.send(msg).unwrap(); // todo handle error
         }
         drop(tx_for_parse_thread);
 

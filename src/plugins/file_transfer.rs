@@ -178,7 +178,7 @@ pub struct FileTransferPlugin {
     transfers_idx: HashMap<(DltChar4, u32, u64), usize>, // map ecu, lifecycle, serial
 }
 
-impl<'a> Plugin for FileTransferPlugin {
+impl Plugin for FileTransferPlugin {
     fn name(&self) -> &str {
         &self.name
     }

@@ -282,39 +282,36 @@ fn bin_remote_ex002_open() {
         let mut got_eac = HashMap::new();
 
         while let Ok(msg) = ws.read_message() {
-            match msg {
-                Message::Binary(d) => {
-                    if let Ok((btype, _)) =
-                        bincode::decode_from_slice::<remote_types::BinType, _>(&d, BINCODE_CONFIG)
-                    {
-                        match btype {
-                            BinType::FileInfo(s) => {
-                                println!("got binary msg FileInfo: {}", s.nr_msgs);
-                                got_file_info = s.nr_msgs == 11696;
-                            }
-                            BinType::Lifecycles(lcs) => {
-                                println!("got binary msg Lifecycles: {}", lcs.len());
-                                for lc in lcs {
-                                    got_lcs.insert(lc.id, ());
-                                }
-                            }
-                            BinType::EacInfo(eacs) => {
-                                println!("got binary msg EacInfo: {}", eacs.len());
-                                for eac in eacs {
-                                    println!(
-                                        " eac ecu={:x} nr_msgs={}, #apids={}",
-                                        eac.ecu,
-                                        eac.nr_msgs,
-                                        eac.apids.len()
-                                    );
-                                    got_eac.insert(eac.ecu, (eac.nr_msgs, eac.apids.len()));
-                                }
-                            }
-                            _ => {}
+            if let Message::Binary(d) = msg {
+                if let Ok((btype, _)) =
+                    bincode::decode_from_slice::<remote_types::BinType, _>(&d, BINCODE_CONFIG)
+                {
+                    match btype {
+                        BinType::FileInfo(s) => {
+                            println!("got binary msg FileInfo: {}", s.nr_msgs);
+                            got_file_info = s.nr_msgs == 11696;
                         }
+                        BinType::Lifecycles(lcs) => {
+                            println!("got binary msg Lifecycles: {}", lcs.len());
+                            for lc in lcs {
+                                got_lcs.insert(lc.id, ());
+                            }
+                        }
+                        BinType::EacInfo(eacs) => {
+                            println!("got binary msg EacInfo: {}", eacs.len());
+                            for eac in eacs {
+                                println!(
+                                    " eac ecu={:x} nr_msgs={}, #apids={}",
+                                    eac.ecu,
+                                    eac.nr_msgs,
+                                    eac.apids.len()
+                                );
+                                got_eac.insert(eac.ecu, (eac.nr_msgs, eac.apids.len()));
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                _ => {} // ignore
             }
             if got_file_info
                 && got_lcs.len() == 3
@@ -383,9 +380,9 @@ fn bin_remote_ex002_stream() {
             "ok: open {\"plugins_active\":[]}"
         );
 
-        ws.write_message(tungstenite::protocol::Message::Text(format!(
-            r#"stream {{"window":[1000,2000], "binary":true}}"#
-        )))
+        ws.write_message(tungstenite::protocol::Message::Text(
+            r#"stream {"window":[1000,2000], "binary":true}"#.to_string(),
+        ))
         .unwrap();
         // check for the expected # of streamed msgs:
 
