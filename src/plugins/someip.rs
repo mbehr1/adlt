@@ -439,11 +439,23 @@ fn tree_item_for_mid_types(
             })
         }
         MethodTreeType::Event(m) => {
-            let short_name = m.short_name.as_deref().unwrap_or(no_name);
-            json!({ "label": format!("0x{:04x} Event: {}", mid, short_name),
+            let event_name = m.short_name.as_deref().unwrap_or(no_name);
+            json!({
+            "label": format!("0x{:04x} Event: {}", mid, event_name),
             "tooltip": format!("description:\n{}\ninput parameter:\n{}",
                 m.desc.as_deref().unwrap_or(no_desc),
-                m.input_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n")) })
+                m.input_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n")),
+            "filterFrag": if let Some(service_name)=service.short_name.as_ref() {
+                serde_json::json!({
+                    "ctid":"TC",
+                    "payloadRegex":format!("^\\* \\(....:....\\) {}\\(....\\)\\.{}{{", service_name, event_name), // todo use ctid var and better filter for payload_raw!
+                    "reportOptions":{
+                        "conversionFunction": JS_EVENT_CONVERSION_FUNCTION
+                    }
+            })}else{
+                serde_json::Value::Null
+            },
+            })
         }
         MethodTreeType::Field {
             field,
@@ -513,6 +525,36 @@ if(m!==null){
         }
     };
     fn(m[1],v,o);
+}
+return o;
+"##;
+
+// map events
+// events w.o. parameter get mapped to EVENT_<name> to use scatter and no charts/lines
+// events with parameter are treated like regular fields
+const JS_EVENT_CONVERSION_FUNCTION: &str = r##"
+const r=/\)\.(.+){(.*)}\[OK\]$/;
+const m=r.exec(params.msg.payloadString);
+let o={};
+if(m!==null){
+    const evName=m[1];
+    if (m[2].length){
+        const r2=/"(.+?)":(.+)/;
+        const m2=r2.exec(m[2]);
+        if (m2!==null){
+            const v=JSON.parse(m2[2]);
+            const fn=(p,v,o)=> {
+                switch(typeof v){
+                    case 'number': o[p]=v;break;
+                    case 'string': o[`STATE_${p}`]=v;break;
+                    case 'object': Object.keys(v).forEach(vc=>{fn(`${p}.${vc}`, v[vc],o);}); break;
+                }
+            };
+            fn(`${evName}.${m2[1]}`,v,o);
+        }
+    }else{
+        o[`EVENT_${evName}`]=1.0; // map to 1.0
+    }
 }
 return o;
 "##;
