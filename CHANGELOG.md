@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.26.0 - 2022-07-24
+#### Bug Fixes
+- **(someip)** show services by method, field, events - (4cb36e1) - Matthias Behr
+#### Features
+- **(someip)** add filter/report for events - (939dbd2) - Matthias Behr
+- **(someip)** add filter for methods - (e21b270) - Matthias Behr
+- **(someip)** add filter/report for fields - (b337bb2) - Matthias Behr
+#### Miscellaneous Chores
+- **(clippy)** fix clippy warnings - (122a256) - Matthias Behr
+
+- - -
+
 ## v0.25.0 - 2022-07-21
 #### Features
 - **(can)** add CANFD error frame support - (e2ab41f) - Matthias Behr
