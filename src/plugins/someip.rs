@@ -74,7 +74,7 @@ struct SegmentedMsgInfo {
     raw_buf: Vec<u8>,
 }
 
-impl<'a> Plugin for SomeipPlugin {
+impl Plugin for SomeipPlugin {
     fn name(&self) -> &str {
         &self.name
     }

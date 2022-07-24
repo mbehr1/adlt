@@ -283,7 +283,7 @@ pub struct NonVerbosePlugin {
     fibex_map_by_ecu: HashMap<DltChar4, Vec<(String, NonVerboseFibexData)>>,
 }
 
-impl<'a> Plugin for NonVerbosePlugin {
+impl Plugin for NonVerbosePlugin {
     fn name(&self) -> &str {
         &self.name
     }
