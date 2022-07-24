@@ -422,13 +422,21 @@ fn tree_item_for_mid_types(
     let no_desc = "<no desc>";
     match method {
         MethodTreeType::Method(m) => {
-            let short_name = m.short_name.as_deref().unwrap_or(no_name);
-            json!({ "label": format!("0x{:04x} Method: {}", mid, short_name),
-            "tooltip": format!("description:\n{}\ninput parameter:\n{}\nreturn parameter:\n{}",
-                m.desc.as_deref().unwrap_or(no_desc),
-                m.input_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n"),
-                m.return_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n")
-            )})
+            let method_name = m.short_name.as_deref().unwrap_or(no_name);
+            json!({ "label": format!("0x{:04x} Method: {}", mid, method_name),
+                "tooltip": format!("description:\n{}\ninput parameter:\n{}\nreturn parameter:\n{}",
+                    m.desc.as_deref().unwrap_or(no_desc),
+                    m.input_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n"),
+                    m.return_params.iter().map(|p|format!("{}:{}", p.short_name.as_deref().unwrap_or(no_name), p.datatype_ref)).collect::<Vec<_>>().join("\n")
+                ),
+                "filterFrag": if let Some(service_name)=service.short_name.as_ref() {
+                    serde_json::json!({
+                        "ctid":"TC",
+                        "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)\\.{}{{", service_name, method_name), // todo use ctid var and better filter for payload_raw!
+                })}else{
+                    serde_json::Value::Null
+                },
+            })
         }
         MethodTreeType::Event(m) => {
             let short_name = m.short_name.as_deref().unwrap_or(no_name);
