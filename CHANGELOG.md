@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.27.0 - 2022-07-31
+#### Features
+- **(CAN)** support multiple fibex files - (10d6bf2) - Matthias Behr
+
+- - -
+
 ## v0.26.0 - 2022-07-24
 #### Bug Fixes
 - **(someip)** show services by method, field, events - (4cb36e1) - Matthias Behr
