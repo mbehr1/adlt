@@ -62,7 +62,11 @@ pub struct CanPlugin {
     log_info_apid: DltChar4, // needs to be in sync with the asc2dltmsgiterator.rs
     log_info_ctid: DltChar4, //  is used to get the proper channel, otherwise wild card search is used
     fibex_data: FibexData,
-    channel_id_by_char4: HashMap<DltChar4, String>,
+    /// Map channel.short_name -> HashMap frame_id->(channel.id, frame_ref)
+    /// Items are in this map as long as they are not mapped/used by an ECUID. Then they are moved to channel_map_by_ecuid.
+    channels_frame_ref_map: HashMap<String, HashMap<u32, (String, String)>>,
+    /// Map ecuid -> HashMap frame_id->(channel.id, frame_ref)
+    channel_map_by_ecuid: HashMap<DltChar4, HashMap<u32, (String, String)>>,
 }
 
 impl Plugin for CanPlugin {
@@ -87,10 +91,6 @@ impl Plugin for CanPlugin {
             let mut frame_id: u32 = 0;
             let mut decoded_header = None;
 
-            // current assumption is that the ecu is unique per channel and the
-            // channel name is encoded in the APID CAN for that ecu:
-            let channel_id = self.channel_id_by_char4.get(&msg.ecu);
-
             for (nr_arg, arg) in msg.into_iter().enumerate() {
                 // enumerate is faster than collecting in a vec. but a bit more unreadable from the code
                 match nr_arg {
@@ -112,6 +112,15 @@ impl Plugin for CanPlugin {
                         }
                     }
                     1 => {
+                        // current assumption is that the ecu is unique per channel and the
+                        // channel name is encoded in the APID CAN for that ecu:
+                        let channel_map = self.channel_map_by_ecuid.get(&msg.ecu);
+
+                        let channel_id = channel_map
+                            .and_then(|m| m.get(&frame_id).or_else(|| m.get(&0)))
+                            .map(|p| &p.0);
+                        // to avoid the problem that for unknown frames no channel_id is passed we store the first matching channel_id in frame id 0
+
                         // 2nd args, pure can payload
                         // can msgs
                         decoded_header = Some(decode_can_frame(
@@ -171,17 +180,14 @@ impl Plugin for CanPlugin {
                     if apids.len() == 1 {
                         let apid_info = &apids[0];
                         if let Some(desc) = apid_info.desc.as_deref() {
-                            // now search fd for a channel with that name:
-                            let channel_id = self
-                                .fibex_data
-                                .elements
-                                .channels
-                                .iter()
-                                .find(|c| c.1.short_name.as_deref() == Some(desc))
-                                .map(|c| &c.1.id);
-                            if let Some(channel) = channel_id {
-                                self.channel_id_by_char4
-                                    .insert(msg.ecu.to_owned(), channel.to_owned());
+                            // now search fd for a channel with that name and move from channels_frame_ref_map to channel_map_by_ecuid
+                            if let std::collections::hash_map::Entry::Vacant(entry) =
+                                self.channel_map_by_ecuid.entry(msg.ecu.to_owned())
+                            {
+                                let channel_map = self.channels_frame_ref_map.remove(desc);
+                                if let Some(channel_map) = channel_map {
+                                    entry.insert(channel_map);
+                                }
                             }
                         }
                     }
@@ -192,10 +198,16 @@ impl Plugin for CanPlugin {
     }
 }
 
-fn sorted_frames(frames: &HashMap<u32, String>) -> Vec<(&u32, &String)> {
-    let mut v = frames.iter().collect::<Vec<_>>();
-    v.sort_unstable_by(|a, b| a.0.cmp(b.0));
-    v
+fn sorted_frames(
+    frames: Option<&HashMap<u32, (String, String)>>,
+) -> Vec<(&u32, &(String, String))> {
+    if let Some(frames) = frames {
+        let mut v = frames.iter().collect::<Vec<_>>();
+        v.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        v
+    } else {
+        vec![]
+    }
 }
 
 // todo fix BigInt conversion "23n" -> BigInt("23n") ? (can report handle really big ints?)
@@ -228,10 +240,11 @@ fn tree_item_for_frame(
     fd: &FibexData,
     channel_short_name: &str,
     identifier: &u32,
-    frame_ref: &String,
+    channel_id_frame_ref: &(String, String),
 ) -> serde_json::Value {
     let no_name = "<no shortname>";
     let no_desc = "<no desc>";
+    let (_channel_id, frame_ref) = channel_id_frame_ref;
 
     let frame = fd.elements.frames_map_by_id.get(frame_ref);
     if let Some(frame) = frame {
@@ -248,7 +261,7 @@ fn tree_item_for_frame(
                     "apid":"CAN",
                     "ctid":"TC",
                     "payloadRegex":format!("^. {} 0x{:03x} ", channel_short_name, identifier),
-                    "reportOptions":{ // todo add only (set to null) if fields (others than methods are available)
+                    "reportOptions":{
                         "conversionFunction": JS_FRAME_CONVERSION_FUNCTION
                     }
                 }),
@@ -386,6 +399,29 @@ fn md_for_compu_methods(compu_methods: &Vec<CompuMethod>) -> String {
 }
 
 impl CanPlugin {
+    /// inserts all frames from to_merge into the target hashmap
+    /// where the frame.id is not yet contained.
+    /// For each frame inserted the channel_id and frame_ref will be inserted.
+    /// If the target is empty a special id 0 is inserted with the channel id only.
+    fn insert_missing_frame_ref(
+        target: &mut HashMap<u32, (String, String)>,
+        to_merge: &afibex::fibex::Channel,
+    ) {
+        if target.is_empty() {
+            // insert frame id 0 with channel_id
+            target.insert(0, (to_merge.id.to_owned(), "".to_owned()));
+        }
+
+        for frame_to_merge in to_merge.frame_ref_by_frame_triggering_identifier.iter() {
+            if !target.contains_key(frame_to_merge.0) {
+                target.insert(
+                    *frame_to_merge.0,
+                    (to_merge.id.to_owned(), frame_to_merge.1.to_owned()),
+                );
+            }
+        }
+    }
+
     pub fn from_json(
         config: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<CanPlugin, Box<dyn Error>> {
@@ -421,13 +457,25 @@ impl CanPlugin {
 
         // update state:
 
-        let mut channels_by_name = fibex_data
-            .elements
-            .channels
+        // we merge the channels by channel short-name to support multiple fibex
+        // map channel short-name -> Map with frame-id -> Channel_id/frame_ref
+        let mut channels_frame_ref_map: HashMap<String, HashMap<u32, (String, String)>> =
+            HashMap::new();
+
+        for channel in fibex_data.elements.channels.values() {
+            if let Some(short_name) = &channel.short_name {
+                let channel_map = channels_frame_ref_map
+                    .entry(short_name.to_string())
+                    .or_insert_with(HashMap::new);
+                Self::insert_missing_frame_ref(channel_map, channel);
+            }
+        }
+
+        let mut channels_by_name = channels_frame_ref_map
             .iter()
-            .map(|c| c.1)
+            .map(|c| c.0.to_owned())
             .collect::<Vec<_>>();
-        channels_by_name.sort_unstable_by(|a, b| a.short_name.cmp(&b.short_name));
+        channels_by_name.sort_unstable();
 
         state.value = json!({"name":name, "treeItems":[
             if !warnings.is_empty() {
@@ -439,13 +487,13 @@ impl CanPlugin {
             } else {
                 json!(null)
             },
-            {"label":format!("Channels #{}", fibex_data.elements.channels.len()),
-            "children":channels_by_name.iter().map(|channel|{
-                let channel_short_name = channel.short_name.as_ref().unwrap_or(&EMPTY_STATIC_STRING);
+            {"label":format!("Channels #{}", channels_by_name.len()),
+            "children":channels_by_name.iter().map(|channel_short_name|{
+                let channel_map = channels_frame_ref_map.get(channel_short_name);
                 serde_json::json!({
-                "label":format!("{}, channel id: {}", channel_short_name, channel.id),
-                "tooltip":channel.desc,
-                "children": sorted_frames(&channel.frame_ref_by_frame_triggering_identifier).iter().map(|(identifier, frame)|{tree_item_for_frame(&fibex_data, channel_short_name, identifier, frame)}).collect::<Vec<serde_json::Value>>(),
+                "label":format!("{}, frames: {}", channel_short_name, channel_map.map(|m|m.len()-1).unwrap_or(0)),
+                // todo collect all desc! "tooltip":channel.desc,
+                "children": sorted_frames(channel_map).iter().skip(1).map(|(identifier, channel_id)|{tree_item_for_frame(&fibex_data, channel_short_name, identifier, channel_id)}).collect::<Vec<serde_json::Value>>(),
             })}).collect::<Vec<serde_json::Value>>(),
             },
             /*{"label":format!("Channels #{}, sorted by name", fibex_data.elements.services_map_by_sid_major.len()),
@@ -469,7 +517,8 @@ impl CanPlugin {
             mstp: DltMessageType::NwTrace(DltMessageNwType::Can),
             ctid,
             fibex_data,
-            channel_id_by_char4: HashMap::new(),
+            channels_frame_ref_map,
+            channel_map_by_ecuid: HashMap::new(),
             log_info_apid: DltChar4::from_buf(b"CAN\0"),
             log_info_ctid: DltChar4::from_buf(b"TC\0\0"),
         })
