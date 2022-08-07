@@ -67,13 +67,17 @@ pub struct Filter {
     pub ecu: Option<DltChar4>,
     pub apid: Option<DltChar4>,
     pub ctid: Option<DltChar4>,
+    /// match for verb_mstp_mtin with a mask
+    /// the from_json contains a logic to set an ignore for mtin if mtin is 0
     /// can match for mstp and all mtins (mtin part 0) or specific mtin (mtin !=0)
     /// mtin is the upper 4 bits, mstp the bits 3..1, verbose the lowest bit
     /// e.g.  0<<4 | 3<<1 = all ctrl messages, non verbose
     /// 2<<4 | 3<<1 = all ctrl, response messages, non verbose
-    pub verb_mstp_mtin: Option<u8>,
+    pub verb_mstp_mtin: Option<(u8, u8)>, // value and mask
     pub payload: Option<String>,
     pub payload_regex: Option<Regex>,
+    pub loglevel_min: Option<u8>, // could use DltMessageLogType here but has no cmp op
+    pub loglevel_max: Option<u8>,
     // filter on lifecycles. This is not the lifecycle.id but the persistentId
     pub lifecycles: Option<Vec<u32>>,
 }
@@ -149,6 +153,29 @@ impl Filter {
             payload = Some(s.to_string());
         }
 
+        let mut loglevel_min = None;
+        if let Some(lvl) = v["logLevelMin"].as_u64() {
+            if lvl <= 6 {
+                // verbose
+                loglevel_min = Some(lvl as u8);
+            } else {
+                return Err(Error::new(ErrorKind::InvalidData(String::from(
+                    "unsupported loglevelMin value",
+                ))));
+            }
+        }
+        let mut loglevel_max = None;
+        if let Some(lvl) = v["logLevelMax"].as_u64() {
+            if lvl <= 6 {
+                // verbose
+                loglevel_max = Some(lvl as u8);
+            } else {
+                return Err(Error::new(ErrorKind::InvalidData(String::from(
+                    "unsupported loglevelMax value",
+                ))));
+            }
+        }
+
         let lifecycles = v["lifecycles"].as_array().map(|lcs| {
             lcs.iter()
                 .map(|l| l.as_u64())
@@ -161,11 +188,15 @@ impl Filter {
         // todo add unit tests
         let verb_mstp_mtin = if let Some(mstp) = v["verb_mstp_mtin"].as_u64() {
             let verb_mstp_mtin = (mstp & 0xff) as u8;
-            Some(verb_mstp_mtin)
+            // special handling: if mtin here is 0 we want it to be ignored (as mtin 0 is a special value)
+            let mtin = (verb_mstp_mtin >> 4) & 0xf;
+            let mask = if mtin == 0 { 0x0fu8 } else { 0xffu8 };
+            Some((verb_mstp_mtin, mask))
         } else if let Some(mstp) = v["mstp"].as_u64() {
             // match mstp to verb_mstp_mtin logic
+            // we ignore mtin and verb
             let verb_mstp_mtin = ((mstp & 0x07) << 1) as u8;
-            Some(verb_mstp_mtin)
+            Some((verb_mstp_mtin, 0x07 << 1))
         } else {
             None
         };
@@ -181,6 +212,8 @@ impl Filter {
             verb_mstp_mtin,
             payload,
             payload_regex,
+            loglevel_min,
+            loglevel_max,
             lifecycles,
         })
     }
@@ -262,7 +295,7 @@ impl Filter {
             }
         }
         if attrs.get("enablecontrolmsgs") == Some(&"1".to_string()) {
-            filter.verb_mstp_mtin = Some(0x03u8 << 1);
+            filter.verb_mstp_mtin = Some((0x03u8 << 1, (7u8 << 1))); // filter only on mstp
         }
         if attrs.get("enablepayloadtext") == Some(&"1".to_string()) {
             if let Some(s) = attrs.get("payloadtext") {
@@ -273,6 +306,23 @@ impl Filter {
                 }
             }
         }
+        if attrs.get("enableLogLevelMax") == Some(&"1".to_string()) {
+            if let Some(s) = attrs.get("logLevelMax") {
+                let lvl = s.parse::<u8>().unwrap_or(0xff);
+                if lvl <= 6 {
+                    filter.loglevel_max = Some(lvl);
+                } // silently fail?
+            }
+        }
+        if attrs.get("enableLogLevelMin") == Some(&"1".to_string()) {
+            if let Some(s) = attrs.get("logLevelMin") {
+                let lvl = s.parse::<u8>().unwrap_or(0xff);
+                if lvl <= 6 {
+                    filter.loglevel_min = Some(lvl);
+                } // silently fail?
+            }
+        }
+
         // todo remaining parts from qdltfilter
 
         Ok(filter)
@@ -290,6 +340,8 @@ impl Filter {
             verb_mstp_mtin: None,
             payload: None,
             payload_regex: None,
+            loglevel_min: None,
+            loglevel_max: None,
             lifecycles: None,
         }
     }
@@ -324,24 +376,33 @@ impl Filter {
             }
         }
 
-        if let Some(verb_mstp_mtin) = &self.verb_mstp_mtin {
+        if let Some((verb_mstp_mtin, mask)) = &self.verb_mstp_mtin {
             if let Some(msg_vmm) = msg.verb_mstp_mtin() {
-                // mtin is like a mask/special meaning.
-                // if 0 -> all mtins match
-                // if != 0 -> needs to match
-                let verb = verb_mstp_mtin & 0x01 == 0x01;
-                let mstp = (*verb_mstp_mtin >> 1) & 0x07u8;
-                let mtin = (*verb_mstp_mtin >> 4) & 0x0fu8;
-
-                let m_verb = msg_vmm & 0x01 == 0x01;
-                let m_mstp = (msg_vmm >> 1) & 0x07u8;
-                let m_mtin = (msg_vmm >> 4) & 0x0fu8;
-
-                if verb != m_verb || mstp != m_mstp {
+                if (msg_vmm & mask) != *verb_mstp_mtin {
                     return negated;
                 }
-                // now check mtin if >0
-                if mtin > 0 && mtin != m_mtin {
+            } else {
+                return negated;
+            }
+        }
+
+        if let Some(loglevel_min) = &self.loglevel_min {
+            if let Some(msg_vmm) = msg.verb_mstp_mtin() {
+                let mstp = (msg_vmm >> 1) & 0x07u8;
+                let mtin = (msg_vmm >> 4) & 0x0fu8;
+                if !(mstp == 0 && mtin >= *loglevel_min) {
+                    return negated;
+                }
+            } else {
+                return negated;
+            }
+        }
+
+        if let Some(loglevel_max) = &self.loglevel_max {
+            if let Some(msg_vmm) = msg.verb_mstp_mtin() {
+                let mstp = (msg_vmm >> 1) & 0x07u8;
+                let mtin = (msg_vmm >> 4) & 0x0fu8;
+                if !(mstp == 0 && mtin <= *loglevel_max) {
                     return negated;
                 }
             } else {
@@ -412,6 +473,12 @@ impl Serialize for Filter {
             state.serialize_field("payloadRegex", s.as_str())?;
         } else if let Some(s) = &self.payload {
             state.serialize_field("payload", &s)?;
+        }
+        if let Some(lvl) = &self.loglevel_min {
+            state.serialize_field("logLevelMin", lvl)?;
+        }
+        if let Some(lvl) = &self.loglevel_max {
+            state.serialize_field("logLevelMax", lvl)?;
         }
         if let Some(lcs) = &self.lifecycles {
             state.serialize_field("lifecycles", &lcs)?;
@@ -627,9 +694,8 @@ mod tests {
 
     #[test]
     fn match_mstp() {
-        let mut f = Filter::new(FilterKind::Positive);
+        let f = Filter::from_json(r#"{"type": 0, "verb_mstp_mtin": 6}"#).unwrap(); // 3u8<<1
         let mut m = DltMessage::for_test();
-        f.verb_mstp_mtin = Some(3u8 << 1); // | 0u8<<4
         assert!(!f.matches(&m));
 
         m.extended_header = Some(DltExtendedHeader {
@@ -659,12 +725,75 @@ mod tests {
         // still match, msg has more, but filter has mtin 0
         assert!(f.matches(&m));
 
-        f.verb_mstp_mtin = Some(1u8 << 4 | 3u8 << 1);
+        let f = Filter::from_json(r#"{"type": 0, "verb_mstp_mtin": 22}"#).unwrap(); // 1u8<<4|3u8<<1
+
         // still match, msg has same
         assert!(f.matches(&m));
 
-        f.verb_mstp_mtin = Some(2u8 << 4 | 3u8 << 1);
+        let f = Filter::from_json(r#"{"type": 0, "verb_mstp_mtin": 38}"#).unwrap(); // 2u8<<4|3u8<<1
+
         // no match, same mstp but dif mtin
+        assert!(!f.matches(&m));
+
+        // check that if only mstp is set verb and mtin are ignored
+        let f = Filter::from_json(r#"{"type": 0, "mstp": 3}"#).unwrap();
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 3u8 << 1,
+        });
+        assert!(f.matches(&m));
+
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 1u8 << 4 | 3u8 << 1,
+        });
+        assert!(f.matches(&m));
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 1u8 << 4 | 3u8 << 1 | 1,
+        });
+        assert!(f.matches(&m));
+    }
+
+    #[test]
+    fn match_loglevel() {
+        let mut f = Filter::from_json(r#"{"type": 0, "mstp": 0}"#).unwrap();
+        // dlt-logs sets this together with loglevel so that only LOG msgs are checked
+        let mut m = DltMessage::for_test();
+        f.loglevel_min = Some(2);
+        assert!(!f.matches(&m));
+
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 2u8 << 4, // 0 MSTP, 2 MTIN (Error)
+        });
+        // match
+        assert!(f.matches(&m));
+
+        f.loglevel_max = Some(3);
+        assert!(f.matches(&m));
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 3u8 << 4, // 0 MSTP, 3 MTIN (Warn)
+        });
+        assert!(f.matches(&m));
+
+        m.extended_header = Some(DltExtendedHeader {
+            apid: DltChar4::from_buf(b"APID"),
+            noar: 0,
+            ctid: DltChar4::from_buf(b"CTID"),
+            verb_mstp_mtin: 4u8 << 4, // 0 MSTP, 4 MTIN (Info)
+        });
         assert!(!f.matches(&m));
     }
 
@@ -732,12 +861,23 @@ mod tests {
         // proper type and mstp
         let f = Filter::from_json(r#"{"type": 0, "mstp": 3}"#).unwrap();
         assert_eq!(f.kind, FilterKind::Positive);
-        assert_eq!(f.verb_mstp_mtin, Some(3u8 << 1));
+        assert_eq!(f.verb_mstp_mtin, Some(((3u8 << 1), (7u8 << 1))));
 
         // proper type and mstp and verb_mstp_mtin (has a higher prio)
         let f = Filter::from_json(r#"{"type": 0, "verb_mstp_mtin":42,"mstp": 2}"#).unwrap();
         assert_eq!(f.kind, FilterKind::Positive);
-        assert_eq!(f.verb_mstp_mtin, Some(42u8));
+        assert_eq!(f.verb_mstp_mtin, Some((42u8, 0xffu8)));
+
+        // logLevelMin/Max:
+        let f = Filter::from_json(r#"{"type": 0, "logLevelMin":1}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.loglevel_min, Some(1u8));
+        assert_eq!(f.loglevel_max, None);
+
+        let f = Filter::from_json(r#"{"type": 0, "logLevelMax":2}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.loglevel_max, Some(2u8));
+        assert_eq!(f.loglevel_min, None);
     }
 
     #[test]
@@ -813,6 +953,22 @@ mod tests {
         assert!(
             s.contains(r#""lifecycles":[47,11]"#),
             "lifecycles unexpected in {}",
+            &s
+        );
+
+        let f = Filter::from_json(r#"{"type": 0, "logLevelMax":2}"#).unwrap();
+        let s = f.to_json();
+        assert!(
+            s.contains(r#""logLevelMax":2"#),
+            "logLevelMax unexpected in {}",
+            &s
+        );
+
+        let f = Filter::from_json(r#"{"type": 0, "logLevelMin":1}"#).unwrap();
+        let s = f.to_json();
+        assert!(
+            s.contains(r#""logLevelMin":1"#),
+            "logLevelMin unexpected in {}",
             &s
         );
 
@@ -919,7 +1075,7 @@ mod tests {
                 r#"<filter><enablecontrolmsgs>1</enablecontrolmsgs></filter>"#,
             ))
             .unwrap();
-            assert_eq!(r.verb_mstp_mtin, Some(3u8 << 1));
+            assert_eq!(r.verb_mstp_mtin, Some((3u8 << 1, 7u8 << 1)));
         }
 
         #[test]
@@ -937,6 +1093,23 @@ mod tests {
             .unwrap();
             assert_eq!(r.payload_regex.unwrap().as_str(), "&fOo<>");
             assert!(r.payload.is_none());
+        }
+
+        #[test]
+        fn loglevel() {
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><logLevelMax>2</logLevelMax><enableLogLevelMax>1</enableLogLevelMax><enableLogLevelMin>0</enableLogLevelMin></filter>"#,
+            ))
+            .unwrap();
+            assert_eq!(r.loglevel_max, Some(2));
+            assert_eq!(r.loglevel_min, None);
+
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><logLevelMin>1</logLevelMin><enableLogLevelMin>1</enableLogLevelMin></filter>"#,
+            ))
+            .unwrap();
+            assert_eq!(r.loglevel_min, Some(1));
+            assert_eq!(r.loglevel_max, None);
         }
     }
 }
