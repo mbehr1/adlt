@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.27.1 - 2022-08-07
+#### Bug Fixes
+- mstp did assume non verbose ,impl loglevel - (8c6edc0) - Matthias Behr
+
+- - -
+
 ## v0.27.0 - 2022-07-31
 #### Features
 - **(CAN)** support multiple fibex files - (10d6bf2) - Matthias Behr
