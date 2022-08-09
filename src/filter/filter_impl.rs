@@ -76,7 +76,9 @@ pub struct Filter {
     pub verb_mstp_mtin: Option<(u8, u8)>, // value and mask
     pub payload: Option<String>,
     pub payload_regex: Option<Regex>,
-    pub loglevel_min: Option<u8>, // could use DltMessageLogType here but has no cmp op
+    pub ignore_case_payload: bool, // for both payload or payload_regex (limited to first group!)
+    payload_as_upper: Option<String>, // caches the payload converted to uppercase if ignore_case_payload is set and non regex
+    pub loglevel_min: Option<u8>,     // could use DltMessageLogType here but has no cmp op
     pub loglevel_max: Option<u8>,
     // filter on lifecycles. This is not the lifecycle.id but the persistentId
     pub lifecycles: Option<Vec<u32>>,
@@ -137,20 +139,41 @@ impl Filter {
             ctid = DltChar4::from_str(s).ok();
         }
 
+        let mut ignore_case_payload = false;
+        if let Some(b) = v["ignoreCasePayload"].as_bool() {
+            ignore_case_payload = b;
+        }
+
         let mut payload = None;
+        let mut payload_as_upper = None;
         let mut payload_regex = None;
         if let Some(s) = v["payloadRegex"].as_str() {
             // sadly this regex is python syntax and not ecmascript
             // so convert ecmascript capture groups to python ones
             // not needed any longer with fancy_regex let s = s.replace("(?<", "(?P<");
-            payload_regex = Some(Regex::new(s).map_err(|e| {
-                Error::new(ErrorKind::InvalidData(format!(
-                    "regex error parsing '{}':{:?}",
-                    s, e
-                )))
-            })?);
+            if ignore_case_payload {
+                // we need to add ignore case option. this is not quite right as it impacts only the
+                // first group but there seems to be no better way for now... (todo)
+                let s = "(?i)".to_owned() + s;
+                payload_regex = Some(Regex::new(&s).map_err(|e| {
+                    Error::new(ErrorKind::InvalidData(format!(
+                        "regex error parsing '{}':{:?}",
+                        s, e
+                    )))
+                })?);
+            } else {
+                payload_regex = Some(Regex::new(s).map_err(|e| {
+                    Error::new(ErrorKind::InvalidData(format!(
+                        "regex error parsing '{}':{:?}",
+                        s, e
+                    )))
+                })?);
+            }
         } else if let Some(s) = v["payload"].as_str() {
             payload = Some(s.to_string());
+            if ignore_case_payload {
+                payload_as_upper = Some(s.to_ascii_uppercase());
+            }
         }
 
         let mut loglevel_min = None;
@@ -212,6 +235,8 @@ impl Filter {
             verb_mstp_mtin,
             payload,
             payload_regex,
+            ignore_case_payload,
+            payload_as_upper,
             loglevel_min,
             loglevel_max,
             lifecycles,
@@ -298,11 +323,18 @@ impl Filter {
             filter.verb_mstp_mtin = Some((0x03u8 << 1, (7u8 << 1))); // filter only on mstp
         }
         if attrs.get("enablepayloadtext") == Some(&"1".to_string()) {
+            filter.ignore_case_payload = attrs.get("ignoreCase_Payload") == Some(&"1".to_string());
             if let Some(s) = attrs.get("payloadtext") {
                 if attrs.get("enableregexp_Payload") == Some(&"1".to_string()) {
-                    filter.payload_regex = Regex::new(s).ok();
+                    if filter.ignore_case_payload {
+                        let s = "(?i)".to_owned() + s;
+                        filter.payload_regex = Regex::new(&s).ok();
+                    } else {
+                        filter.payload_regex = Regex::new(s).ok();
+                    }
                 } else {
                     filter.payload = Some(s.clone());
+                    filter.payload_as_upper = Some(s.to_ascii_uppercase());
                 }
             }
         }
@@ -340,6 +372,8 @@ impl Filter {
             verb_mstp_mtin: None,
             payload: None,
             payload_regex: None,
+            ignore_case_payload: false,
+            payload_as_upper: None,
             loglevel_min: None,
             loglevel_max: None,
             lifecycles: None,
@@ -421,9 +455,21 @@ impl Filter {
             } else {
                 return negated;
             }
+        } else if let Some(payload_as_upper) = &self.payload_as_upper {
+            // we assert this to be set only if ignore_case_payload is set!
+            let payload_text = msg.payload_as_text();
+            if let Ok(payload_text) = payload_text {
+                assert!(self.ignore_case_payload);
+                if !payload_text.to_ascii_uppercase().contains(payload_as_upper) {
+                    return negated;
+                }
+            } else {
+                return negated;
+            }
         } else if let Some(payload) = &self.payload {
             let payload_text = msg.payload_as_text();
             if let Ok(payload_text) = payload_text {
+                assert!(!self.ignore_case_payload);
                 if !payload_text.contains(payload) {
                     return negated;
                 }
@@ -470,9 +516,17 @@ impl Serialize for Filter {
             state.serialize_field("ctid", &s)?;
         }
         if let Some(s) = &self.payload_regex {
-            state.serialize_field("payloadRegex", s.as_str())?;
+            if self.ignore_case_payload {
+                let s = s.as_str().replacen("(?i)", "", 1);
+                state.serialize_field("payloadRegex", &s)?;
+            } else {
+                state.serialize_field("payloadRegex", s.as_str())?;
+            }
         } else if let Some(s) = &self.payload {
             state.serialize_field("payload", &s)?;
+        }
+        if self.ignore_case_payload {
+            state.serialize_field("ignoreCasePayload", &self.ignore_case_payload)?;
         }
         if let Some(lvl) = &self.loglevel_min {
             state.serialize_field("logLevelMin", lvl)?;
@@ -498,6 +552,7 @@ mod tests {
         assert_eq!(f.kind, FilterKind::Positive);
         assert!(f.enabled);
         assert!(!f.negate_match);
+        assert!(!f.ignore_case_payload);
     }
 
     #[test]
@@ -605,7 +660,7 @@ mod tests {
         println!("payload_as_text='{}'", m.payload_as_text().unwrap());
         assert!(f.matches(&m));
         f.payload = Some("ANswer".to_string());
-        assert!(!f.matches(&m));
+        assert!(!f.matches(&m)); // wrong case, default case sensitive
         f.payload = None;
         f.payload_regex = Regex::from_str("1500$").ok(); // ends with
         assert!(f.matches(&m));
@@ -837,8 +892,28 @@ mod tests {
             Filter::from_json(r#"{"type": 0, "payload":"fOo", "payloadRegex":"^fOo"}"#).unwrap();
         assert!(f.payload.is_none());
         assert_eq!(f.payload_regex.unwrap().as_str(), "^fOo");
-
         assert!(f.lifecycles.is_none());
+
+        // payloadRegex ignoring case
+        let f = Filter::from_json(
+            r#"{"type": 0, "ignoreCasePayload":true, "payloadRegex":"^fOo|bla"}"#,
+        )
+        .unwrap();
+        assert!(f.ignore_case_payload);
+        assert_eq!(f.payload_regex.as_ref().unwrap().as_str(), "(?i)^fOo|bla");
+        assert!(&f
+            .payload_regex
+            .as_ref()
+            .unwrap()
+            .is_match("fOo bla")
+            .unwrap());
+        assert!(&f
+            .payload_regex
+            .as_ref()
+            .unwrap()
+            .is_match("FoO bla")
+            .unwrap());
+        assert!(&f.payload_regex.as_ref().unwrap().is_match("Bla").unwrap());
 
         // lifecycles
         let f = Filter::from_json(r#"{"type": 1, "lifecycles":[]}"#).unwrap();
@@ -975,6 +1050,41 @@ mod tests {
         // todo verb_mstp_mtin...
     }
 
+    #[test]
+    fn payload_regex() {
+        let f =
+            Filter::from_json(r#"{"type": 0, "payloadRegex":"foo|bla", "ignoreCasePayload":true}"#)
+                .unwrap();
+        assert!(f.ignore_case_payload);
+        assert!(f.payload_regex.as_ref().unwrap().is_match("foo").unwrap());
+        assert!(f.payload_regex.as_ref().unwrap().is_match("fOo").unwrap());
+        assert!(f.payload_regex.as_ref().unwrap().is_match("bla").unwrap());
+        assert!(f.payload_regex.as_ref().unwrap().is_match("Bla").unwrap());
+        assert!(!f.payload_regex.as_ref().unwrap().is_match("blub").unwrap());
+
+        let f = Filter::from_json(
+            r#"{"type": 0, "payloadRegex":"(foo)|(bla)", "ignoreCasePayload":true}"#,
+        )
+        .unwrap();
+        assert!(f.ignore_case_payload);
+        assert!(f.payload_regex.as_ref().unwrap().is_match("foo").unwrap());
+        assert!(f.payload_regex.as_ref().unwrap().is_match("fOo").unwrap());
+        assert!(f.payload_regex.as_ref().unwrap().is_match("bla").unwrap());
+        assert!(f.payload_regex.as_ref().unwrap().is_match("Bla").unwrap());
+    }
+
+    #[test]
+    fn payload_ignore_case() {
+        let f = Filter::from_json(r#"{"type": 0, "payload":"foo|bla", "ignoreCasePayload":true}"#)
+            .unwrap();
+        let mut m = DltMessage::for_test();
+        assert!(!f.matches(&m));
+        m.payload_text = Some("blub foo|bla foo".to_owned());
+        assert!(f.matches(&m));
+        m.payload_text = Some("bluB Foo|bLa foo".to_owned());
+        assert!(f.matches(&m));
+    }
+
     mod from_dlf {
         use super::*;
         use quick_xml::Reader;
@@ -1086,13 +1196,15 @@ mod tests {
             .unwrap();
             assert_eq!(r.payload, Some("fOo".to_string()));
             assert!(r.payload_regex.is_none());
+            assert!(!r.ignore_case_payload);
 
             let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
-                r#"<filter><payloadtext>&amp;fOo&lt;&gt;</payloadtext><enableregexp_Payload>1</enableregexp_Payload><enablepayloadtext>1</enablepayloadtext></filter>"#,
+                r#"<filter><payloadtext>&amp;fOo&lt;&gt;</payloadtext><enableregexp_Payload>1</enableregexp_Payload><enablepayloadtext>1</enablepayloadtext><ignoreCase_Payload>1</ignoreCase_Payload></filter>"#,
             ))
             .unwrap();
-            assert_eq!(r.payload_regex.unwrap().as_str(), "&fOo<>");
+            assert_eq!(r.payload_regex.unwrap().as_str(), "(?i)&fOo<>");
             assert!(r.payload.is_none());
+            assert!(r.ignore_case_payload);
         }
 
         #[test]
