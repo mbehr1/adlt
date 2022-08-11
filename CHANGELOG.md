@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.28.0 - 2022-08-11
+#### Features
+- **(filter)** ignore_case_payload - (9978ca0) - Matthias Behr
+
+- - -
+
 ## v0.27.1 - 2022-08-07
 #### Bug Fixes
 - mstp did assume non verbose ,impl loglevel - (8c6edc0) - Matthias Behr
