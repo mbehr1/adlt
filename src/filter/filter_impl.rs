@@ -1075,13 +1075,13 @@ mod tests {
 
     #[test]
     fn payload_ignore_case() {
-        let f = Filter::from_json(r#"{"type": 0, "payload":"foo|bla", "ignoreCasePayload":true}"#)
+        let f = Filter::from_json(r#"{"type": 0, "payload":"foo|^bla", "ignoreCasePayload":true}"#)
             .unwrap();
         let mut m = DltMessage::for_test();
         assert!(!f.matches(&m));
-        m.payload_text = Some("blub foo|bla foo".to_owned());
+        m.payload_text = Some("blub foo|^bla foo".to_owned());
         assert!(f.matches(&m));
-        m.payload_text = Some("bluB Foo|bLa foo".to_owned());
+        m.payload_text = Some("bluB Foo|^bLa foo".to_owned());
         assert!(f.matches(&m));
     }
 
