@@ -77,8 +77,8 @@ pub struct Filter {
     pub payload: Option<String>,
     pub payload_regex: Option<Regex>,
     pub ignore_case_payload: bool, // for both payload or payload_regex (limited to first group!)
-    payload_as_upper: Option<String>, // caches the payload converted to uppercase if ignore_case_payload is set and non regex
-    pub loglevel_min: Option<u8>,     // could use DltMessageLogType here but has no cmp op
+    payload_as_regex: Option<regex::Regex>, // caches the payload converted to a regex if ignore_case_payload is set and non regex
+    pub loglevel_min: Option<u8>,           // could use DltMessageLogType here but has no cmp op
     pub loglevel_max: Option<u8>,
     // filter on lifecycles. This is not the lifecycle.id but the persistentId
     pub lifecycles: Option<Vec<u32>>,
@@ -145,7 +145,7 @@ impl Filter {
         }
 
         let mut payload = None;
-        let mut payload_as_upper = None;
+        let mut payload_as_regex = None;
         let mut payload_regex = None;
         if let Some(s) = v["payloadRegex"].as_str() {
             // sadly this regex is python syntax and not ecmascript
@@ -172,7 +172,18 @@ impl Filter {
         } else if let Some(s) = v["payload"].as_str() {
             payload = Some(s.to_string());
             if ignore_case_payload {
-                payload_as_upper = Some(s.to_ascii_uppercase());
+                // create regex
+                payload_as_regex = Some(
+                    regex::RegexBuilder::new(&regex::escape(s))
+                        .case_insensitive(true)
+                        .build()
+                        .map_err(|e| {
+                            Error::new(ErrorKind::InvalidData(format!(
+                                "regex error parsing escaped '{}':{:?}",
+                                s, e
+                            )))
+                        })?,
+                );
             }
         }
 
@@ -236,7 +247,7 @@ impl Filter {
             payload,
             payload_regex,
             ignore_case_payload,
-            payload_as_upper,
+            payload_as_regex,
             loglevel_min,
             loglevel_max,
             lifecycles,
@@ -334,7 +345,17 @@ impl Filter {
                     }
                 } else {
                     filter.payload = Some(s.clone());
-                    filter.payload_as_upper = Some(s.to_ascii_uppercase());
+                    filter.payload_as_regex = Some(
+                        regex::RegexBuilder::new(&regex::escape(s))
+                            .case_insensitive(true)
+                            .build()
+                            .map_err(|e| {
+                                quick_xml::Error::UnexpectedEof(format!(
+                                    "regex error parsing escaped '{}':{:?}",
+                                    s, e
+                                ))
+                            })?,
+                    );
                 }
             }
         }
@@ -373,7 +394,7 @@ impl Filter {
             payload: None,
             payload_regex: None,
             ignore_case_payload: false,
-            payload_as_upper: None,
+            payload_as_regex: None,
             loglevel_min: None,
             loglevel_max: None,
             lifecycles: None,
@@ -455,12 +476,11 @@ impl Filter {
             } else {
                 return negated;
             }
-        } else if let Some(payload_as_upper) = &self.payload_as_upper {
+        } else if let Some(payload_as_regex) = &self.payload_as_regex {
             // we assert this to be set only if ignore_case_payload is set!
             let payload_text = msg.payload_as_text();
             if let Ok(payload_text) = payload_text {
-                assert!(self.ignore_case_payload);
-                if !payload_text.to_ascii_uppercase().contains(payload_as_upper) {
+                if !payload_as_regex.is_match(&payload_text) {
                     return negated;
                 }
             } else {
@@ -469,7 +489,6 @@ impl Filter {
         } else if let Some(payload) = &self.payload {
             let payload_text = msg.payload_as_text();
             if let Ok(payload_text) = payload_text {
-                assert!(!self.ignore_case_payload);
                 if !payload_text.contains(payload) {
                     return negated;
                 }
