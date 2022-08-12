@@ -25,6 +25,10 @@ harness = false
 name = "util_benches"
 harness = false
 
+[[bench]]
+name = "filter_benches"
+harness = false
+
 [dev-dependencies]
 ntest = "*"
 criterion = "0.3"
