@@ -96,14 +96,25 @@ pub fn remote(
             };
 
             let a_stream = stream.unwrap();
+            // we set a larger initial timeout as e.g. on vscode restart the accept fail often with read timeouts
             a_stream
-                .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+                .set_read_timeout(Some(std::time::Duration::from_millis(5000)))
                 .expect("failed to set_read_timeout"); // panic on failure
             a_stream
                 .set_write_timeout(None)
                 .expect("failed to set_write_timeout");
-            let mut websocket =
-                accept_hdr_with_config(a_stream, callback, Some(web_socket_config)).unwrap();
+            let websocket_res = accept_hdr_with_config(a_stream, callback, Some(web_socket_config));
+            if websocket_res.is_err() {
+                warn!(log, "websocket accept failed. thread done");
+                return;
+            }
+            let mut websocket = websocket_res.unwrap();
+
+            // now reduce read timeout to 100ms
+            websocket
+                .get_ref()
+                .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+                .expect("failed to set_read_timeout"); // panic on failure;
 
             let mut file_context: Option<FileContext> = None;
 
