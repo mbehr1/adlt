@@ -532,26 +532,27 @@ return o;
 // map events
 // events w.o. parameter get mapped to EVENT_<name> to use scatter and no charts/lines
 // events with parameter are treated like regular fields
+// it can be:
+// * (0000:0000) VehicleInformation(0001).RelativeTime1{}[OK]
+// * (0000:0000) VehicleInformation(0001).RelativeTime2{"timeSecondCounterRelative":94198733}[OK]
+// * (0000:0000) VehicleInformation(0001).RelativeTime3{"timeSecondCounterRelative":94198733,"timeDayCounterAbsolute":8284}[OK]
+
 const JS_EVENT_CONVERSION_FUNCTION: &str = r##"
-const r=/\)\.(.+){(.*)}\[OK\]$/;
+const r=/\)\.(.+)(?={)(.*)\[OK\]$/;
 const m=r.exec(params.msg.payloadString);
 let o={};
 if(m!==null){
     const evName=m[1];
-    if (m[2].length){
-        const r2=/"(.+?)":(.+)/;
-        const m2=r2.exec(m[2]);
-        if (m2!==null){
-            const v=JSON.parse(m2[2]);
-            const fn=(p,v,o)=> {
-                switch(typeof v){
-                    case 'number': o[p]=v;break;
-                    case 'string': o[`STATE_${p}`]=v;break;
-                    case 'object': Object.keys(v).forEach(vc=>{fn(`${p}.${vc}`, v[vc],o);}); break;
-                }
-            };
-            fn(`${evName}.${m2[1]}`,v,o);
-        }
+    if (m[2].length>2){
+        const v=JSON.parse(m[2]);
+        const fn=(p,v,o)=> {
+            switch(typeof v){
+                case 'number': o[p]=v;break;
+                case 'string': o[`STATE_${p}`]=v;break;
+                case 'object': Object.keys(v).forEach(vc=>{fn(`${p}.${vc}`, v[vc],o);}); break;
+            }
+        };
+        fn(`${evName}`,v,o);
     }else{
         o[`EVENT_${evName}`]=1.0; // map to 1.0
     }
