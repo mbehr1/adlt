@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.28.2 - 2022-09-07
+#### Bug Fixes
+- **(someip)** js event conversion fn for multiple parameter - (75d9186) - Matthias Behr
+
+- - -
+
 ## v0.28.1 - 2022-08-17
 #### Bug Fixes
 - **(remote)** handle accpept timeout errors - (2463e7b) - Matthias Behr
