@@ -42,7 +42,7 @@ pub fn utc_time_from_us(time_us: u64) -> chrono::NaiveDateTime {
         (time_us / US_PER_SEC) as i64,
         1_000u32 * (time_us % 1_000_000) as u32,
     )
-    .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp(0, 0))
+    .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
 }
 
 static U8_HEX_LOW: [u8; 16] = [

@@ -511,15 +511,15 @@ mod tests {
     fn date1() {
         assert_eq!(
             Ok(NaiveDateTime::new(
-                NaiveDate::from_ymd(2022, 4, 12),
-                NaiveTime::from_hms_micro(8, 55, 37, 0)
+                NaiveDate::from_ymd_opt(2022, 4, 12).unwrap(),
+                NaiveTime::from_hms_micro_opt(8, 55, 37, 0).unwrap()
             )),
             asc_parse_date("Tue Apr 12 08:55:37 AM 2022")
         );
 
         let nt = NaiveDateTime::new(
-            NaiveDate::from_ymd(2022, 5, 25),
-            NaiveTime::from_hms_micro(15, 7, 31, 0),
+            NaiveDate::from_ymd_opt(2022, 5, 25).unwrap(),
+            NaiveTime::from_hms_micro_opt(15, 7, 31, 0).unwrap(),
         );
         // println!("nt formatted = '{}'", nt.format("%a %b %d %I:%M:%S %p %Y"));
         assert_eq!(Ok(nt), asc_parse_date("Wed May 25 03:07:31 PM 2022"));
@@ -561,8 +561,8 @@ mod tests {
                 assert_eq!(
                     m.reception_time(),
                     NaiveDateTime::new(
-                        NaiveDate::from_ymd(2022, 4, 12),
-                        NaiveTime::from_hms_micro(8, 55, 37, 985210)
+                        NaiveDate::from_ymd_opt(2022, 4, 12).unwrap(),
+                        NaiveTime::from_hms_micro_opt(8, 55, 37, 985210).unwrap()
                     )
                 );
                 assert_eq!(m.timestamp_dms, 9852);
