@@ -21,7 +21,7 @@ fn bin_version() {
 #[test]
 fn bin_convert_notext() {
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
-    let assert = cmd.args(&["convert", "foo.dlt"]).assert();
+    let assert = cmd.args(["convert", "foo.dlt"]).assert();
     assert.failure();
 }
 
@@ -32,9 +32,7 @@ fn bin_convert_ex2() {
     test_file.push("tests");
     test_file.push("lc_ex002.dlt");
     // convert command only -> just show lifecycles
-    let assert = cmd
-        .args(&["convert", &test_file.to_string_lossy()])
-        .assert();
+    let assert = cmd.args(["convert", &test_file.to_string_lossy()]).assert();
     assert
         .stdout(predicate::str::contains("have 4 lifecycles"))
         .success();
@@ -48,7 +46,7 @@ fn bin_convert_ex2_lc_filter() {
     test_file.push("lc_ex002.dlt");
     // convert filter for a lifecycle
     let assert = cmd
-        .args(&["convert", "-l", "3", "-a", &test_file.to_string_lossy()])
+        .args(["convert", "-l", "3", "-a", &test_file.to_string_lossy()])
         .assert();
     assert
         .stdout(predicate::str::contains(
@@ -66,7 +64,7 @@ fn bin_convert_ex3() {
     test_file.push("lc_ex003.dlt");
     // convert cmd with -a ascii and end but not start index
     let assert = cmd
-        .args(&["convert", "-a", "-e", "2", &test_file.to_string_lossy()])
+        .args(["convert", "-a", "-e", "2", &test_file.to_string_lossy()])
         .assert();
     assert
         .stdout(predicate::str::contains(
@@ -83,7 +81,7 @@ fn bin_convert_ex3_mixed() {
     test_file.push("lc_ex003.dlt");
     // convert cmd with -x hex output and begin and end index
     let assert = cmd
-        .args(&[
+        .args([
             "convert",
             "-x",
             "-b",
@@ -108,7 +106,7 @@ fn bin_convert_ex3_headers() {
     test_file.push("lc_ex003.dlt");
     // convert cmd with -x hex output and begin and end index
     let assert = cmd
-        .args(&[
+        .args([
             "convert",
             "-s",
             "-b",
@@ -132,9 +130,7 @@ fn bin_convert_can() {
     test_file.push("tests");
     test_file.push("can_example1.asc");
     // convert command only -> just show lifecycles
-    let assert = cmd
-        .args(&["convert", &test_file.to_string_lossy()])
-        .assert();
+    let assert = cmd.args(["convert", &test_file.to_string_lossy()]).assert();
     assert
         .stdout(predicate::str::contains(
             "have 1 lifecycles:\nLC#  1: CAN1 ",
@@ -147,7 +143,7 @@ fn bin_convert_can() {
 #[test]
 fn bin_remote_invalidport() {
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
-    let assert = cmd.args(&["remote", "-v", "-p", "1"]).assert();
+    let assert = cmd.args(["remote", "-v", "-p", "1"]).assert();
     println!("{:?}", assert.get_output());
     assert.failure();
 }
@@ -158,7 +154,7 @@ fn bin_remote_validport_listen() {
 
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
     let assert = cmd
-        .args(&["remote", "-v", "-p", &format!("{}", port)])
+        .args(["remote", "-v", "-p", &format!("{}", port)])
         .timeout(std::time::Duration::from_secs(1))
         .assert()
         .stderr(predicate::str::contains(format!(
@@ -213,7 +209,7 @@ fn bin_remote_validport_connect() {
     });
 
     let assert = cmd
-        .args(&["remote", "-v", "-p", &format!("{}", port)])
+        .args(["remote", "-v", "-p", &format!("{}", port)])
         .timeout(std::time::Duration::from_secs(1))
         .assert()
         .stderr(predicate::str::contains(format!(
@@ -332,7 +328,7 @@ fn bin_remote_ex002_open() {
     });
 
     let assert = cmd
-        .args(&["remote", "-v", "-p", &format!("{}", port)])
+        .args(["remote", "-v", "-p", &format!("{}", port)])
         .timeout(std::time::Duration::from_secs(3))
         .assert()
         .stderr(predicate::str::ends_with("websocket thread done\n"))
@@ -437,7 +433,7 @@ fn bin_remote_ex002_stream() {
     });
 
     let assert = cmd
-        .args(&["remote", "-v", "-p", &format!("{}", port)])
+        .args(["remote", "-v", "-p", &format!("{}", port)])
         .timeout(std::time::Duration::from_secs(3))
         .assert()
         .stderr(predicate::str::ends_with("websocket thread done\n"))

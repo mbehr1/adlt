@@ -179,7 +179,7 @@ impl Lifecycle {
             id: NEXT_LC_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ecu: msg.ecu,
             nr_msgs: 1,
-            nr_control_req_msgs: if is_ctrl_request { 1 } else { 0 },
+            nr_control_req_msgs: u32::from(is_ctrl_request),
             start_time: msg.reception_time_us - timestamp_us,
             initial_start_time: msg.reception_time_us - timestamp_us,
             min_timestamp_us: timestamp_us,
@@ -453,8 +453,8 @@ where
     let mut ecu_map: std::collections::HashMap<DltChar4, Vec<Lifecycle>> =
         std::collections::HashMap::new();
 
-    for lci in lcs_w.read().iter() {
-        for (_id, b) in lci {
+    if let Some(lci) = lcs_w.read() {
+        for (_id, b) in &lci {
             let lc = b.get_one().unwrap();
             match ecu_map.get_mut(&lc.ecu) {
                 None => {
@@ -532,7 +532,7 @@ where
                                             lc2.id, prev_lc.id, m
                                         );*/
                                         if m.lifecycle == lc2.id {
-                                            (*m).lifecycle = prev_lc.id;
+                                            m.lifecycle = prev_lc.id;
                                         }
                                     });
                                 };
@@ -799,7 +799,7 @@ mod tests {
             .construct::<LifecycleId, LifecycleItem>(); //  evmap::new::<u32, Box<Lifecycle>>();
         let start = Instant::now();
         let t = std::thread::spawn(move || parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2));
-        for a in lcs_r.read().iter() {
+        if let Some(a) = lcs_r.read() {
             println!("lcs_r content before join {:?}", a);
         }
         let lcs_w = t.join().unwrap();
@@ -834,11 +834,11 @@ mod tests {
         );
         assert!(rx2.recv().is_err());
         // and lifecycle info be available
-        for a in lcs_r.read().iter() {
+        if let Some(a) = lcs_r.read() {
             println!("lcs_r content {:?}", a);
         }
-        for a in lcs_w.read().iter() {
-            for (id, b) in a {
+        if let Some(a) = lcs_w.read() {
+            for (id, b) in &a {
                 println!("lcs_w2 content id={:?} lc={:?}", id, b);
             }
         }
@@ -864,7 +864,7 @@ mod tests {
         assert!(rx2.recv().is_err());
         let r = lcs_r;
         let t = std::thread::spawn(move || {
-            for a in r.read().iter() {
+            if let Some(a) = r.read() {
                 println!("r content {:?}", a);
             }
             assert_eq!(r.len(), 0);

@@ -216,7 +216,7 @@ impl EacStats {
 
                     // todo add desc for entries...
                     if !payload.is_empty() {
-                        let retval = payload.get(0).unwrap();
+                        let retval = payload.first().unwrap();
                         let payload = &payload[1..];
                         let apids = parse_ctrl_log_info_payload(*retval, is_big_endian, payload);
                         if !apids.is_empty() {

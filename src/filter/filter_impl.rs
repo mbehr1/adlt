@@ -7,7 +7,7 @@ use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json::Value;
 use std::str::FromStr; // todo??? or in crate::?
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FilterKind {
     Positive = 0,
