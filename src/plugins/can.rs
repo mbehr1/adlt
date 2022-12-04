@@ -174,7 +174,7 @@ impl Plugin for CanPlugin {
 
                 if !payload.is_empty() {
                     // query info on the channel names:
-                    let retval = payload.get(0).unwrap();
+                    let retval = payload.first().unwrap();
                     let payload = &payload[1..];
                     let apids = parse_ctrl_log_info_payload(*retval, is_big_endian, payload);
                     if apids.len() == 1 {

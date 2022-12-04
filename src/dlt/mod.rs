@@ -19,7 +19,7 @@ pub struct DltChar4 {
     char4: [u8; 4], // String, // todo u8,4 array?
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ParseNonAsciiError;
 
 impl DltChar4 {
@@ -221,7 +221,7 @@ pub(crate) const DLT_STD_HDR_HAS_TIMESTAMP: u8 = 1 << 4;
 
 pub(crate) const DLT_STD_HDR_VERSION: u8 = 0x1 << 5; // 3 bits (5,6,7) max.  [Dlt299]
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DltStandardHeader {
     pub htyp: u8,
     pub mcnt: u8,
@@ -387,7 +387,7 @@ impl DltStandardHeader {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DltMessageLogType {
     Fatal = 1,
     Error,
@@ -411,7 +411,7 @@ impl DltMessageLogType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DltMessageTraceType {
     Variable = 1,
     FunctionIn,
@@ -433,7 +433,7 @@ impl DltMessageTraceType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DltMessageNwType {
     Ipc = 1,
     Can,
@@ -457,7 +457,7 @@ impl DltMessageNwType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DltMessageControlType {
     Request = 1,
     Response,
@@ -475,7 +475,7 @@ impl DltMessageControlType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DltMessageType {
     Log(DltMessageLogType),
     AppTrace(DltMessageTraceType),
@@ -483,7 +483,7 @@ pub enum DltMessageType {
     Control(DltMessageControlType),
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DltExtendedHeader {
     pub verb_mstp_mtin: u8,
     pub noar: u8,
@@ -541,7 +541,7 @@ impl DltExtendedHeader {
 /// anyhow prepare a type so that it can be easily changed later.
 pub type DltMessageIndexType = u32;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DltMessage {
     pub index: DltMessageIndexType,
     pub reception_time_us: u64, // from storage header, ms would be sufficent but needs same 64 bit
@@ -1056,7 +1056,7 @@ impl DltMessage {
                         DltMessageControlType::Response => {
                             // todo dump first byte as response result
                             if !payload.is_empty() {
-                                let retval = payload.get(0).unwrap();
+                                let retval = payload.first().unwrap();
                                 if *retval < 5u8 || *retval == 8u8 {
                                     write!(
                                         &mut text,
@@ -1286,7 +1286,7 @@ pub const DLT_SCOD_UTF8: u32 = 0x00008000;
 pub const DLT_SCOD_HEX: u32 = 0x00010000;
 pub const DLT_SCOD_BIN: u32 = 0x00018000;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DltArg<'a> {
     pub(crate) type_info: u32, // in host endianess already
     pub is_big_endian: bool,   // for the payload raw

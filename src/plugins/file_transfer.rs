@@ -535,15 +535,12 @@ impl FileTransferPlugin {
             .collect::<Vec<_>>();
         if !completed_transfers.is_empty() {
             if let Some(internal_data) = &mut state.internal_data {
-                match internal_data.downcast_mut::<FileTransferStateData>() {
-                    Some(internal_data) => {
-                        for (idx, t) in completed_transfers {
-                            internal_data
-                                .completed_transfers
-                                .insert(idx, std::mem::take(&mut t.file_data));
-                        }
+                if let Some(internal_data) = internal_data.downcast_mut::<FileTransferStateData>() {
+                    for (idx, t) in completed_transfers {
+                        internal_data
+                            .completed_transfers
+                            .insert(idx, std::mem::take(&mut t.file_data));
                     }
-                    None => {}
                 }
             }
         }
