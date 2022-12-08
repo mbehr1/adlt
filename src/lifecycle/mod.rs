@@ -21,10 +21,15 @@ pub type LifecycleItem = Lifecycle; // Box<Lifecycle>; V needs to be Eq+Hash+Sha
                                     // std::sync::Arc ... cannot borrow data in an Arc as mutable -> mod.rs:149
                                     // RwLock&Mutex misses ShallowCopy, Eq and Hash
 
-fn new_lifecycle_item(lc: Lifecycle) -> LifecycleItem {
+fn new_lifecycle_item(lc: &Lifecycle, idx: DltMessageIndexType) -> LifecycleItem {
+    let mut lc = lc.clone();
+    // we have to update the max_msg_index_update here as well as
+    // otherwise buffered lcs are broadcasted with a too old index
+    // and thus not send via remote
+    if idx > lc.max_msg_index_update {
+        lc.max_msg_index_update = idx;
+    }
     lc
-    //LifecycleItem::from(lc) // Box::from(lc)
-    //std::sync::Arc::new(std::cell::Cell::from(lc))
 }
 
 #[derive(Debug, Clone)]
@@ -484,6 +489,7 @@ where
     let mut merged_needed_id: LifecycleId = 0;
     let start = std::time::Instant::now();
     let mut lcs_w_needs_refresh = false;
+    let mut last_msg_index: DltMessageIndexType = 0;
     for mut msg in inflow {
         /* if msg.ecu == DltChar4::from_str("ECU").unwrap() && msg.timestamp_dms > 0 {
             println!(
@@ -496,6 +502,7 @@ where
             );
         }*/
         // get the lifecycles for the ecu from that msg:
+        last_msg_index = msg.index;
         let msg_reception_time = msg.reception_time_us;
 
         let msg_timestamp_us = msg.timestamp_us();
@@ -549,7 +556,7 @@ where
                             } else {
                                 #[allow(clippy::collapsible_else_if)]
                                 if merged_needed_id != lc2.id {
-                                    println!("merge needed but prev_lc not buffered anymore! (todo!):\n {:?}\n {:?} msg #{}", prev_lc, lc2, msg.index);
+                                    println!("merge needed but prev_lc not buffered anymore! (todo!):\n {:?}\n {:?} msg #{}", prev_lc, lc2, last_msg_index);
                                     merged_needed_id = lc2.id;
                                 }
                                 //panic!("todo shouldn't happen yet!");
@@ -579,7 +586,7 @@ where
                         // this assert is met. so we can ignore the above prev_lc merge part assert!(!buffered_lcs.contains(&lc2.id));
                         // and prev_lc is still buffered as well to as well not contained.
                         // to update nr of msgs in lifecycle and end time:
-                        lcs_w.update(lc2.id, lc2.clone());
+                        lcs_w.update(lc2.id, new_lifecycle_item(lc2, last_msg_index));
                         lcs_w_needs_refresh = true;
                     }
                 }
@@ -635,7 +642,7 @@ where
                             for lc in &buffered_lcs {
                                 println!(" buffered_lc={}", lc);
                             }*/
-                            lcs_w.update(lc.id, new_lifecycle_item(lc.clone())); // update is safer and handles add case as well lcs_w.insert(lc.id, new_lifecycle_item(lc.clone()));
+                            lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index)); // update is safer and handles add case as well lcs_w.insert(lc.id, new_lifecycle_item(lc.clone()));
                             lcs_w_needs_refresh = true;
 
                             // if the first msg in buffered_msgs belongs to this confirmed lc
@@ -701,7 +708,7 @@ where
         'outer: for vs in ecu_map.values() {
             for v in vs {
                 if v.id == lc_id {
-                    lcs_w.update(lc_id, new_lifecycle_item(v.clone()));
+                    lcs_w.update(lc_id, new_lifecycle_item(v, last_msg_index));
                     // println!("lcs_w content added at end id={:?} lc={:?}", lc_id, *v);
                     break 'outer;
                 }
