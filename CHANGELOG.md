@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.29.0 - 2022-12-18
+#### Features
+- **(convert)** add glob pattern support - (68df623) - Matthias Behr
+
+- - -
+
 ## v0.28.4 - 2022-12-08
 #### Bug Fixes
 - bump version to v0.28.3 - (61da2b1) - Matthias Behr
