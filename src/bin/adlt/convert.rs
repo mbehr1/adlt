@@ -1,5 +1,6 @@
 use chrono::{Local, TimeZone};
 use clap::{App, Arg, SubCommand};
+use glob::{glob_with, MatchOptions};
 use slog::{crit, debug, error, info, warn};
 use std::fs::File;
 use std::io::prelude::*;
@@ -64,7 +65,7 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
                     .required(true)
                     .multiple(true)
                     .min_values(1)
-                    .help("input DLT files to process. If multiple files are provided they are sorted by their first DLT message reception time."),
+                    .help("input DLT files to process. If multiple files are provided they are sorted by their first DLT message reception time. Can contain glob patterns like **/*.dlt"),
             ).arg(
                 Arg::with_name("index_first")
                 .short("b")
@@ -119,7 +120,11 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     sub_m: &clap::ArgMatches,
     mut writer_screen: W,
 ) -> std::io::Result<ConvertResult<W>> {
-    let mut input_file_names: Vec<&str> = sub_m.values_of("file").unwrap().collect();
+    let mut input_file_names: Vec<String> = sub_m
+        .values_of("file")
+        .unwrap()
+        .map(|a| a.to_string())
+        .collect();
 
     let output_style: OutputStyle = if sub_m.is_present("hex") {
         OutputStyle::Hex
@@ -198,35 +203,76 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids), "sort_by_time" => sort_by_time, "output_file" => &output_file, "filter_file" => &filter_file, "filters" =>  format!("{:?}",&filters) );
 
     // if we have multiple files we do need to sort them first by the first log reception_time!
-    if input_file_names.len() > 1 {
-        // map input_file_names to name/first msg
-        let file_msgs = input_file_names.iter().map(|&f_name| {
-            let fi = File::open(f_name);
+    // we follow this path even if there is just one paramater as it might be a glob expression
+
+    // map input_file_names to name/first msg
+    let file_msgs = input_file_names.iter().flat_map(|f_name| {
+            let path = std::path::Path::new(f_name);
+            let fi = File::open(path);
             match fi {
                 Ok(mut f) => {
-                    let file_ext = std::path::Path::new(f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
+                    let file_ext = std::path::Path::new(&f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
                     let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024);
                     if m1.is_none() {
-                        warn!(log, "file {} (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+                        warn!(log, "file {} ({}) (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext;);
                     }
-                    (f_name, m1)
+                    vec![(path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).to_string_lossy().to_string(), Ok(m1))]
                 }
                 _ => {
-                    warn!(log, "couldn't open {}. Skipping!", f_name;);
-                    (f_name, None)
+                    // file does not exist. Let's check whether its a glob expression (as windows doesn't support glob on cmd)
+                    let options = MatchOptions {
+                        case_sensitive: false,
+                        require_literal_separator: false,
+                        require_literal_leading_dot: false,
+                    };
+                    let mut globbed_names = vec![];
+                    if let Ok(paths) = glob_with(f_name, options) {
+                        for glob_name in paths.flatten() {
+                            debug!(log, "found '{}' via glob '{}'", glob_name.display(), f_name;);
+                            globbed_names.push(glob_name);
+                        }
+                    }
+                    if !globbed_names.is_empty() {
+                        globbed_names.iter().map(|glob_name|{
+                            let fi = File::open(glob_name);
+                            if let Ok(mut f)=fi {
+                                let file_ext = std::path::Path::new(glob_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
+                                let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024);
+                                if m1.is_none() {
+                                    warn!(log, "globbed file '{}' (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+                                }
+                                let path_glob = std::path::Path::new(glob_name);
+                                (path_glob.canonicalize().unwrap_or_else(|_|glob_name.to_path_buf()).to_string_lossy().to_string(), Ok(m1))
+                            }else{
+                                (glob_name.to_string_lossy().to_string(), Err(std::io::Error::from(std::io::ErrorKind::NotFound)))
+                            }
+                        }).collect::<Vec<_>>()
+                    }else{
+                        warn!(log, "couldn't open '{}'. Skipping!", f_name;);
+                        vec![(f_name.to_owned(), Err(std::io::Error::from(std::io::ErrorKind::NotFound)))]
+                    }
                 }
             }
         });
-        let mut file_msgs: Vec<_> = file_msgs.filter(|(_a, b)| b.is_some()).collect();
-        file_msgs.sort_by(|a, b| {
-            a.1.as_ref()
-                .unwrap()
-                .reception_time_us
-                .cmp(&b.1.as_ref().unwrap().reception_time_us)
-        });
-        input_file_names = file_msgs.iter().map(|(a, _b)| *a).collect();
-        debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
+
+    let (files_ok, _files_err): (Vec<_>, Vec<_>) = file_msgs.partition(|(_, b)| b.is_ok());
+
+    if files_ok.is_empty() {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
     }
+
+    let mut file_msgs: Vec<_> = files_ok
+        .into_iter()
+        .map(|(a, b)| (a, b.unwrap()))
+        .filter(|(_a, b)| b.is_some())
+        .map(|(a, b)| (a, b.unwrap()))
+        .collect();
+    file_msgs.sort_by(|a, b| a.1.reception_time_us.cmp(&b.1.reception_time_us));
+    // todo if the reception time is similar for duplicates the ones with same name might not be consecutive! (will need additional sorting)
+
+    input_file_names = file_msgs.iter().map(|(a, _b)| a.clone()).collect();
+    input_file_names.dedup(); // remove duplicates now that they are sorted/consecutive
+    debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
 
     // determine plugins
     let plugins_active: Vec<Box<dyn Plugin + Send>> = if do_anonimize {
@@ -386,12 +432,12 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
     let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
 
-    for input_file_name in input_file_names {
+    for input_file_name in &input_file_names {
         let fi = File::open(input_file_name)?;
         info!(log, "opened file {} {:?}", &input_file_name, &fi);
         let buf_reader = LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
         let mut it = get_dlt_message_iterator(
-            std::path::Path::new(input_file_name)
+            std::path::Path::new(&input_file_name)
                 .extension()
                 .and_then(|s| s.to_str())
                 .unwrap_or(""),
@@ -514,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn params1() {
+    fn params_file_non_existent() {
         let logger = new_logger();
         let arg_vec = vec!["t", "convert", "foo.dlt"];
         let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
@@ -524,6 +570,34 @@ mod tests {
         assert!(sub_m.is_present("file"));
         let r = convert(&logger, sub_m, std::io::stdout());
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn params_file_glob() {
+        let logger = new_logger();
+        let arg_vec = vec!["t", "convert", "tests/lc_ex00[2-3].dlt"];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
+        assert_eq!(19741, r.messages_processed);
+    }
+
+    #[test]
+    fn params_file_glob_autoremove_dup() {
+        let logger = new_logger();
+        let arg_vec = vec![
+            "t",
+            "convert",
+            "tests/lc_ex00[2-3].dlt",
+            "tests/lc_ex002.dlt",
+            "tests/../tests/lc_ex00[2-3].dlt",
+        ];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
+        assert_eq!(19741, r.messages_processed);
     }
 
     #[test]
