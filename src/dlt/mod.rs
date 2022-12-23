@@ -1196,8 +1196,11 @@ impl DltMessage {
         DltMessage::from_headers(1, sh, stdh, &add_header_buf, payload_buf.to_vec())
     }
 
-    #[cfg(test)]
     /// return a verbose dltmessage with the noar and payload
+    ///
+    /// should only be used for testing
+    ///
+    /// ECU1/APID/CTID is used
     pub fn get_testmsg_with_payload(big_endian: bool, noar: u8, payload_buf: &[u8]) -> DltMessage {
         let sh = DltStorageHeader {
             secs: 0,
@@ -1255,15 +1258,15 @@ pub struct DltMessageArgIterator<'a> {
 /// DLT argument encoding mask for type lengths DLT_TYLE_*
 const DLT_TYPE_INFO_MASK_TYLE: u32 = 0x0000000f;
 
-pub(crate) const DLT_TYPE_INFO_BOOL: u32 = 0x00000010;
-pub(crate) const DLT_TYPE_INFO_SINT: u32 = 0x00000020;
-pub(crate) const DLT_TYPE_INFO_UINT: u32 = 0x00000040;
-pub(crate) const DLT_TYPE_INFO_FLOA: u32 = 0x00000080;
+pub const DLT_TYPE_INFO_BOOL: u32 = 0x00000010;
+pub const DLT_TYPE_INFO_SINT: u32 = 0x00000020;
+pub const DLT_TYPE_INFO_UINT: u32 = 0x00000040;
+pub const DLT_TYPE_INFO_FLOA: u32 = 0x00000080;
 /// DLT argument encoding for array of standard types
 const DLT_TYPE_INFO_ARAY: u32 = 0x00000100;
 
-pub(crate) const DLT_TYPE_INFO_STRG: u32 = 0x00000200;
-pub(crate) const DLT_TYPE_INFO_RAWD: u32 = 0x00000400;
+pub const DLT_TYPE_INFO_STRG: u32 = 0x00000200;
+pub const DLT_TYPE_INFO_RAWD: u32 = 0x00000400;
 /// DLT argument encoding for additional information to a variable (name and unit)
 const DLT_TYPE_INFO_VARI: u32 = 0x00000800;
 /// DLT argument encoding for FIXP encoding with quantization and offset
@@ -1275,10 +1278,10 @@ const DLT_TYPE_INFO_STRU: u32 = 0x00004000;
 /// DLT argument encoding mask for the string types DLT_SCOD_*
 const DLT_TYPE_INFO_MASK_SCOD: u32 = 0x00038000;
 
-pub(crate) const DLT_TYLE_8BIT: u8 = 1;
-pub(crate) const DLT_TYLE_16BIT: u8 = 2;
-pub(crate) const DLT_TYLE_32BIT: u8 = 3;
-pub(crate) const DLT_TYLE_64BIT: u8 = 4;
+pub const DLT_TYLE_8BIT: u8 = 1;
+pub const DLT_TYLE_16BIT: u8 = 2;
+pub const DLT_TYLE_32BIT: u8 = 3;
+pub const DLT_TYLE_64BIT: u8 = 4;
 const DLT_TYLE_128BIT: u8 = 5;
 
 pub const DLT_SCOD_ASCII: u32 = 0x00000000;
@@ -1288,7 +1291,7 @@ pub const DLT_SCOD_BIN: u32 = 0x00018000;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct DltArg<'a> {
-    pub(crate) type_info: u32, // in host endianess already
+    pub type_info: u32,        // in host endianess already
     pub is_big_endian: bool,   // for the payload raw
     pub payload_raw: &'a [u8], // data within is
 }
