@@ -1,7 +1,7 @@
 use chrono::{Local, TimeZone};
-use clap::{App, Arg, SubCommand};
+use clap::{Arg, Command};
 use glob::{glob_with, MatchOptions};
-use slog::{crit, debug, error, info, warn};
+use slog::{debug, error, info, warn};
 use std::{
     fs::File,
     io::{prelude::*, BufWriter},
@@ -22,24 +22,26 @@ use adlt::{
 enum OutputStyle {
     Hex,
     Ascii,
-    Mixed,
+    //Mixed,
     HeaderOnly,
     None,
 }
 
-pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
+pub fn add_subcommand(app: Command) -> Command {
     app.subcommand(
-        SubCommand::with_name("convert").about("Open DLT files and show on console or export to DLT file")
+        Command::new("convert").about("Open DLT files and show on console or export to DLT file")
              .arg(
-                Arg::with_name("hex")
-                    .short("x")
+                Arg::new("hex")
+                    .short('x')
+                    .action(clap::ArgAction::SetTrue)
                     .group("style")
                     .display_order(2)
                     .help("Print DLT file; payload as hex"),
             )
             .arg(
-                Arg::with_name("ascii")
-                    .short("a")
+                Arg::new("ascii")
+                    .short('a')
+                    .action(clap::ArgAction::SetTrue)
                     .group("style")
                     .display_order(1)
                     .help("Print DLT file; payload as ASCII"),
@@ -52,80 +54,86 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
                     .help("print DLT file; payload as ASCII and hex"),
             )*/
             .arg(
-                Arg::with_name("headers")
-                    .short("s")
+                Arg::new("headers")
+                    .short('s')
+                    .action(clap::ArgAction::SetTrue)
                     .group("style")
                     .display_order(1)
                     .help("Print DLT file; only headers"),
             )
             .arg(
-                Arg::with_name("filter_file")
-                .short("f")
-                .takes_value(true)
+                Arg::new("filter_file")
+                .short('f')
+                .num_args(1)
                 .help("File with filters to apply. Can be in dlt-convert format or dlt-viewer dlf format.")
             )
             .arg(
-                Arg::with_name("file")
+                Arg::new("file")
                     .required(true)
-                    .multiple(true)
-                    .min_values(1)
+                    .num_args(1..)
                     .help("Input DLT files to process. If multiple files are provided they are sorted by their first DLT message reception time. Can contain glob patterns like **/*.dlt"),
             ).arg(
-                Arg::with_name("index_first")
-                .short("b")
-                .takes_value(true)
+                Arg::new("index_first")
+                .short('b')
+                .num_args(1)
+                .value_parser(clap::value_parser!(adlt::dlt::DltMessageIndexType))
                 .help("First message (index) to be handled. Index is from the original file before any filters are applied.")
             ).arg(
-                Arg::with_name("index_last")
-                .short("e")
-                .takes_value(true)
+                Arg::new("index_last")
+                .short('e')
+                .num_args(1)
+                .value_parser(clap::value_parser!(adlt::dlt::DltMessageIndexType))
                 .help("Last message (index) to be handled")
             ).arg(
-                Arg::with_name("filter_lc_ids")
-                .short("l")
+                Arg::new("filter_lc_ids")
+                .short('l')
                 .long("lcs")
-                .multiple(true)
-                .min_values(1)
-                .help("Filter for the specified lifecycle ids.")
+                .action(clap::ArgAction::Set)
+                .require_equals(true)
+                .num_args(1..)
+                .value_parser(clap::value_parser!(u32))
+                .value_delimiter(',')
+                .help("Filter for the specified lifecycle ids. E.g. -l=1,2,3 . Seperate multiple lifecycles by ','")
             ).arg(
-                Arg::with_name("output_file")
-                .short("o")
-                .takes_value(true)
+                Arg::new("output_file")
+                .short('o')
+                .num_args(1)
                 .help("Output messages in new DLT file")
             ).arg(
-                Arg::with_name("sort")
+                Arg::new("sort")
                 .long("sort")
-                .takes_value(false)
+                .num_args(0)
                 .help("Sort by timestamp. Sorts by timestamp per lifecycle.")
             )
             .arg(
-                Arg::with_name("anon")
+                Arg::new("anon")
                 .long("anon")
-                .takes_value(false)
+                .num_args(0)
                 .help("Anonymize the output. Rewrite APID, CTIDs,sw_versiona and payload. Useful only for lifecycle detection tests.")
             )
             .arg(
-                Arg::with_name("file_transfer")
+                Arg::new("file_transfer")
                 .long("file_transfer")
+                .value_name("glob pattern")
                 .require_equals(true)
-                .takes_value(true)
+                .num_args(1)
                 .help("Pattern to export files included in logs that match the given glob pattern. e.g. ='*.bin'. Existing files are not overwritten!")
             )
             .arg(
-                Arg::with_name("file_transfer_path")
+                Arg::new("file_transfer_path")
                 .long("file_transfer_path")
-                .takes_value(true)
+                .num_args(1)
                 .help("Path where to store exported files. Defaults to current dir. Directory will be created if it doesn't exist.")
             )
             .arg(
-                Arg::with_name("file_transfer_apid")
+                Arg::new("file_transfer_apid")
                 .long("file_transfer_apid")
-                .takes_value(true)
+                .num_args(1)
                 .help("APID used for file transfers. E.g. SYS. Providing an apid speeds up the file transfer extraction significantly!")
             ).arg(
-                Arg::with_name("file_transfer_ctid")
+                Arg::new("file_transfer_ctid")
                 .long("file_transfer_ctid")
-                .takes_value(true)
+                .num_args(1)
                 .help("CTID used for file transfers. E.g. FILE. Providing a ctid speeds up the file transfer extraction significantly!")
             ),
     )
@@ -149,61 +157,46 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     mut writer_screen: W,
 ) -> std::io::Result<ConvertResult<W>> {
     let mut input_file_names: Vec<String> = sub_m
-        .values_of("file")
+        .get_many::<String>("file")
         .unwrap()
-        .map(|a| a.to_string())
+        .map(|a| a.to_owned())
         .collect();
 
-    let output_style: OutputStyle = if sub_m.is_present("hex") {
+    let output_style: OutputStyle = if sub_m.get_flag("hex") {
         OutputStyle::Hex
-    } else if sub_m.is_present("ascii") {
+    } else if sub_m.get_flag("ascii") {
         OutputStyle::Ascii
-    } else if sub_m.is_present("mixed") {
-        OutputStyle::Mixed
-    } else if sub_m.is_present("headers") {
+    } else if sub_m.get_flag("headers") {
         OutputStyle::HeaderOnly
     } else {
         OutputStyle::None
     };
 
-    let sort_by_time = sub_m.is_present("sort");
+    let sort_by_time = sub_m.get_flag("sort");
 
-    let do_anonimize = sub_m.is_present("anon");
+    let do_anonimize = sub_m.get_flag("anon");
 
-    let do_file_transfer = sub_m.is_present("file_transfer");
+    let do_file_transfer = sub_m.get_many::<String>("file_transfer").is_some();
 
-    let index_first: adlt::dlt::DltMessageIndexType = match sub_m.value_of("index_first") {
-        None => 0,
-        Some(s) => match s.parse::<adlt::dlt::DltMessageIndexType>() {
-            Ok(n) => n,
-            Err(_) => {
-                crit!(log, "index_first '{}' is not a number/index type!", s);
-                0 // lets default to 0. could stop as well with u64::MAX
-            }
-        },
-    };
-    let index_last: adlt::dlt::DltMessageIndexType = match sub_m.value_of("index_last") {
-        None => adlt::dlt::DltMessageIndexType::MAX,
-        Some(s) => match s.parse::<adlt::dlt::DltMessageIndexType>() {
-            Ok(n) => n,
-            Err(_) => {
-                crit!(log, "index_last '{}' is not a number/index type!", s);
-                0 // let it fail here
-            }
-        },
-    };
+    let index_first: adlt::dlt::DltMessageIndexType =
+        match sub_m.get_one::<adlt::dlt::DltMessageIndexType>("index_first") {
+            None => 0,
+            Some(s) => *s,
+        };
+    let index_last: adlt::dlt::DltMessageIndexType =
+        match sub_m.get_one::<adlt::dlt::DltMessageIndexType>("index_last") {
+            None => adlt::dlt::DltMessageIndexType::MAX,
+            Some(s) => *s,
+        };
 
-    let filter_lc_ids: std::collections::BTreeSet<u32> = match sub_m.values_of("filter_lc_ids") {
-        None => std::collections::BTreeSet::new(),
-        Some(s) => s
-            .map(|s| s.parse::<u32>())
-            .filter(|a| !a.is_err())
-            .map(|s| s.unwrap())
-            .collect(),
-    };
+    let filter_lc_ids: std::collections::BTreeSet<u32> =
+        match sub_m.get_many::<u32>("filter_lc_ids") {
+            None => std::collections::BTreeSet::new(),
+            Some(s) => s.copied().collect(),
+        };
 
     // parse filter file if provided:
-    let filter_file = sub_m.value_of("filter_file");
+    let filter_file = sub_m.get_one::<String>("filter_file");
     let filters = if let Some(filter_file) = filter_file {
         // try to open the file in either dlf/xml format or dlt-convert "APID CTID " format.
         let file = File::open(filter_file)?;
@@ -228,7 +221,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         vec![]
     };
 
-    let output_file = sub_m.value_of("output_file").map(|s| s.to_string());
+    let output_file = sub_m.get_one::<String>("output_file").map(|s| s.to_owned());
     info!(log, "convert have {} input files", input_file_names.len(); "index_first"=>index_first, "index_last"=>index_last);
     debug!(log, "convert "; "input_file_names" => format!("{:?}",&input_file_names), "filter_lc_ids" => format!("{:?}",filter_lc_ids), "sort_by_time" => sort_by_time, "output_file" => &output_file, "filter_file" => &filter_file, "filters" =>  format!("{:?}",&filters) );
 
@@ -310,15 +303,15 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         plugins_active.push(Box::new(AnonymizePlugin::new("anon")));
     }
     if do_file_transfer {
-        if let Some(ft_config) = serde_json::json!({"name":"file_transfer","allowSave":false, "keepFLDA":true,"autoSavePath":sub_m.value_of("file_transfer_path").unwrap_or("./"), "autoSaveGlob":sub_m.value_of("file_transfer").unwrap()}).as_object_mut(){
-            if let Some(apid) = sub_m.value_of("file_transfer_apid") {
+        if let Some(ft_config) = serde_json::json!({"name":"file_transfer","allowSave":false, "keepFLDA":true,"autoSavePath":sub_m.get_one::<String>("file_transfer_path").map_or("./", |s|s), "autoSaveGlob":sub_m.get_one::<String>("file_transfer").unwrap()}).as_object_mut(){
+            if let Some(apid) = sub_m.get_one::<String>("file_transfer_apid") {
                 // e.g. "SYS"
                 ft_config.insert(
                     "apid".to_owned(),
                     serde_json::Value::String(apid.to_string()),
                 );
             }
-            if let Some(ctid) = sub_m.value_of("file_transfer_ctid") {
+            if let Some(ctid) = sub_m.get_one::<String>("file_transfer_ctid") {
                 // e.g. "FILE"
                 ft_config.insert(
                     "ctid".to_owned(),
@@ -675,11 +668,10 @@ mod tests {
     fn params_file_non_existent() {
         let logger = new_logger();
         let arg_vec = vec!["t", "convert", "foo.dlt"];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (c, sub_m) = sub_c.subcommand();
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand().unwrap();
         assert_eq!("convert", c);
-        let sub_m = sub_m.expect("no matches?");
-        assert!(sub_m.is_present("file"));
+        assert!(sub_m.get_many::<String>("file").is_some());
         let r = convert(&logger, sub_m, std::io::stdout());
         assert!(r.is_err());
     }
@@ -688,9 +680,8 @@ mod tests {
     fn params_file_glob() {
         let logger = new_logger();
         let arg_vec = vec!["t", "convert", "tests/lc_ex00[2-3].dlt"];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand().unwrap();
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(19741, r.messages_processed);
     }
@@ -705,9 +696,8 @@ mod tests {
             "tests/lc_ex002.dlt",
             "tests/../tests/lc_ex00[2-3].dlt",
         ];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand().unwrap();
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(19741, r.messages_processed);
     }
@@ -720,11 +710,10 @@ mod tests {
         let file_path = file.path().to_str().unwrap();
 
         let arg_vec = vec!["t", "convert", file_path];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (c, sub_m) = sub_c.subcommand();
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand().unwrap();
         assert_eq!("convert", c);
-        let sub_m = sub_m.expect("no matches?");
-        assert!(sub_m.is_present("file"));
+        assert!(sub_m.get_many::<String>("file").is_some());
 
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(0, r.messages_output);
@@ -760,11 +749,11 @@ mod tests {
         file.flush().unwrap();
 
         let arg_vec = vec!["t", "convert", file_path.as_str()];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (c, sub_m) = sub_c.subcommand();
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand().unwrap();
         assert_eq!("convert", c);
-        let sub_m = sub_m.expect("no matches?");
-        assert!(sub_m.is_present("file"));
+        assert!(!sub_m.get_flag("hex"));
+        assert!(sub_m.get_many::<String>("file").is_some());
 
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(0, r.messages_output);
@@ -809,11 +798,11 @@ mod tests {
         file.flush().unwrap();
 
         let arg_vec = vec!["t", "convert", "-s", "-b2", "-e5", file_path.as_str()];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (c, sub_m) = sub_c.subcommand();
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand().unwrap();
         assert_eq!("convert", c);
-        let sub_m = sub_m.expect("no matches?");
-        assert!(sub_m.is_present("file"));
+        assert!(sub_m.get_flag("headers"));
+        assert!(sub_m.get_many::<String>("file").is_some());
 
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(5 - 2 + 1, r.messages_output);
@@ -856,9 +845,8 @@ mod tests {
         file.flush().unwrap();
 
         let arg_vec = vec!["t", "convert", "-x", "-e2", file_path.as_str()];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_c, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
 
         let output_buf = Vec::new();
         let output = std::io::BufWriter::new(output_buf);
@@ -911,11 +899,10 @@ mod tests {
         file.flush().unwrap();
 
         let arg_vec = vec!["t", "convert", "-a", "--sort", file_path.as_str()];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (c, sub_m) = sub_c.subcommand();
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand().unwrap();
         assert_eq!("convert", c);
-        let sub_m = sub_m.expect("no matches?");
-        assert!(sub_m.is_present("file"));
+        assert!(sub_m.get_many::<String>("file").is_some());
 
         let output_buf = Vec::new();
         let output = std::io::BufWriter::new(output_buf);
@@ -995,9 +982,8 @@ mod tests {
             file3_path.as_str(),
             file1_path.as_str(),
         ];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_c, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
 
         let output_buf = Vec::new();
         let output = std::io::BufWriter::new(output_buf);
@@ -1063,9 +1049,8 @@ mod tests {
             "-o",
             &output_file_path,
         ];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand().unwrap();
 
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(5 - 2 + 1, r.messages_output);
@@ -1074,9 +1059,8 @@ mod tests {
 
         // check that output file has now the expected (number of) msgs:
         let arg_vec = vec!["t", "convert", &output_file_path];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand().unwrap();
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(5 - 2 + 1, r.messages_processed);
         assert!(output_file.close().is_ok());
@@ -1121,9 +1105,8 @@ mod tests {
             filter_file_path.as_str(),
             file_path.as_str(),
         ];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_c, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
 
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(0, r.messages_output);
@@ -1145,9 +1128,8 @@ mod tests {
             filter_file_path.as_str(),
             file_path.as_str(),
         ];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_c, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
 
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(0, r.messages_output);
@@ -1235,9 +1217,8 @@ mod tests {
             "CTID",
             file_path.as_str(),
         ];
-        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
-        let (_c, sub_m) = sub_c.subcommand();
-        let sub_m = sub_m.expect("no matches?");
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
 
         let output_buf = Vec::new();
         let output = std::io::BufWriter::new(output_buf);

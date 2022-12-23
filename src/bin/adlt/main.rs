@@ -2,7 +2,7 @@
 mod convert;
 mod remote;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 // todo use rayon::prelude::*;
 use std::io::{self};
 // use std::sync::mpsc::channel;
@@ -13,15 +13,15 @@ use slog::{o, Drain};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // io::Result<()> {
-    let cmd_app = App::new("automotive dlt tool")
+    let cmd_app = Command::new("automotive dlt tool")
         .version(clap::crate_version!())
         .author("Matthias Behr <mbehr+adlt@mcbehr.de>")
         .about("Tool to handle automotive diagnostic log- and trace- (DLT) files.")
         .arg(
-            Arg::with_name("verbose")
+            Arg::new("verbose")
                 .global(true)
-                .short("v")
-                .multiple(true)
+                .short('v')
+                .action(clap::ArgAction::Count)
                 .help("verbosity level"),
         );
     let cmd_app = convert::add_subcommand(cmd_app);
@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -v +Info -vv +Debug -vvv +Trace
     // Debug is removed at build time in Release builds by default!
     // Trace is removed at build time in Debug builds by default
-    let min_log_level = match matches.occurrences_of("verbose") {
+    let min_log_level = match matches.get_count("verbose") {
         0 => slog::Level::Warning,
         1 => slog::Level::Info,
         2 => slog::Level::Debug,
@@ -56,12 +56,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     return match matches.subcommand() {
-        ("convert", Some(sub_m)) => {
+        Some(("convert", sub_m)) => {
             convert::convert(&log, sub_m, std::io::BufWriter::new(std::io::stdout()))
                 .map_err(|e| e.into())
                 .map(|_x| ())
         } // dont return anything here
-        ("remote", Some(sub_m)) => remote::remote(&log, sub_m),
+        Some(("remote", sub_m)) => remote::remote(&log, sub_m),
         _ => {
             return Err(Box::new(io::Error::new(
                 io::ErrorKind::Unsupported,

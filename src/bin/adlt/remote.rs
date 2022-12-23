@@ -14,7 +14,7 @@ use adlt::{
         LowMarkBufReader,
     },
 };
-use clap::{App, Arg, SubCommand};
+use clap::{Arg, Command};
 use slog::{debug, error, info, warn};
 use std::net::TcpListener;
 use std::{collections::BTreeMap, time::Instant};
@@ -38,16 +38,17 @@ const BINCODE_CONFIG: config::Configuration<
     config::NoLimit,
 > = config::legacy(); // todo choose local endianess
 
-pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
+pub fn add_subcommand(app: Command) -> Command {
     app.subcommand(
-        SubCommand::with_name("remote")
+        Command::new("remote")
             .about("Provide remote server functionalities")
             .arg(
-                Arg::with_name("port")
-                    .short("p")
-                    .takes_value(true)
+                Arg::new("port")
+                    .short('p')
+                    .num_args(1)
                     .help("websocket port to use")
-                    .default_value("6665"),
+                    .default_value("6665")
+                    .value_parser(clap::value_parser!(u16)),
             ),
     )
 }
@@ -59,7 +60,7 @@ pub fn remote(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // we do use log only if for local websocket related issues
     // for the remote part we do use an own logger logging to the websocket itself todo
-    let port = sub_m.value_of("port").unwrap().parse::<u16>()?;
+    let port = sub_m.get_one::<u16>("port").unwrap();
     info!(log, "remote starting"; "port" => port);
 
     let server_addr = format!("127.0.0.1:{}", port); // todo ipv6???
