@@ -46,7 +46,7 @@ fn bin_convert_ex2_lc_filter() {
     test_file.push("lc_ex002.dlt");
     // convert filter for a lifecycle
     let assert = cmd
-        .args(["convert", "-l", "3", "-a", &test_file.to_string_lossy()])
+        .args(["convert", "-l=3", "-a", &test_file.to_string_lossy()])
         .assert();
     assert
         .stdout(predicate::str::contains(
