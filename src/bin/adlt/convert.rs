@@ -2,15 +2,19 @@ use chrono::{Local, TimeZone};
 use clap::{App, Arg, SubCommand};
 use glob::{glob_with, MatchOptions};
 use slog::{crit, debug, error, info, warn};
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufWriter;
-use std::sync::mpsc::channel;
+use std::{
+    fs::File,
+    io::{prelude::*, BufWriter},
+    sync::mpsc::channel,
+};
 
 use adlt::{
     dlt::DLT_MAX_STORAGE_MSG_SIZE,
     filter::functions::{filters_from_convert_format, filters_from_dlf},
-    plugins::{anonymize::AnonymizePlugin, plugin::Plugin, plugins_process_msgs},
+    plugins::{
+        anonymize::AnonymizePlugin, file_transfer::FileTransferPlugin, plugin::Plugin,
+        plugins_process_msgs,
+    },
     utils::{buf_as_hex_to_io_write, get_dlt_message_iterator, LowMarkBufReader},
 };
 
@@ -31,14 +35,14 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
                     .short("x")
                     .group("style")
                     .display_order(2)
-                    .help("print DLT file; payload as hex"),
+                    .help("Print DLT file; payload as hex"),
             )
             .arg(
                 Arg::with_name("ascii")
                     .short("a")
                     .group("style")
                     .display_order(1)
-                    .help("print DLT file; payload as ASCII"),
+                    .help("Print DLT file; payload as ASCII"),
             )
             /* .arg(
                 Arg::with_name("mixed")
@@ -52,53 +56,77 @@ pub fn add_subcommand<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
                     .short("s")
                     .group("style")
                     .display_order(1)
-                    .help("print DLT file; only headers"),
+                    .help("Print DLT file; only headers"),
             )
             .arg(
                 Arg::with_name("filter_file")
                 .short("f")
                 .takes_value(true)
-                .help("file with filters to apply. Can be in dlt-convert format or dlt-viewer dlf format.")
+                .help("File with filters to apply. Can be in dlt-convert format or dlt-viewer dlf format.")
             )
             .arg(
                 Arg::with_name("file")
                     .required(true)
                     .multiple(true)
                     .min_values(1)
-                    .help("input DLT files to process. If multiple files are provided they are sorted by their first DLT message reception time. Can contain glob patterns like **/*.dlt"),
+                    .help("Input DLT files to process. If multiple files are provided they are sorted by their first DLT message reception time. Can contain glob patterns like **/*.dlt"),
             ).arg(
                 Arg::with_name("index_first")
                 .short("b")
                 .takes_value(true)
-                .help("first message (index) to be handled. Index is from the original file before any filters are applied.")
+                .help("First message (index) to be handled. Index is from the original file before any filters are applied.")
             ).arg(
                 Arg::with_name("index_last")
                 .short("e")
                 .takes_value(true)
-                .help("last message (index) to be handled")
+                .help("Last message (index) to be handled")
             ).arg(
                 Arg::with_name("filter_lc_ids")
                 .short("l")
                 .long("lcs")
                 .multiple(true)
                 .min_values(1)
-                .help("filter for the specified lifecycle ids.")
+                .help("Filter for the specified lifecycle ids.")
             ).arg(
                 Arg::with_name("output_file")
                 .short("o")
                 .takes_value(true)
-                .help("output messages in new DLT file")
+                .help("Output messages in new DLT file")
             ).arg(
                 Arg::with_name("sort")
                 .long("sort")
                 .takes_value(false)
-                .help("sort by timestamp. Sorts by timestamp per lifecycle.")
+                .help("Sort by timestamp. Sorts by timestamp per lifecycle.")
             )
             .arg(
                 Arg::with_name("anon")
                 .long("anon")
                 .takes_value(false)
-                .help("anonymize the output. Rewrite APID, CTIDs,sw_versiona and payload. Useful only for lifecycle detection tests.")
+                .help("Anonymize the output. Rewrite APID, CTIDs,sw_versiona and payload. Useful only for lifecycle detection tests.")
+            )
+            .arg(
+                Arg::with_name("file_transfer")
+                .long("file_transfer")
+                .require_equals(true)
+                .takes_value(true)
+                .help("Pattern to export files included in logs that match the given glob pattern. e.g. ='*.bin'. Existing files are not overwritten!")
+            )
+            .arg(
+                Arg::with_name("file_transfer_path")
+                .long("file_transfer_path")
+                .takes_value(true)
+                .help("Path where to store exported files. Defaults to current dir. Directory will be created if it doesn't exist.")
+            )
+            .arg(
+                Arg::with_name("file_transfer_apid")
+                .long("file_transfer_apid")
+                .takes_value(true)
+                .help("APID used for file transfers. E.g. SYS. Providing an apid speeds up the file transfer extraction significantly!")
+            ).arg(
+                Arg::with_name("file_transfer_ctid")
+                .long("file_transfer_ctid")
+                .takes_value(true)
+                .help("CTID used for file transfers. E.g. FILE. Providing a ctid speeds up the file transfer extraction significantly!")
             ),
     )
 }
@@ -141,6 +169,8 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let sort_by_time = sub_m.is_present("sort");
 
     let do_anonimize = sub_m.is_present("anon");
+
+    let do_file_transfer = sub_m.is_present("file_transfer");
 
     let index_first: adlt::dlt::DltMessageIndexType = match sub_m.value_of("index_first") {
         None => 0,
@@ -275,11 +305,38 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
 
     // determine plugins
-    let plugins_active: Vec<Box<dyn Plugin + Send>> = if do_anonimize {
-        vec![Box::new(AnonymizePlugin::new("anon"))]
-    } else {
-        vec![]
-    };
+    let mut plugins_active: Vec<Box<dyn Plugin + Send>> = vec![];
+    if do_anonimize {
+        plugins_active.push(Box::new(AnonymizePlugin::new("anon")));
+    }
+    if do_file_transfer {
+        if let Some(ft_config) = serde_json::json!({"name":"file_transfer","allowSave":false, "keepFLDA":true,"autoSavePath":sub_m.value_of("file_transfer_path").unwrap_or("./"), "autoSaveGlob":sub_m.value_of("file_transfer").unwrap()}).as_object_mut(){
+            if let Some(apid) = sub_m.value_of("file_transfer_apid") {
+                // e.g. "SYS"
+                ft_config.insert(
+                    "apid".to_owned(),
+                    serde_json::Value::String(apid.to_string()),
+                );
+            }
+            if let Some(ctid) = sub_m.value_of("file_transfer_ctid") {
+                // e.g. "FILE"
+                ft_config.insert(
+                    "ctid".to_owned(),
+                    serde_json::Value::String(ctid.to_string()),
+                );
+            }
+
+            match FileTransferPlugin::from_json(ft_config) {
+                Ok(plugin) => {
+                    debug!(log, "file_transfer plugin used: {:?}", plugin);
+                    plugins_active.push(Box::new(plugin));
+                }
+                Err(e) => warn!(log, "file_transfer plugin failed with err: {:?}", e),
+            }
+        }else{
+            warn!(log, "file_transfer failed to parse config");
+        }
+    }
 
     // setup (thread) filter chain:
     let (tx_for_parse_thread, rx_from_parse_thread) = channel(); // msg -> parse_lifecycles (t2)
@@ -294,7 +351,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         )
     });
 
-    let (_plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
+    let (plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
         let (tx_for_plugin_thread, rx_from_plugin_thread) = std::sync::mpsc::channel();
         (
             Some(std::thread::spawn(move || {
@@ -461,10 +518,28 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     drop(tx_for_parse_thread);
     let _lcs_w = lc_thread.join().unwrap();
 
+    plugins_active = if let Some(t) = plugin_thread {
+        match t.join() {
+            Err(s) => {
+                error!(log, "plugin_thread join got Err {:?}", s);
+                Vec::new()
+            }
+            Ok(s) => {
+                if let Ok(plugins) = s {
+                    plugins
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     if let Some(t) = sort_thread {
         match t.join() {
-            Err(s) => error!(log, "t3 join got Error {:?}", s),
-            Ok(s) => debug!(log, "t3 join was Ok {:?}", s),
+            Err(s) => error!(log, "sort_thread join got Error {:?}", s),
+            Ok(s) => debug!(log, "sort_thread join was Ok {:?}", s),
         };
     }
 
@@ -534,6 +609,37 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                             EMPTY_STR_R
                         }
                     )?;
+                }
+            }
+            for plugin in plugins_active {
+                if plugin.name() == "file_transfer" {
+                    let plugin_state = plugin.state();
+                    let state = plugin_state.read().unwrap();
+                    debug!(log, "file_transfer.state.value={:?}", state.value);
+                    // output the files detected:
+                    if let Some(tree_items) = state.value["treeItems"].as_array() {
+                        if !tree_items.is_empty() {
+                            writeln!(writer_screen, "have {} file transfers:", tree_items.len())?;
+                        }
+
+                        for item in tree_items {
+                            if let Some(label) = item["label"].as_str() {
+                                if let Some(meta) = item["meta"].as_object() {
+                                    writeln!(
+                                        writer_screen,
+                                        "LC# {}: {} {}",
+                                        meta["lc"],
+                                        label,
+                                        if let Some(path) = meta["autoSavedTo"].as_str() {
+                                            format!(", saved as: '{}'", path)
+                                        } else {
+                                            EMPTY_STR
+                                        }
+                                    )?;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
