@@ -655,7 +655,13 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adlt::dlt::{DltMessage, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_SINT};
     use adlt::*;
+    use adlt::{
+        dlt::{DltArg, DLT_TYLE_32BIT, DLT_TYPE_INFO_STRG, DLT_TYPE_INFO_UINT},
+        utils::payload_from_args,
+    };
+
     use slog::{o, Drain, Logger};
     use tempfile::NamedTempFile;
 
@@ -1148,5 +1154,103 @@ mod tests {
         assert_eq!(persisted_msgs, r.messages_processed);
         assert!(file.close().is_ok());
         filter_file.close().unwrap();
+    }
+
+    #[test]
+    fn file_transfer1() {
+        // test single file transfer via console and
+        //  that the file transfer is automatically detected at last FLDA package (and not only on FLFI)
+        let logger = new_logger();
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        let payload = payload_from_args(
+            &vec![
+                (DLT_TYPE_INFO_STRG, b"FLST\0" as &[u8]),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &17u32.to_le_bytes(), // serial
+                ),
+                (DLT_TYPE_INFO_STRG, b"test_file.bin\0" as &[u8]), // file name
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &4u32.to_le_bytes(), // filesize
+                ),
+                (DLT_TYPE_INFO_STRG, b"2022-06-02 21:54:00\0"), // creation date
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &1u32.to_le_bytes(), // nr packages
+                ),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &512u32.to_le_bytes(), // buffer size
+                ),
+                (DLT_TYPE_INFO_STRG, b"FLST\0"),
+            ]
+            .iter()
+            .map(|a| DltArg {
+                type_info: a.0,
+                is_big_endian: false,
+                payload_raw: a.1,
+            })
+            .collect::<Vec<DltArg>>(),
+        );
+        let persisted_msgs = 2;
+
+        let m_flst = DltMessage::get_testmsg_with_payload(false, 8, &payload);
+
+        m_flst.to_write(&mut file).unwrap();
+        let payload = payload_from_args(
+            &vec![
+                (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &17u32.to_le_bytes(),
+                ),
+                (
+                    DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
+                    &1i32.to_le_bytes(),
+                ),
+                (DLT_TYPE_INFO_RAWD, b"data"),
+                (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
+            ]
+            .iter()
+            .map(|a| DltArg {
+                type_info: a.0,
+                is_big_endian: false,
+                payload_raw: a.1,
+            })
+            .collect::<Vec<DltArg>>(),
+        );
+        let m_flda = DltMessage::get_testmsg_with_payload(false, 5, &payload);
+        m_flda.to_write(&mut file).unwrap();
+        file.flush().unwrap();
+
+        let arg_vec = vec![
+            "t",
+            "convert",
+            "--file_transfer=true",
+            "--file_transfer_ctid",
+            "CTID",
+            file_path.as_str(),
+        ];
+        let sub_c = add_subcommand(App::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand();
+        let sub_m = sub_m.expect("no matches?");
+
+        let output_buf = Vec::new();
+        let output = std::io::BufWriter::new(output_buf);
+
+        let r = convert(&logger, sub_m, output).unwrap();
+        assert_eq!(0, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+
+        let output_buf = r.writer_screen.unwrap().into_inner().unwrap();
+        assert!(!output_buf.is_empty());
+        let s = String::from_utf8(output_buf).unwrap();
+        assert!(s.contains("have 1 file transfer"));
+
+        assert!(file.close().is_ok());
     }
 }

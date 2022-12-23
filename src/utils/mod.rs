@@ -1,4 +1,4 @@
-use crate::dlt::{DltMessage, DltMessageIndexType};
+use crate::dlt::{DltArg, DltMessage, DltMessageIndexType, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_STRG};
 use std::{
     io::BufRead,
     sync::mpsc::{Receiver, Sender},
@@ -469,6 +469,48 @@ where
         outflow.send(sm.m)?;
     }
     Ok(())
+}
+
+/// convert DltArg array into raw payload
+///
+/// Endianess from the first DltArg is used for the payload.
+/// Mainly used for testing.
+pub fn payload_from_args<'a>(args: &'a [DltArg<'a>]) -> Vec<u8> {
+    if !args.is_empty() {
+        let mut payload = Vec::new();
+
+        // use endianess from first one:
+        let big_endian = args[0].is_big_endian;
+        // serialize the args
+        // type_info, len and payload
+        for arg in args {
+            let persist_len_u16 = if arg.type_info & (DLT_TYPE_INFO_STRG | DLT_TYPE_INFO_RAWD) != 0
+            {
+                arg.payload_raw.len() as u16
+            } else {
+                0u16
+            };
+
+            let type_info = if big_endian {
+                arg.type_info.to_be_bytes()
+            } else {
+                arg.type_info.to_le_bytes()
+            };
+            payload.extend_from_slice(&type_info);
+            if persist_len_u16 > 0 {
+                payload.extend_from_slice(&if big_endian {
+                    persist_len_u16.to_be_bytes()
+                } else {
+                    persist_len_u16.to_le_bytes()
+                })
+            };
+            payload.extend_from_slice(arg.payload_raw);
+        }
+
+        payload
+    } else {
+        vec![]
+    }
 }
 
 #[cfg(test)]
