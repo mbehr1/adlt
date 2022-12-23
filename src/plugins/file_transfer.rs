@@ -1,7 +1,6 @@
 // copyright Matthias Behr, (c) 2022
 //
 // todos:
-// [ ] - add auto store for console usage
 // [ ] - add unit test coverage!
 
 use crate::{
@@ -76,7 +75,9 @@ struct FileTransfer {
     buffer_size: u64,
     next_package: u64,
     recvd_packages: u64,
+    recvd_payload: usize,
     file_data: Vec<u8>,
+    auto_saved_to: Option<String>,
 }
 
 /// internal data for completed files. This contains the file data for completed transfers and is
@@ -94,9 +95,8 @@ impl FileTransfer {
     /// ### Arguments:
     /// * `package_nr` - nr of this package. Packages start with 1.
     /// * `arg` - argument with the payload_raw
-    /// * `do_save` - whether the payload should be kept/added to the file_data member
     ///
-    fn add_flda(&mut self, package_nr: u64, arg: &DltArg, do_save: bool) -> bool {
+    fn add_flda(&mut self, package_nr: u64, arg: &DltArg) -> bool {
         // auto-learn package size?
         if package_nr == 1 && self.buffer_size == 0 {
             self.buffer_size = arg.payload_raw.len() as u64;
@@ -113,7 +113,8 @@ impl FileTransfer {
                 // last package may be smaller
                 {
                     self.next_package += 1;
-                    if do_save {
+                    self.recvd_payload += arg.payload_raw.len();
+                    if self.file_data.capacity() > 0 {
                         self.file_data.extend_from_slice(arg.payload_raw);
                     }
                 }
@@ -140,20 +141,20 @@ impl FileTransfer {
                     // we missed the start but got all others
                     self.state = FileTransferState::Complete;
                     if self.file_size == 0 {
-                        self.file_size = self.file_data.len() as u64;
+                        self.file_size = self.recvd_payload as u64;
                     }
                     true
                 } else {
                     false
                 }
-                // todo auto store?
             } else {
                 self.state = FileTransferState::Incomplete;
                 true
             }
         } else if self.next_package > self.nr_packages
-            && (self.file_size == 0 || self.file_size as usize == self.file_data.len())
+            && (self.file_size == 0 || self.file_size as usize == self.recvd_payload)
         {
+            self.file_size = self.recvd_payload as u64;
             self.state = FileTransferState::Complete;
             true
         } else if self.recvd_packages >= self.nr_packages {
@@ -173,6 +174,8 @@ pub struct FileTransferPlugin {
     keep_flda: bool,
     apid: Option<DltChar4>,
     ctid: Option<DltChar4>,
+    auto_save_path: Option<String>,
+    auto_save_glob: Option<glob::Pattern>,
     state: Arc<RwLock<PluginState>>,
     transfers: Vec<FileTransfer>,
     transfers_idx: HashMap<(DltChar4, u32, u64), usize>, // map ecu, lifecycle, serial
@@ -294,6 +297,13 @@ impl Plugin for FileTransferPlugin {
                             serial, file_name, file_size, file_creation_date, nr_packages, buffer_size
                         );*/
                         if nr_packages > 0 && buffer_size > 0 {
+                            let keep_data = self.allow_save
+                                || (if let Some(pat) = &self.auto_save_glob {
+                                    pat.matches(&file_name)
+                                } else {
+                                    false
+                                });
+
                             self.transfers.push(FileTransfer {
                                 ecu: msg.ecu,
                                 lifecycle: msg.lifecycle,
@@ -306,11 +316,13 @@ impl Plugin for FileTransferPlugin {
                                 buffer_size,
                                 next_package: 1,
                                 recvd_packages: 0,
-                                file_data: Vec::with_capacity(if self.allow_save {
+                                recvd_payload: 0,
+                                file_data: Vec::with_capacity(if keep_data {
                                     (nr_packages * buffer_size) as usize
                                 } else {
                                     0
                                 }),
+                                auto_saved_to: None,
                             });
                             self.transfers_idx
                                 .insert((msg.ecu, msg.lifecycle, serial), self.transfers.len() - 1);
@@ -350,8 +362,18 @@ impl Plugin for FileTransferPlugin {
                                     {
                                         let file_transfer =
                                             self.transfers.get_mut(*file_transfer_idx).unwrap();
-                                        if file_transfer.add_flda(package_nr, &arg, self.allow_save)
-                                        {
+                                        if file_transfer.add_flda(package_nr, &arg) {
+                                            if file_transfer.state == FileTransferState::Complete {
+                                                let glob = &self.auto_save_glob;
+                                                let path = &self.auto_save_path;
+                                                FileTransferPlugin::check_auto_save(
+                                                    glob,
+                                                    path,
+                                                    file_transfer,
+                                                    self.allow_save,
+                                                );
+                                                // need to do that before the update_state as file_data gets moved then
+                                            }
                                             self.update_state();
                                         }
                                     } else if package_nr == 1 {
@@ -368,13 +390,15 @@ impl Plugin for FileTransferPlugin {
                                             buffer_size: 0,
                                             next_package: 1,
                                             recvd_packages: 0,
-                                            file_data: Vec::new(),
+                                            recvd_payload: 0,
+                                            file_data: Vec::with_capacity(if self.allow_save {
+                                                512
+                                            } else {
+                                                0
+                                            }), // we do need a capacity as we use that to indicate whether to store data or not
+                                            auto_saved_to: None,
                                         };
-                                        let _ = file_transfer.add_flda(
-                                            package_nr,
-                                            &arg,
-                                            self.allow_save,
-                                        ); // ignore return value, we do update_state anyhow
+                                        let _ = file_transfer.add_flda(package_nr, &arg); // ignore return value, we do update_state anyhow
                                         self.transfers.push(file_transfer);
                                         self.transfers_idx.insert(
                                             (msg.ecu, msg.lifecycle, serial),
@@ -419,6 +443,17 @@ impl Plugin for FileTransferPlugin {
                             let file_transfer = self.transfers.get_mut(*file_transfer_idx).unwrap();
                             // mark as finished:
                             if file_transfer.check_finished(true) {
+                                if file_transfer.state == FileTransferState::Complete {
+                                    let glob = &self.auto_save_glob;
+                                    let path = &self.auto_save_path;
+                                    FileTransferPlugin::check_auto_save(
+                                        glob,
+                                        path,
+                                        file_transfer,
+                                        self.allow_save,
+                                    );
+                                    // need to do that before the update_state as file_data gets moved then
+                                }
                                 self.update_state();
                             }
                         }
@@ -494,6 +529,34 @@ impl FileTransferPlugin {
             _ => return Err(FileTransferPluginError::from("config 'ctid' not a string").into()),
         };
 
+        let auto_save_path = match &config.get("autoSavePath") {
+            Some(serde_json::Value::String(s)) => Some(s.to_owned()),
+            None => None,
+            _ => {
+                return Err(
+                    FileTransferPluginError::from("config 'autoSavePath' not a string").into(),
+                )
+            }
+        };
+        let auto_save_glob = match &config.get("autoSaveGlob") {
+            Some(serde_json::Value::String(s)) => match glob::Pattern::new(s) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    return Err(FileTransferPluginError::from(format!(
+                        "config 'autoSaveGlob' failed parsing with:{:?}",
+                        e
+                    ))
+                    .into())
+                }
+            },
+            None => None,
+            _ => {
+                return Err(
+                    FileTransferPluginError::from("config 'autoSaveGlob' not a string").into(),
+                )
+            }
+        };
+
         let state = PluginState {
             value: serde_json::json!({"name":name, "treeItems":[]}),
             internal_data: Some(Box::new(FileTransferStateData {
@@ -511,10 +574,59 @@ impl FileTransferPlugin {
             keep_flda,
             apid,
             ctid,
+            auto_save_path,
+            auto_save_glob,
             transfers: Vec::new(),
             transfers_idx: HashMap::new(),
             state: Arc::new(RwLock::new(state)),
         })
+    }
+
+    /// check whether that file transfer should be auto saved
+    /// and if so try the auto save.
+    fn check_auto_save(
+        glob: &Option<glob::Pattern>,
+        path: &Option<String>,
+        file_transfer: &mut FileTransfer,
+        keep_data: bool,
+    ) {
+        if let Some(pat) = glob {
+            if file_transfer.state == FileTransferState::Complete
+                && !file_transfer.file_data.is_empty()
+                && pat.matches(&file_transfer.file_name)
+            {
+                // try to save to the path:
+                let path = if let Some(p) = path {
+                    std::path::Path::new(p)
+                } else {
+                    std::path::Path::new("./")
+                }
+                .join(&file_transfer.file_name);
+                // does the file exist? if so -> skip
+                if !path.exists() {
+                    if let Some(par_dir) = path.parent() {
+                        if !par_dir.exists() {
+                            // try to create it:
+                            let _ = std::fs::create_dir_all(par_dir); // let silently fail
+                        }
+                        if par_dir.exists() {
+                            // try to write the file:
+                            if let Ok(()) = File::create(&path)
+                                .and_then(|mut f| f.write_all(&file_transfer.file_data))
+                            {
+                                file_transfer.auto_saved_to = path.to_str().map(|p| p.to_owned());
+                            }
+
+                            // todo set proper creation time!
+                        }
+                    }
+                }
+                if !keep_data && file_transfer.file_data.capacity() > 0 {
+                    // file data wont be needed any more. we do this even if saving failed.
+                    file_transfer.file_data = Vec::new();
+                }
+            }
+        }
     }
 
     /// update the plugin state object so that it reflects state changes.
@@ -568,7 +680,7 @@ impl FileTransferPlugin {
                     _ => "warning",
                 },
                 "contextValue": match t.state {
-                    FileTransferState::Complete if self.allow_save => json!("canSave"),
+                    FileTransferState::Complete if self.allow_save => json!("canSave"), // todo should better use availability of internal_data to support autoSave as well
                     _ => json!(null)
                 },
                 "cmdCtx": match t.state {
@@ -576,6 +688,7 @@ impl FileTransferPlugin {
                     _ => json!(null)
                 },
                 "tooltip":format!("{}, LC id={}, serial #{}, '{}', created at '{}', file size {} ", t.ecu, t.lifecycle, t.serial, t.file_name, t.file_creation_date, t.file_size),
+                "meta":json!({"lc":t.lifecycle, "autoSavedTo": t.auto_saved_to}),
             })}).collect::<Vec<serde_json::Value>>()
         });
         state.generation += 1;
@@ -1093,6 +1206,116 @@ mod tests {
             Some(json!({ "saveAs": file_path }).as_object().unwrap()),
             Some(json!({"save":{"idx":0}}).as_object().unwrap()),
         ));
+        assert_eq!(
+            std::fs::metadata(&file_path).unwrap().len(),
+            b"data".len() as u64
+        );
+    }
+
+    #[test]
+    fn auto_save() {
+        let test_dir = tempfile::tempdir().unwrap();
+        let cfg = json!({"name": "f", "apid":"APID", "ctid":"CTID", "allowSave":false, "keepFLDA":true, "autoSavePath":test_dir.path().to_str().unwrap(), "autoSaveGlob":"test_*.*"});
+        let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
+
+        let payload = payload_from_args(
+            &vec![
+                (DLT_TYPE_INFO_STRG, b"FLST\0" as &[u8]),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &17u32.to_le_bytes(), // serial
+                ),
+                (DLT_TYPE_INFO_STRG, b"test_file.bin\0" as &[u8]), // file name
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &4u32.to_le_bytes(), // filesize
+                ),
+                (DLT_TYPE_INFO_STRG, b"2022-06-02 21:54:00\0"), // creation date
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &1u32.to_le_bytes(), // nr packages
+                ),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &512u32.to_le_bytes(), // buffer size
+                ),
+                (DLT_TYPE_INFO_STRG, b"FLST\0"),
+            ]
+            .iter()
+            .map(|a| DltArg {
+                type_info: a.0,
+                is_big_endian: false,
+                payload_raw: a.1,
+            })
+            .collect::<Vec<DltArg>>(),
+        );
+        let mut m_flst = DltMessage::get_testmsg_with_payload(false, 8, &payload);
+
+        let payload = payload_from_args(
+            &vec![
+                (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
+                (
+                    DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+                    &17u32.to_le_bytes(),
+                ),
+                (
+                    DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
+                    &1i32.to_le_bytes(),
+                ),
+                (DLT_TYPE_INFO_RAWD, b"data"),
+                (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
+            ]
+            .iter()
+            .map(|a| DltArg {
+                type_info: a.0,
+                is_big_endian: false,
+                payload_raw: a.1,
+            })
+            .collect::<Vec<DltArg>>(),
+        );
+
+        let mut m_flda = DltMessage::get_testmsg_with_payload(false, 5, &payload);
+
+        let arg21 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLFI\0",
+        };
+
+        let arg22 = DltArg {
+            type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
+            is_big_endian: false,
+            payload_raw: &17u32.to_le_bytes(),
+        };
+
+        let arg23 = DltArg {
+            type_info: DLT_TYPE_INFO_STRG,
+            is_big_endian: false,
+            payload_raw: b"FLFI\0",
+        };
+
+        let payload = payload_from_args(&[arg21, arg22, arg23]);
+        let mut m_flfi = DltMessage::get_testmsg_with_payload(false, 3, &payload);
+
+        assert!(p.process_msg(&mut m_flst));
+        assert!(p.process_msg(&mut m_flda));
+        assert!(p.process_msg(&mut m_flfi));
+
+        assert!(!p.transfers.is_empty());
+        assert_eq!(
+            p.transfers_idx.get(&(m_flst.ecu, m_flst.lifecycle, 17)),
+            Some(&0)
+        );
+        let transfer = p.transfers.get(0).unwrap();
+        assert_eq!(
+            transfer.state,
+            FileTransferState::Complete,
+            "{:?}",
+            transfer
+        );
+
+        // was the file saved?
+        let file_path = test_dir.path().join("test_file.bin");
         assert_eq!(
             std::fs::metadata(&file_path).unwrap().len(),
             b"data".len() as u64

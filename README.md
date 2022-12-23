@@ -15,7 +15,11 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 - **Filter**...
 
 - **remote** server support: serve requests via wss. E.g. used with [DLT-Logs Visual Studio Code Extension](https://marketplace.visualstudio.com/items?itemName=mbehr1.dlt-logs).
-- builtin **plugins** e.g. for SOME/IP payload decoding (currently only for remote server) and **rewrite**ing of message timestamp or payload text.
+- builtin **plugins** e.g. for 
+  - non-verbose message decoding (remote only)
+  - SOME/IP payload decoding (remote only),
+  - **rewrite**ing of message timestamp or payload text (remote only),
+  - **file transfer** extraction/detection (remote & console).
 
 ## Usage examples
 
@@ -49,6 +53,27 @@ Output only messages fitting to a filter into a new file:
 # or it can be in dlt-viewer dlf format (xml file with <?xml...><dltfilter><filter>... )
 adlt convert -f <filter_file> -o <new_file> <dlt_file> # export all messages fitting to filter_file sorted into new_file
 # lifecycle filters -l ... or sorting --sort can be applied as well!
+```
+
+Show lifecycles and embedded file transfers:
+```sh
+adlt convert --file_transfer=true --file_transfer_apid SYS --file_transfer_ctid FILE <dlt_file>
+```
+
+Export all core dumps to directory 'dumps' from a set of DLT files:
+```sh
+adlt convert --file_transfer='core*.gz' --file_transfer_path dumps --file_transfer_apid SYS --file_transfer_ctid FILE '**/*.dlt'
+```
+```
+...
+LC# 35: ECU1 2020/12/19 10:29:22.158128 - 10:29:39 #   15115 
+have 6 file transfers:
+LC# 12: 'context.1584997735.controller.812.txt', 60kb 
+LC# 12: 'core.1584997735.controller.812.gz', 115kb , saved as: 'dumps/core.1584997735.controller.812.gz'
+LC# 20: 'context.1585074417.controller.802.txt', 60kb 
+LC# 20: 'core.1585074417.controller.802.gz', 115kb , saved as: 'dumps/core.1585074417.controller.802.gz'
+LC# 35: 'screenshot_20741013-092935_KOMBI.png', 7kb 
+LC# 35: 'screenshot_20741013-092935_HUD.png', 1kb 
 ```
 
 ## Known Issues
