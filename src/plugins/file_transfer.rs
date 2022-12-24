@@ -1320,7 +1320,7 @@ mod tests {
         // was the file saved?
         let file_path = test_dir.path().join("test_file.bin");
         assert_eq!(
-            std::fs::metadata(&file_path).unwrap().len(),
+            std::fs::metadata(file_path).unwrap().len(),
             b"data".len() as u64
         );
     }
