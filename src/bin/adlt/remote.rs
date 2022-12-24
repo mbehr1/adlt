@@ -57,6 +57,7 @@ pub fn add_subcommand(app: Command) -> Command {
 pub fn remote(
     log: &slog::Logger,
     sub_m: &clap::ArgMatches,
+    just_one_connection: bool, // only used for testing
 ) -> Result<(), Box<dyn std::error::Error>> {
     // we do use log only if for local websocket related issues
     // for the remote part we do use an own logger logging to the websocket itself todo
@@ -70,9 +71,12 @@ pub fn remote(
     // output on stdout as well to help identify a proper startup even with verbose options:
     println!("remote server listening on 127.0.0.1:{}", port);
 
+    let mut spawned_servers = vec![];
+    let no_more_incoming_cons = just_one_connection;
+
     for stream in server.incoming() {
         let logc = log.clone();
-        std::thread::spawn(move || {
+        spawned_servers.push(std::thread::spawn(move || {
             let log = logc;
             let callback = |req: &Request, mut response: Response| {
                 info!(log, "Received a new ws handshake");
@@ -184,7 +188,20 @@ pub fn remote(
             }
             let _ = websocket.write_pending(); // ignore error
             warn!(log, "websocket thread done");
-        });
+        }));
+        if no_more_incoming_cons {
+            break;
+        }
+    }
+
+    info!(
+        log,
+        "waiting for {:?} servers to join/finish",
+        spawned_servers.len()
+    );
+    // join all spawned servers here:
+    for server in spawned_servers {
+        let _ = server.join(); // ignore any errors
     }
 
     info!(log, "remote stopped"; "port" => port);
@@ -1392,6 +1409,7 @@ mod tests {
     use super::*;
     use adlt::*;
     // use serde_json::ser::to_string;
+    use portpicker::pick_unused_port;
     use slog::{o, Drain, Logger};
     use tempfile::NamedTempFile;
 
@@ -1525,5 +1543,198 @@ mod tests {
         println!("sc with windows={:?}", sc); // we can debug print it
         assert_eq!(sc.msgs_to_send.start, 1);
         assert_eq!(sc.msgs_to_send.end, 2);
+    }
+
+    use std::{collections::HashMap, time::Duration};
+
+    #[test]
+    fn remote_basic() {
+        let log = new_logger();
+        let port: u16 = pick_unused_port().expect("no ports free");
+        let port_str = format!("{}", port);
+        let arg_vec = vec!["t", "remote", "-p", &port_str];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand().unwrap();
+
+        let t = std::thread::spawn(move || {
+            let mut ws;
+            let start_time = Instant::now();
+            loop {
+                match tungstenite::client::connect(format!("wss://127.0.0.1:{}", port)) {
+                    Ok(p) => {
+                        ws = p.0;
+                        break;
+                    }
+                    Err(_e) => {
+                        if start_time.elapsed() > Duration::from_secs(1) {
+                            panic!("couldnt connect");
+                        } else {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    }
+                }
+            }
+            // simply close:
+            ws.write_message(tungstenite::protocol::Message::Text("quit".to_string()))
+                .unwrap();
+            let answer = ws.read_message().unwrap();
+            assert!(answer.is_text(), "answer={:?}", answer);
+            assert_eq!(answer.into_text().unwrap(), "unknown command 'quit'!");
+            ws.close(None).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+        });
+
+        let r = remote(&log, sub_m, true);
+        assert!(r.is_ok());
+        t.join().unwrap(); // we have to use the result to handle panics from the thread as test error
+    }
+
+    use adlt::utils::remote_types::BinType;
+
+    #[test]
+    fn remote_open_close() {
+        let log = new_logger();
+        let port: u16 = pick_unused_port().expect("no ports free");
+        let port_str = format!("{}", port);
+        let arg_vec = vec!["t", "remote", "-p", &port_str];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_, sub_m) = sub_c.subcommand().unwrap();
+
+        let t = std::thread::spawn(move || {
+            let mut ws;
+            let start_time = Instant::now();
+
+            loop {
+                match tungstenite::client::connect(format!("wss://127.0.0.1:{}", port)) {
+                    Ok(p) => {
+                        ws = p.0;
+                        break;
+                    }
+                    Err(_e) => {
+                        if start_time.elapsed() > Duration::from_secs(1) {
+                            panic!("couldnt connect");
+                        } else {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    }
+                }
+            }
+            // open a file:
+            let test_file = std::path::PathBuf::new().join("tests").join("lc_ex002.dlt");
+            ws.write_message(tungstenite::protocol::Message::Text(format!(
+                r#"open {{"files":[{}], "plugins":[{{"name":"Rewrite","rewrites":[]}}]}}"#,
+                serde_json::json!(test_file.to_str().unwrap()),
+            )))
+            .unwrap();
+            let answer = ws.read_message().unwrap();
+            assert_eq!(
+                answer.into_text().unwrap(),
+                r#"ok: open {"plugins_active":["Rewrite"]}"#
+            );
+
+            let expected_msgs = 11696;
+            let expected_lcs = 3;
+            let mut got_lcs: HashMap<u32, u32> = HashMap::new();
+            // now we'll get some infos:
+            // we do expect:
+            //  FileInfo with the nr_msgs up to 11696
+            //  Lifecycle info for 3 lifecycles covering 11696-4 msgs (4 CTRL_REQUEST are part of a non transmitted LC)
+            //  EACs info covering the 11696 msgs
+            // PluginState
+
+            let mut got_stream_ok = false;
+            let mut got_msgs = 0usize;
+
+            let mut got_lifecycles = false;
+            let mut got_fileinfo = false; // set once 11696 msgs have been announced
+            let mut got_eacinfo = false;
+            let mut got_pluginstate = false;
+
+            while let Ok(msg) = ws.read_message() {
+                match msg {
+                    Message::Binary(d) => {
+                        if let Ok((btype, _)) = bincode::decode_from_slice::<remote_types::BinType, _>(
+                            &d,
+                            BINCODE_CONFIG,
+                        ) {
+                            match btype {
+                                BinType::FileInfo(s) => {
+                                    println!("got binary msg FileInfo: {}", s.nr_msgs);
+                                    got_fileinfo = s.nr_msgs == expected_msgs;
+                                }
+                                BinType::Lifecycles(lcs) => {
+                                    println!("got binary msg Lifecycles: {}", lcs.len());
+                                    for lc in &lcs {
+                                        println!(
+                                            "got binary msg Lifecycle: #{} {} msgs",
+                                            lc.id, lc.nr_msgs
+                                        );
+                                        got_lcs.insert(lc.id, lc.nr_msgs);
+                                    }
+                                    got_lifecycles = got_lcs.iter().map(|lc| lc.1).sum::<u32>()
+                                        == (expected_msgs-4) // 4 are CTRL_REQUESTS and not part of lc
+                                        && got_lcs.len() == expected_lcs;
+                                }
+                                BinType::EacInfo(eacs) => {
+                                    let sum_msgs: u32 = eacs.iter().map(|eac| eac.nr_msgs).sum();
+                                    got_eacinfo = sum_msgs == expected_msgs;
+                                    println!(
+                                        "got binary msg EacInfo: {}, sum_msgs={}",
+                                        eacs.len(),
+                                        sum_msgs
+                                    );
+                                }
+                                BinType::PluginState(p) => {
+                                    println!("got binary msg PluginState: {}", p.len());
+                                    got_pluginstate = true;
+                                }
+                                BinType::DltMsgs((_stream_id, msgs)) => {
+                                    println!("got binary msg DltMsgs: #{}", msgs.len());
+                                    got_msgs += msgs.len();
+                                } // _ => {}
+                            }
+                        }
+                    }
+                    Message::Text(s) => {
+                        println!("got text msg: {}", s);
+                        if s.starts_with("ok: stream") {
+                            // todo check stream id {"id":x,...} and compare with DltMsgs stream_id
+                            got_stream_ok = true;
+                        }
+                    }
+                    _ => {} // ignore
+                }
+                if got_fileinfo && got_lifecycles && got_eacinfo && got_pluginstate {
+                    break;
+                }
+            }
+            assert_eq!(got_msgs, 0); // no msgs expected as no stream requested
+            assert!(!got_stream_ok);
+
+            // send a cmd to the plugin:
+            ws.write_message(tungstenite::protocol::Message::Text(
+                r#"plugin_cmd {"name":"Rewrite","cmd":"unknown_cmd"}"#.to_string(),
+            ))
+            .unwrap();
+            let answer = ws.read_message().unwrap();
+            assert!(answer.is_text(), "answer={:?}", answer);
+            assert_eq!(
+                answer.into_text().unwrap(),
+                "err: plugin_cmd plugin 'Rewrite' does not support commands"
+            );
+
+            // simply close it
+            ws.write_message(tungstenite::protocol::Message::Text("close".to_string()))
+                .unwrap();
+            let answer = ws.read_message().unwrap();
+            assert!(answer.is_text(), "answer={:?}", answer);
+            assert_eq!(answer.into_text().unwrap(), "ok: 'close'!");
+            ws.close(None).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+        });
+
+        let r = remote(&log, sub_m, true);
+        assert!(r.is_ok());
+        t.join().unwrap(); // we have to use the result to handle panics from the thread as test error
     }
 }

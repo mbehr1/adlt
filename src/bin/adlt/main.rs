@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| e.into())
                 .map(|_x| ())
         } // dont return anything here
-        Some(("remote", sub_m)) => remote::remote(&log, sub_m),
+        Some(("remote", sub_m)) => remote::remote(&log, sub_m, false),
         _ => {
             return Err(Box::new(io::Error::new(
                 io::ErrorKind::Unsupported,
