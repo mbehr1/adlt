@@ -172,6 +172,9 @@ pub fn remote(
                     Message::Binary(b) => {
                         info!(log, "got binary message with len {}", b.len());
                     }
+                    Message::Frame(b) => {
+                        info!(log, "got frame message with len {}", b.len());
+                    }
                     Message::Close(cf) => {
                         warn!(log, "got close message with {:?}", cf);
                         break;

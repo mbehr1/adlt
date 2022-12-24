@@ -1153,7 +1153,7 @@ impl DltMessage {
             index: 0,
             reception_time_us: 1640995200000000 /* 1.1.22, 00:00:00 as GMT */ + (reception_time_ms * 1_000),
             ecu: DltChar4::from_buf(b"TEST"),
-            timestamp_dms: (timestamp_ms * 10) as u32,
+            timestamp_dms: (timestamp_ms * 10),
             standard_header: DltStandardHeader {
                 htyp: DLT_STD_HDR_HAS_TIMESTAMP,
                 len: 0,
@@ -1565,7 +1565,7 @@ pub fn parse_dlt_with_storage_header(
                     if remaining >= stdh.len as usize {
                         remaining -= std_ext_header_size as usize;
                         let payload_offset = DLT_STORAGE_HEADER_SIZE + std_ext_header_size as usize;
-                        let payload_size = stdh.len - std_ext_header_size as u16;
+                        let payload_size = stdh.len - std_ext_header_size;
                         remaining -= payload_size as usize;
                         // sanity check for corrupt msgs (sadly dlt has no crc or end of msg tag)
                         // we check whether the next data starts with proper storage header.
@@ -1715,10 +1715,7 @@ mod tests {
             assert_eq!(shdr.secs, 1585231328); // 26.3.2020 14:02:08 gmt
             assert_eq!(shdr.micros, 1000);
             assert_eq!(&shdr.ecu.char4, b"ECU1");
-            assert_eq!(
-                shdr.reception_time_ms() as u64 * 1000,
-                shdr.reception_time_us()
-            );
+            assert_eq!(shdr.reception_time_ms() * 1000, shdr.reception_time_us());
             assert!(!format!("{:?}", shdr).is_empty()); // we can debug print a storage header
         }
 

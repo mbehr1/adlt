@@ -951,7 +951,7 @@ mod tests {
         let ecu = dlt::DltChar4::from_buf(b"ECU1");
         for i in 0..persisted_msgs {
             let sh = adlt::dlt::DltStorageHeader {
-                secs: i as u32 + (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                secs: i + (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
                 micros: 0,
                 ecu,
             };
