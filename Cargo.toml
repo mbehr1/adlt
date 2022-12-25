@@ -30,7 +30,7 @@ name = "filter_benches"
 harness = false
 
 [dev-dependencies]
-ntest = "*"
+ntest = "0.9"
 criterion = "0.4"
 
 [dependencies]
