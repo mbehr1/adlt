@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.30.0 - 2022-12-25
+#### Features
+- **(convert)** file transfer support - (63996f4) - Matthias Behr
+#### Miscellaneous Chores
+- **(clap)** update to v4.0 - (374019c) - Matthias Behr
+- update asomeip version - (31e06e5) - Matthias Behr
+- update packages - (c08ab37) - Matthias Behr
+#### Tests
+- **(convert)** add test for file_transfer - (a5368b0) - Matthias Behr
+- **(remote)** add basic unit test - (7203051) - Matthias Behr
+
+- - -
+
 ## v0.29.0 - 2022-12-18
 #### Features
 - **(convert)** add glob pattern support - (68df623) - Matthias Behr
