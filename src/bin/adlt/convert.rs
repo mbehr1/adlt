@@ -93,7 +93,7 @@ pub fn add_subcommand(app: Command) -> Command {
                 .num_args(1..)
                 .value_parser(clap::value_parser!(u32))
                 .value_delimiter(',')
-                .help("Filter for the specified lifecycle ids. E.g. -l=1,2,3 . Seperate multiple lifecycles by ','")
+                .help(r#"Filter for the specified lifecycle ids. E.g. --lcs=1,2,3 . Seperate multiple lifecycles by ','. Warning: powershell needs escaping ("-l=1,2,3") or the long arg --lcs=1,2,3"#)
             ).arg(
                 Arg::new("output_file")
                 .short('o')
