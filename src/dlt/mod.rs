@@ -156,6 +156,9 @@ pub struct DltStorageHeader {
 pub const DLT_STORAGE_HEADER_PATTERN: u32 = 0x01544c44; // DLT\01
 pub const DLT_STORAGE_HEADER_SIZE: usize = 16; // DLT\0x1 + secs, micros, ecu
 
+pub const DLT_SERIAL_HEADER_PATTERN: u32 = 0x01534c44; // DLS\01
+pub const DLT_SERIAL_HEADER_SIZE: usize = 4; // just the pattern
+
 /// maximum size of a DLT message with a storage header:
 pub const DLT_MAX_STORAGE_MSG_SIZE: usize = DLT_STORAGE_HEADER_SIZE + u16::MAX as usize;
 
@@ -1540,6 +1543,20 @@ pub fn is_storage_header_pattern(buf: &[u8]) -> bool {
     // that's significantly slower: buf[0] == b'D' && buf[1] == b'L' && buf[2] == b'T' && buf[3] == 0x1u8
 }
 
+#[inline]
+/// return whether the start of the buffer contains the DLT serial header pattern
+/// DLS\x1
+///
+/// returns false if buffer is too small (<4 bytes)
+pub fn is_serial_header_pattern(buf: &[u8]) -> bool {
+    if buf.len() < 4 {
+        return false;
+    }
+
+    let pat = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    pat == DLT_SERIAL_HEADER_PATTERN
+}
+
 #[derive(Debug)]
 pub enum ErrorKind {
     InvalidData(String),
@@ -1617,6 +1634,89 @@ pub fn parse_dlt_with_storage_header(
             None => Err(Error::new(ErrorKind::InvalidData(String::from(
                 "no storageheader",
             )))),
+        }
+    } else {
+        Err(Error::new(ErrorKind::NotEnoughData(
+            MIN_DLT_MSG_SIZE - remaining,
+        )))
+    }
+}
+
+pub fn parse_dlt_with_serial_header(
+    index: DltMessageIndexType,
+    data: &[u8],
+) -> Result<(usize, DltMessage), Error> {
+    let mut remaining = data.len();
+
+    if remaining >= DLT_SERIAL_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE {
+        if is_serial_header_pattern(data) {
+            remaining -= DLT_SERIAL_HEADER_SIZE;
+            let stdh = DltStandardHeader::from_buf(&data[DLT_SERIAL_HEADER_SIZE..])
+                .expect("no valid stdheader!");
+            let std_ext_header_size = stdh.std_ext_header_size();
+            if stdh.len >= std_ext_header_size {
+                // do we have the remaining data?
+                if remaining >= stdh.len as usize {
+                    remaining -= std_ext_header_size as usize;
+                    let payload_offset = DLT_SERIAL_HEADER_SIZE + std_ext_header_size as usize;
+                    let payload_size = stdh.len - std_ext_header_size;
+                    remaining -= payload_size as usize;
+                    // sanity check for corrupt msgs (sadly dlt has no crc or end of msg tag)
+                    // we check whether the next data starts with proper storage header.
+                    // if so -> we assume this one is correct.
+                    // If not
+                    //  - no more data remaining -> treat as ok
+                    //  - check whether there is a 2nd storage header
+                    //    - if so -> skip to the new one
+                    //    - if not -> use the current msg
+                    let to_consume = data.len() - remaining;
+
+                    if remaining >= 4 && !is_serial_header_pattern(&data[to_consume..]) {
+                        // the new msg would be from [0..to_consume]
+                        // is a 2nd storage header within data[5]..data[to_consume+3]?
+                        for i in 5..to_consume {
+                            if is_serial_header_pattern(&data[i..]) {
+                                // yes, lets use that.
+                                // we simply return an error here and let the usual skip logic apply
+                                return Err(Error::new(ErrorKind::InvalidData(
+                                                String::from("skipped probably corrupt msg due to serial header pattern heuristic"),
+                                            )));
+                            }
+                        }
+                    }
+
+                    let payload =
+                        Vec::from(&data[payload_offset..payload_offset + payload_size as usize]);
+                    let sh = DltStorageHeader {
+                        // todo... use start time? and header via config/parameter?
+                        secs: (2023 - 1970) * 365 * 24 * 60,
+                        micros: 0,
+                        ecu: DltChar4 {
+                            char4: [b'D', b'L', b'S', 0],
+                        },
+                    };
+                    let msg = DltMessage::from_headers(
+                        index,
+                        sh,
+                        stdh,
+                        &data[DLT_SERIAL_HEADER_SIZE + DLT_MIN_STD_HEADER_SIZE..payload_offset],
+                        payload,
+                    );
+                    Ok((to_consume, msg))
+                } else {
+                    Err(Error::new(ErrorKind::NotEnoughData(
+                        stdh.len as usize - remaining,
+                    )))
+                }
+            } else {
+                Err(Error::new(ErrorKind::InvalidData(String::from(
+                    "stdh.len too small",
+                ))))
+            }
+        } else {
+            Err(Error::new(ErrorKind::InvalidData(String::from(
+                "no serialheader",
+            ))))
         }
     } else {
         Err(Error::new(ErrorKind::NotEnoughData(
