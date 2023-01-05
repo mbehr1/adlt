@@ -1,4 +1,6 @@
-use crate::dlt::{parse_dlt_with_storage_header, DltMessage, DltMessageIndexType};
+use crate::dlt::{
+    parse_dlt_with_serial_header, parse_dlt_with_storage_header, DltMessage, DltMessageIndexType,
+};
 use slog::debug;
 use std::io::BufRead;
 
@@ -7,6 +9,8 @@ pub struct DltMessageIterator<'a, R> {
     pub index: DltMessageIndexType,
     pub bytes_processed: usize,
     pub bytes_skipped: usize,
+    pub detected_storage_header: bool,
+    pub detected_serial_header: bool,
     pub log: Option<&'a slog::Logger>,
 }
 
@@ -17,6 +21,8 @@ impl<'a, R> DltMessageIterator<'a, R> {
             index: start_index,
             bytes_processed: 0,
             bytes_skipped: 0,
+            detected_storage_header: false,
+            detected_serial_header: false,
             log: None,
         }
     }
@@ -29,11 +35,41 @@ where
     type Item = DltMessage;
     fn next(&mut self) -> Option<Self::Item> {
         loop {
+            // default search with storage header
+            if !self.detected_serial_header {
             match parse_dlt_with_storage_header(self.index, self.reader.fill_buf().unwrap()) {
                 Ok((res, msg)) => {
                     self.reader.consume(res);
                     self.bytes_processed += res;
                     self.index += 1;
+                        self.detected_storage_header = true;
+                        return Some(msg);
+                    }
+                    Err(error) => match error.kind() {
+                        crate::dlt::ErrorKind::InvalidData(_str) => {
+                            if self.detected_storage_header {
+                                self.bytes_processed += 1;
+                                self.bytes_skipped += 1;
+                                self.reader.consume(1);
+                                if let Some(log) = self.log {
+                                    debug!(log, "skipped 1 byte at {}", self.bytes_processed - 1);
+                                }
+                            } // else we'll try serial first
+                              // we loop here again
+                        }
+                        _ => {
+                            break;
+                        }
+                    },
+                }
+            }
+            if !self.detected_storage_header {
+                match parse_dlt_with_serial_header(self.index, self.reader.fill_buf().unwrap()) {
+                    Ok((res, msg)) => {
+                        self.reader.consume(res);
+                        self.bytes_processed += res;
+                        self.index += 1;
+                        self.detected_serial_header = true;
                     return Some(msg);
                 }
                 Err(error) => match error.kind() {
@@ -50,6 +86,7 @@ where
                         break;
                     }
                 },
+                }
             }
         }
         None
