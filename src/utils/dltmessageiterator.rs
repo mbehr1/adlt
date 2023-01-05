@@ -12,6 +12,7 @@ pub struct DltMessageIterator<'a, R> {
     pub detected_storage_header: bool,
     pub detected_serial_header: bool,
     pub log: Option<&'a slog::Logger>,
+    pub log_skipped: Option<(DltMessageIndexType, usize, String)>, // index, bytes_processed (aka offset) where the skipping started and reason
 }
 
 impl<'a, R> DltMessageIterator<'a, R> {
@@ -24,6 +25,7 @@ impl<'a, R> DltMessageIterator<'a, R> {
             detected_storage_header: false,
             detected_serial_header: false,
             log: None,
+            log_skipped: None,
         }
     }
 }
@@ -66,6 +68,12 @@ where
             if !self.detected_storage_header {
                 match parse_dlt_with_serial_header(self.index, self.reader.fill_buf().unwrap()) {
                     Ok((res, msg)) => {
+                        if let Some((l_index, l_bytes_processed, reason)) = &self.log_skipped {
+                            if let Some(log)=self.log {
+                                debug!(log, "skipped {} bytes at 0x{:x} (={}) index of next log #{} due to '{}'", self.bytes_processed - l_bytes_processed, l_bytes_processed, l_bytes_processed, l_index, reason);
+                            }
+                            self.log_skipped = None;
+                        }
                         self.reader.consume(res);
                         self.bytes_processed += res;
                         self.index += 1;
@@ -73,12 +81,15 @@ where
                     return Some(msg);
                 }
                 Err(error) => match error.kind() {
-                    crate::dlt::ErrorKind::InvalidData(_str) => {
+                    crate::dlt::ErrorKind::InvalidData(reason) => {
                         self.bytes_processed += 1;
                         self.bytes_skipped += 1;
                         self.reader.consume(1);
-                        if let Some(log) = self.log {
-                            debug!(log, "skipped 1 byte at {}", self.bytes_processed - 1);
+                        if self.log.is_some() {
+                            if self.log_skipped.is_none() {
+                                self.log_skipped = Some((self.index, self.bytes_processed-1, reason.to_owned()));
+                            }
+                            //debug!(log, "skipped 1 byte at {}", self.bytes_processed - 1);
                         }
                         // we loop here again
                     }
@@ -88,6 +99,12 @@ where
                 },
                 }
             }
+        }
+        if let Some((l_index, l_bytes_processed, reason)) = &self.log_skipped {
+            if let Some(log)=self.log {
+                debug!(log, "skipped {} bytes at 0x{:x} (={}) index of next log #{} due to '{}'", self.bytes_processed - l_bytes_processed, l_bytes_processed, l_bytes_processed, l_index, reason);
+            }
+            self.log_skipped = None;
         }
         None
     }

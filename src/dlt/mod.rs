@@ -1679,7 +1679,7 @@ pub fn parse_dlt_with_serial_header(
                                 // yes, lets use that.
                                 // we simply return an error here and let the usual skip logic apply
                                 return Err(Error::new(ErrorKind::InvalidData(
-                                                String::from("skipped probably corrupt msg due to serial header pattern heuristic"),
+                                                format!("skipped probably corrupt msg due to serial header pattern heuristic. serial pattern at {} vs expected {}", i, to_consume),
                                             )));
                             }
                         }
