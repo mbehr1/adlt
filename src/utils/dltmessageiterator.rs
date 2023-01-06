@@ -39,11 +39,11 @@ where
         loop {
             // default search with storage header
             if !self.detected_serial_header {
-            match parse_dlt_with_storage_header(self.index, self.reader.fill_buf().unwrap()) {
-                Ok((res, msg)) => {
-                    self.reader.consume(res);
-                    self.bytes_processed += res;
-                    self.index += 1;
+                match parse_dlt_with_storage_header(self.index, self.reader.fill_buf().unwrap()) {
+                    Ok((res, msg)) => {
+                        self.reader.consume(res);
+                        self.bytes_processed += res;
+                        self.index += 1;
                         self.detected_storage_header = true;
                         return Some(msg);
                     }
@@ -69,7 +69,7 @@ where
                 match parse_dlt_with_serial_header(self.index, self.reader.fill_buf().unwrap()) {
                     Ok((res, msg)) => {
                         if let Some((l_index, l_bytes_processed, reason)) = &self.log_skipped {
-                            if let Some(log)=self.log {
+                            if let Some(log) = self.log {
                                 debug!(log, "skipped {} bytes at 0x{:x} (={}) index of next log #{} due to '{}'", self.bytes_processed - l_bytes_processed, l_bytes_processed, l_bytes_processed, l_index, reason);
                             }
                             self.log_skipped = None;
@@ -78,31 +78,37 @@ where
                         self.bytes_processed += res;
                         self.index += 1;
                         self.detected_serial_header = true;
-                    return Some(msg);
-                }
-                Err(error) => match error.kind() {
-                    crate::dlt::ErrorKind::InvalidData(reason) => {
-                        self.bytes_processed += 1;
-                        self.bytes_skipped += 1;
-                        self.reader.consume(1);
-                        if self.log.is_some() {
-                            if self.log_skipped.is_none() {
-                                self.log_skipped = Some((self.index, self.bytes_processed-1, reason.to_owned()));
+                        return Some(msg);
+                    }
+                    Err(error) => match error.kind() {
+                        crate::dlt::ErrorKind::InvalidData(reason) => {
+                            self.bytes_processed += 1;
+                            self.bytes_skipped += 1;
+                            self.reader.consume(1);
+                            if self.log.is_some() && self.log_skipped.is_none() {
+                                self.log_skipped =
+                                    Some((self.index, self.bytes_processed - 1, reason.to_owned()));
                             }
-                            //debug!(log, "skipped 1 byte at {}", self.bytes_processed - 1);
+                            // we loop here again
                         }
-                        // we loop here again
-                    }
-                    _ => {
-                        break;
-                    }
-                },
+                        _ => {
+                            break;
+                        }
+                    },
                 }
             }
         }
         if let Some((l_index, l_bytes_processed, reason)) = &self.log_skipped {
-            if let Some(log)=self.log {
-                debug!(log, "skipped {} bytes at 0x{:x} (={}) index of next log #{} due to '{}'", self.bytes_processed - l_bytes_processed, l_bytes_processed, l_bytes_processed, l_index, reason);
+            if let Some(log) = self.log {
+                debug!(
+                    log,
+                    "skipped {} bytes at 0x{:x} (={}) index of next log #{} due to '{}'",
+                    self.bytes_processed - l_bytes_processed,
+                    l_bytes_processed,
+                    l_bytes_processed,
+                    l_index,
+                    reason
+                );
             }
             self.log_skipped = None;
         }
