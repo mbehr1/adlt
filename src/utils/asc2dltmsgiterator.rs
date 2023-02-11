@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn asc_canfd_errorframe() {
         let reader = r##"
-//BusMapping: CAN 1 = ECU_CAN_FD
+//BusMapping: CAN 1 = ECU_CAN_FD 431
 0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0"##
             .as_bytes();
         let mut it = Asc2DltMsgIterator::new(0, reader, None);
