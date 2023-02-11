@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.30.1 - 2023-02-11
+#### Bug Fixes
+- improve BusMapping logic - (a4311df) - Matthias Behr
+#### Documentation
+- **(convert)** add powershell warning - (e097115) - Matthias Behr
+#### Miscellaneous Chores
+- add ignore dir to tests - (75c8b15) - Matthias Behr
+- update libs - (7490c34) - Matthias Behr
+- fix ntest version to 0.9 - (b283d37) - Matthias Behr
+
+- - -
+
 ## v0.30.0 - 2022-12-25
 #### Features
 - **(convert)** file transfer support - (63996f4) - Matthias Behr
