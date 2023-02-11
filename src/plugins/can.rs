@@ -184,9 +184,23 @@ impl Plugin for CanPlugin {
                             if let std::collections::hash_map::Entry::Vacant(entry) =
                                 self.channel_map_by_ecuid.entry(msg.ecu.to_owned())
                             {
-                                let channel_map = self.channels_frame_ref_map.remove(desc);
-                                if let Some(channel_map) = channel_map {
-                                    entry.insert(channel_map);
+                                let channel_name = if self.channels_frame_ref_map.contains_key(desc)
+                                {
+                                    Some(desc.to_owned())
+                                } else {
+                                    // if no full matchen then search a matching name
+                                    // currently: that starts with e.g. for cases like "IuK_CAN 431" -> "IuK_CAN"
+                                    self.channels_frame_ref_map
+                                        .keys()
+                                        .find(|&key| desc.starts_with(key))
+                                        .map(|k| k.to_owned())
+                                };
+                                if let Some(channel_name) = &channel_name {
+                                    let channel_map =
+                                        self.channels_frame_ref_map.remove(channel_name);
+                                    if let Some(channel_map) = channel_map {
+                                        entry.insert(channel_map);
+                                    }
                                 }
                             }
                         }
