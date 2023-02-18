@@ -1123,7 +1123,7 @@ fn process_file_context<T: Read + Write>(
                     for filter in &stream.filters[FilterKind::Positive] {
                         if filter.matches(msg) {
                             matches = true;
-                            debug!(log, "stream {} got pos matching msg idx={}", stream.id, i);
+                            // debug!(log, "stream {} got pos matching msg idx={}", stream.id, i);
                             break;
                         }
                     }
@@ -1132,7 +1132,7 @@ fn process_file_context<T: Read + Write>(
                         for filter in &stream.filters[FilterKind::Negative] {
                             if filter.matches(msg) {
                                 matches = false;
-                                debug!(log, "stream {} got neg matching msg idx={}", stream.id, i);
+                                // debug!(log, "stream {} got neg matching msg idx={}", stream.id, i);
                                 break;
                             }
                         }
