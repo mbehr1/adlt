@@ -1180,11 +1180,11 @@ fn process_file_context<T: Read + Write>(
             fc.all_msgs.len()
         };
 
-        if stream.msgs_sent.end < stream.msgs_to_send.end && stream.msgs_sent.end <= stream_msgs_len
+        if stream.msgs_sent.end < stream.msgs_to_send.end && stream.msgs_sent.end < stream_msgs_len
         {
             // send some more...
             let new_end = std::cmp::min(stream_msgs_len, stream.msgs_to_send.end);
-            debug!(log, "sending {}..{}", stream.msgs_sent.end, new_end);
+            debug!(log, "sending {}..{} (stream_msgs_len={})", stream.msgs_sent.end, new_end, stream_msgs_len);
             if stream.binary {
                 if new_end > stream.msgs_sent.end {
                     let mut bin_msgs = Vec::with_capacity(new_end - stream.msgs_sent.end);
