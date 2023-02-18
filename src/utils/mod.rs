@@ -228,18 +228,13 @@ struct SortedDltMessage {
 }
 impl std::cmp::PartialEq for SortedDltMessage {
     fn eq(&self, other: &Self) -> bool {
-        self.calculated_time_us == other.calculated_time_us // todo index as well?
+        self.calculated_time_us == other.calculated_time_us  && self.m.index == other.m.index
     }
 }
 impl std::cmp::Ord for SortedDltMessage {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.m.lifecycle == other.m.lifecycle {
-            if self.m.timestamp_dms == other.m.timestamp_dms {
-                self.m.index.cmp(&other.m.index) // keep the initial order on same timestamp
-            } else {
-                self.m.timestamp_dms.cmp(&other.m.timestamp_dms)
-            }
-        } else if self.calculated_time_us == other.calculated_time_us {
+        // have to use the calculated time and not the own time
+        if self.calculated_time_us == other.calculated_time_us {
             self.m.index.cmp(&other.m.index) // keep the initial order on same timestamp
         } else {
             self.calculated_time_us.cmp(&other.calculated_time_us)
@@ -451,7 +446,7 @@ where
             m,
             calculated_time_us,
         };
-        let idx = buffer.binary_search(&sm).unwrap_or_else(|x| x); // this is not stable but shouldn't matter as we added index to cmp::Ord
+        let idx = buffer.partition_point(|x| x < &sm);
         buffer.insert(idx, sm);
 
         // remove all messages from buffer that have a time more than max_buffer_time_us earlier
