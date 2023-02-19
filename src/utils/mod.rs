@@ -228,7 +228,7 @@ struct SortedDltMessage {
 }
 impl std::cmp::PartialEq for SortedDltMessage {
     fn eq(&self, other: &Self) -> bool {
-        self.calculated_time_us == other.calculated_time_us  && self.m.index == other.m.index
+        self.calculated_time_us == other.calculated_time_us && self.m.index == other.m.index
     }
 }
 impl std::cmp::Ord for SortedDltMessage {
