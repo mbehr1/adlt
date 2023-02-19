@@ -371,19 +371,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     rx_from_plugin_thread,
                     tx_for_sort_thread,
                     &sort_thread_lcs_r,
-                    3,
-                    2 * adlt::utils::US_PER_SEC,
+                    3,                            // windows_size_secs for the buffer_delay_calc
+                    20 * adlt::utils::US_PER_SEC, // min_buffer_delay_us:  // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
                 )
-                /*
-                adlt::utils::buffer_elements( // todo we buffer here only to let the lifecycle start times become a bit more stable. need a better way...
-                    // its only needed to have msgs from different lifecycles sorted as well. within one lifecycle they will be sorted fine
-                    // the diff is usually just a few (<20) ms...
-                    rx2,
-                    tx3,
-                    adlt::utils::BufferElementsOptions {
-                        amount: adlt::utils::BufferElementsAmount::NumberElements(1000), // todo how to determine constant...
-                    },
-                )*/
             })),
             rx_from_sort_thread,
         )
@@ -458,7 +448,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                                         info!(log, "sort order check: wrong timestamp order for apid {}/{}:{:?} at idx {} lc {} got {} prev {} at idx {}", msg.ecu, apid, msg.ctid(), msg.index, msg.lifecycle, msg.timestamp_dms, last_apid_tmsp.0, last_apid_tmsp.1 );
                                     }else{
                                         warn!(log, "sort order check: wrong timestamp order for apid {}/{}:{:?} at idx {} lc {} got {} prev {} at idx {}", msg.ecu, apid, msg.ctid(), msg.index, msg.lifecycle, msg.timestamp_dms, last_apid_tmsp.0, last_apid_tmsp.1 );
-                                }
+                                    }
                                 }
                                 *last_apid_tmsp = (msg.timestamp_dms, msg.index);
                             }

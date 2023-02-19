@@ -1184,7 +1184,13 @@ fn process_file_context<T: Read + Write>(
         {
             // send some more...
             let new_end = std::cmp::min(stream_msgs_len, stream.msgs_to_send.end);
-            debug!(log, "sending {}..{} (stream_msgs_len={})", stream.msgs_sent.end, new_end, stream_msgs_len);
+            debug!(
+                log,
+                "sending {}..{} (stream_msgs_len={})",
+                stream.msgs_sent.end,
+                new_end,
+                stream_msgs_len
+            );
             if stream.binary {
                 if new_end > stream.msgs_sent.end {
                     let mut bin_msgs = Vec::with_capacity(new_end - stream.msgs_sent.end);
@@ -1342,7 +1348,7 @@ fn create_parser_thread(
                     tx_for_sort_thread,
                     &sort_thread_lcs_r,
                     3,
-                    2 * adlt::utils::US_PER_SEC,
+                    20 * adlt::utils::US_PER_SEC, // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
                 )
             })),
             rx_from_sort_thread,
