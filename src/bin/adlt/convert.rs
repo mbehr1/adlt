@@ -9,7 +9,7 @@ use std::{
 };
 
 use adlt::{
-    dlt::DLT_MAX_STORAGE_MSG_SIZE,
+    dlt::{DltChar4, DLT_MAX_STORAGE_MSG_SIZE},
     filter::functions::{filters_from_convert_format, filters_from_dlf},
     plugins::{
         anonymize::AnonymizePlugin, file_transfer::FileTransferPlugin, plugin::Plugin,
@@ -135,6 +135,11 @@ pub fn add_subcommand(app: Command) -> Command {
                 .long("file_transfer_ctid")
                 .num_args(1)
                 .help("CTID used for file transfers. E.g. FILE. Providing a ctid speeds up the file transfer extraction significantly!")
+            ).arg(
+                Arg::new("debug_verify_sort")
+                .long("debug_verify_sort")
+                .num_args(0)
+                .help("Verify the sort order in the output (for --sort) per ECU and per ECU/APID. This is slow! Use it only for debugging!")
             ),
     )
 }
@@ -173,6 +178,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     };
 
     let sort_by_time = sub_m.get_flag("sort");
+    let debug_verify_sort = sub_m.get_flag("debug_verify_sort");
 
     let do_anonimize = sub_m.get_flag("anon");
 
@@ -398,8 +404,10 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         (None, rx_final)
     };
 
+    let t4_log = log.clone();
     let t4 = std::thread::spawn(
         move || -> Result<(adlt::dlt::DltMessageIndexType, W), Box<dyn std::error::Error + Send + Sync>> {
+            let log = t4_log;
             let mut output_file = if let Some(s) = output_file {
                 match std::fs::File::create(s) {
                     Ok(f) => Ok(BufWriter::new(f)),
@@ -414,6 +422,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
             let mut output : adlt::dlt::DltMessageIndexType= 0;
             let mut writer_screen_flush_pending = false;
+
+            // debug function: verify sort order
+            let mut last_timestamp_by_lc_map= std::collections::BTreeMap::<adlt::lifecycle::LifecycleId, (u32, std::collections::HashMap::<DltChar4,(u32,adlt::dlt::DltMessageIndexType)>)>::new();
 
             for msg in t4_input {
 
@@ -430,6 +441,29 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 }
                 // start with a simple dump of the msgs similar to dlt_message_header
                 if msg.index >= index_first && msg.index <= index_last {
+                    // debug function: verify sort order
+                    if debug_verify_sort {
+                        // verify that msg.calculated_time is monotonicaly ascending per lc:
+                        if !msg.is_ctrl_request() {
+                            let last_timestamp = last_timestamp_by_lc_map.entry(msg.lifecycle).or_insert_with(|| (msg.timestamp_dms, std::collections::HashMap::new()));
+                            if msg.timestamp_dms < last_timestamp.0 {
+                                warn!(log, "sort order check: wrong timestamp order for ecu {} at idx {} {:?}:{:?} lc {} got {} prev {}",msg.ecu, msg.index, msg.apid() , msg.ctid(), msg.lifecycle, msg.timestamp_dms, last_timestamp.0);
+                            }
+                            last_timestamp.0  = msg.timestamp_dms;
+                            // check for the apid as well:
+                            if let Some(apid)=msg.apid() {
+                                let last_apid_tmsp = last_timestamp.1.entry(*apid).or_insert((msg.timestamp_dms,msg.index));
+                                if msg.timestamp_dms < last_apid_tmsp.0 {
+                                    if msg.is_ctrl_response() {
+                                        info!(log, "sort order check: wrong timestamp order for apid {}/{}:{:?} at idx {} lc {} got {} prev {} at idx {}", msg.ecu, apid, msg.ctid(), msg.index, msg.lifecycle, msg.timestamp_dms, last_apid_tmsp.0, last_apid_tmsp.1 );
+                                    }else{
+                                        warn!(log, "sort order check: wrong timestamp order for apid {}/{}:{:?} at idx {} lc {} got {} prev {} at idx {}", msg.ecu, apid, msg.ctid(), msg.index, msg.lifecycle, msg.timestamp_dms, last_apid_tmsp.0, last_apid_tmsp.1 );
+                                }
+                                }
+                                *last_apid_tmsp = (msg.timestamp_dms, msg.index);
+                            }
+                        }
+                    }
                     // if print header, ascii, hex or mixed: todo
                     let mut did_output = false;
                     match output_style {
