@@ -2,6 +2,21 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.31.0 - 2023-03-01
+#### Bug Fixes
+- **(remote)** send eac stats every 3s - (0a0a350) - Matthias Behr
+- **(someip)** avoid panic on insane lengths - (7f5e4a2) - Matthias Behr
+- **(sort)** sort order was sometimes wrong - (6d922c8) - Matthias Behr
+- increase min buffer time for sort to 20s - (23e6bec) - Matthias Behr
+#### Miscellaneous Chores
+- remove debug output on filter match - (cdcc238) - Matthias Behr
+#### Performance Improvements
+- **(remote)** optimize if at stream end - (021ab71) - Matthias Behr
+#### Tests
+- **(convert)** add debug_verify_sort option - (261bbf8) - Matthias Behr
+
+- - -
+
 ## v0.30.1 - 2023-02-11
 #### Bug Fixes
 - improve BusMapping logic - (a4311df) - Matthias Behr
