@@ -1059,7 +1059,7 @@ fn process_file_context<T: Read + Write>(
 
     // send eac stats? if deadline expired and nr_msgs have increased
     // so if only desc have been updated this wont trigger a resend
-    if fc.eac_next_send_time > deadline {
+    if fc.eac_next_send_time < deadline {
         // deadline is slightly off (~40ms), but we dont care
         fc.eac_next_send_time = std::time::Instant::now() + std::time::Duration::from_secs(3); // every 3s
         let eac_nr_msgs = fc.eac_stats.nr_msgs();
