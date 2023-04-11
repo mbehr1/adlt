@@ -25,7 +25,7 @@ jobs:
         run: git tag -ln || exit 0
 
       - name: Conventional commit check
-        uses: cocogitto/cocogitto-action@v2
+        uses: cocogitto/cocogitto-action@v2 #v3 seems to not like weird commit f28622108
         with:
           git-user: 'mbehr1'
           git-user-email: 'mbehr+adlt@mcbehr.de'

@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # version number used if branch event and not tag event
-      ADLT_VERSION: TEST-0.0.6
+      ADLT_VERSION: TEST-0.0.8
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
@@ -47,12 +47,12 @@ jobs:
           echo "version is: ${{ env.ADLT_VERSION }}"
       - name: Create GitHub release
         id: release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.ADLT_VERSION }}
-          release_name: ${{ env.ADLT_VERSION }}
+          name: ${{ env.ADLT_VERSION }}
 
   build-release:
     name: build-release
@@ -107,7 +107,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
       with:
         fetch-depth: 1
 
@@ -188,7 +188,7 @@ jobs:
         fi
 
     - name: Upload release archive
-      uses: actions/upload-release-asset@v1.0.1
+      uses: actions/upload-release-asset@v1.0.2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
