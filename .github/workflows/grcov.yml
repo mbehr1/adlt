@@ -6,12 +6,12 @@ jobs:
   grcov:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
           override: true
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
       - uses: actions-rs/cargo@v1
         with:
           command: test
@@ -24,7 +24,7 @@ jobs:
         uses: actions-rs/grcov@v0.1
       - name: show lcov file ls
         run: ls -al ${{ steps.coverage.outputs.report }} 
-      - uses: codecov/codecov-action@v2
+      - uses: codecov/codecov-action@v3
         with:
           files: ${{ steps.coverage.outputs.report }}
           fail_ci_if_error: true # optional (default = false)
