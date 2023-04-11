@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.32.1 - 2023-04-11
+#### Bug Fixes
+- can plugin missing frames - (01a9698) - Matthias Behr
+#### Continuous Integration
+- use sekwah41 upload action - (fb3a863) - Matthias Behr
+- replace actions-rs with ructions to support node16 - (1c42100) - Matthias Behr
+- update gh actions to avoid node 12 - (6f90089) - Matthias Behr
+
+- - -
+
 ## v0.32.0 - 2023-04-11
 #### Build system
 - pin bincode to 2.0.0-rc2 - (d872b16) - Matthias Behr
