@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # version number used if branch event and not tag event
-      ADLT_VERSION: TEST-0.0.8
+      ADLT_VERSION: TEST-0.0.9
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
@@ -188,7 +188,7 @@ jobs:
         fi
 
     - name: Upload release archive
-      uses: actions/upload-release-asset@v1.0.2
+      uses: sekwah41/upload-release-assets@main
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
