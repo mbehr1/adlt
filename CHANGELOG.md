@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.32.0 - 2023-04-11
+#### Build system
+- pin bincode to 2.0.0-rc2 - (d872b16) - Matthias Behr
+#### Features
+- update asomeip to 0.4.0 - (43353f1) - Matthias Behr
+
+- - -
+
 ## v0.31.0 - 2023-03-01
 #### Bug Fixes
 - **(remote)** send eac stats every 3s - (0a0a350) - Matthias Behr
