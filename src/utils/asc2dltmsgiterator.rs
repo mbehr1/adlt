@@ -40,6 +40,12 @@ use std::{
 ///
 /// **0.985210** *1* **36f** Rx d *5* **f2 f7 fe ff 14** Length = 0 BitCount = 0 ID = 879
 ///
+/// ### Note
+/// ASC can format timestamps can be negative. This is usually used to have the timestamp 0
+/// at a trigger time and have messages before the trigger as well.
+/// As DLT doesn't support negative timestamps they are converted:
+///   - the recording time is adjusted backwards and the first neg. message gets the timestamp 0.
+///   - the following neg. timestamps get the difference to the prev. msg
 pub struct Asc2DltMsgIterator<'a, R> {
     lines: Lines<R>, // todo could optimize with e.g. stream_iterator for &str instead of string copies!
     pub index: DltMessageIndexType,
@@ -47,7 +53,8 @@ pub struct Asc2DltMsgIterator<'a, R> {
     pub lines_skipped: usize,
     pub log: Option<&'a slog::Logger>,
 
-    date_us: u64, // will be parsed from first asc line "date ..."
+    date_us: u64,                // will be parsed from first asc line "date ..."
+    first_neg_timestamp_us: i64, // first neg. timestamp after date line
     capture_locations_can: CaptureLocations,
     capture_locations_canfd: CaptureLocations,
     capture_locations_canfd_errorframe: CaptureLocations,
@@ -82,7 +89,8 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
             lines_processed: 0,
             lines_skipped: 0,
             log,
-            date_us: 0,
+            date_us: (chrono::Utc::now().naive_utc().timestamp_micros()) as u64, // init to avoid underrun if only neg timestamps are provided
+            first_neg_timestamp_us: 0,
             capture_locations_can: RE_MSG.capture_locations(),
             capture_locations_canfd: RE_MSG_CANFD.capture_locations(),
             capture_locations_canfd_errorframe: RE_MSG_CANFD_ERRORFRAME.capture_locations(),
@@ -112,20 +120,64 @@ lazy_static! {
     pub(crate) static ref RE_DATE: Regex = Regex::new(r"^date (.*)$").unwrap();
     pub(crate) static ref RE_MSG: Regex =
     // timestamp channel_id can/frame_id Rx|Tx data_len
-        Regex::new(r"^(\d+\.\d{6}) (\d+) ([0-9a-fx]+) (Rx|Tx) d (\d+)").unwrap();
+        Regex::new(r"^(-?\d+\.\d{6}) (\d+) ([0-9a-fx]+) (Rx|Tx) d (\d+)").unwrap();
     pub(crate) static ref RE_MSG_CANFD: Regex =
-    // timestamp CANFD channel_id Rx|Tx can_id frame_name&brs_or_brs (todo!) esi dlc data_length data (rest ignored)
-        Regex::new(r"^(\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ([0-9a-fx]+)\s+(\d+) (\d+) (\d+) (\d+)").unwrap();
+    // timestamp CANFD channel_id Rx|Tx can_id(hex) frame_name&brs_or_brs (todo!) esi dlc(hex) data_length(dec) data (rest ignored)
+        Regex::new(r"^(-?\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ([0-9a-fx]+)\s+(\d+) (\d+) ([0-9a-fx]+) (\d+)").unwrap();
 
     pub(crate) static ref RE_MSG_CANFD_ERRORFRAME: Regex =
         // timestamp CANFD channel_id Rx|Tx ErrorFrame (rest ignored)
-        Regex::new(r"^(\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ErrorFrame").unwrap();
+        Regex::new(r"^(-?\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ErrorFrame").unwrap();
 
 }
 
 fn asc_parse_date(date_str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
     // we expect them in the following format:
     NaiveDateTime::parse_from_str(date_str, "%a %b %d %I:%M:%S %p %Y")
+}
+
+/// Parse a timestamp in can asc format to a time in us.
+///
+/// Timestamps in asc can be negative thus a i64 is returned.
+/// Expected format is (-)x.yyyyyy (x any number, y exactly 6 digits)
+///
+/// In case of any parsing errors 0 is returned.
+/// ### Note
+/// The function is slow if the the fraction is not 6 digits!
+fn parse_signed_time_str(timestamp: &str) -> i64 {
+    let timestamp_is_neg = timestamp.starts_with('-');
+    let offset_timestamp = if timestamp_is_neg { 1_usize } else { 0 };
+    let dot_idx = timestamp.find('.').unwrap_or(timestamp.len());
+
+    let timestamp_secs_us: i64 = timestamp[offset_timestamp..dot_idx]
+        .parse::<i64>()
+        .unwrap_or_default()
+        * (US_PER_SEC as i64);
+    let timestamp_fraction_us = if dot_idx < timestamp.len() {
+        let timestamp_fraction_str = &timestamp[dot_idx + 1..];
+        let mut len_fraction = timestamp_fraction_str.len();
+        let mut timestamp_fraction_us =
+            timestamp_fraction_str.parse::<u64>().unwrap_or_default() as i64;
+        if len_fraction != 6 {
+            while len_fraction < 6 {
+                timestamp_fraction_us *= 10; // todo optimize by pow10...
+                len_fraction += 1;
+            }
+            while len_fraction > 6 {
+                timestamp_fraction_us /= 10;
+                len_fraction -= 1;
+            }
+        }
+        timestamp_fraction_us
+    } else {
+        0
+    };
+    let timestamp_us = timestamp_secs_us + timestamp_fraction_us;
+    if timestamp_is_neg {
+        -timestamp_us
+    } else {
+        timestamp_us
+    }
 }
 
 impl<'a, R> Iterator for Asc2DltMsgIterator<'a, R>
@@ -146,10 +198,10 @@ where
                         let cap_str = captures.as_str();
                         let loc_timestamp = self.capture_locations_can.get(1).unwrap();
                         let timestamp = &cap_str[loc_timestamp.0..loc_timestamp.1];
-                        let dot_idx = timestamp.find('.').unwrap_or_default();
-                        let timestamp_us: u64 =
-                            (timestamp[0..dot_idx].parse::<u64>().unwrap_or_default() * US_PER_SEC)
-                                + timestamp[dot_idx + 1..].parse::<u64>().unwrap_or_default();
+                        let timestamp_us = parse_signed_time_str(timestamp);
+                        if timestamp_us.is_negative() && self.first_neg_timestamp_us == 0 {
+                            self.first_neg_timestamp_us = timestamp_us;
+                        }
                         let loc_can_id = self.capture_locations_can.get(2).unwrap();
                         // we map the can_id to the ECU to be used:
                         let can_id = &cap_str[loc_can_id.0..loc_can_id.1]
@@ -222,9 +274,17 @@ where
                         self.index += 1;
                         return Some(DltMessage {
                             index,
-                            reception_time_us: self.date_us + timestamp_us,
+                            reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
                             ecu: ecu.to_owned(),
-                            timestamp_dms: (timestamp_us / 100) as u32, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
+                            timestamp_dms: if timestamp_us >= 0 {
+                                (timestamp_us / 100) as u32
+                            } else {
+                                // for neg timestamps the reception time is correct but the timestamp needs to be corrected
+                                // to always be monotonicaly increasing so we convert e.g. -100...-0.,0.1... to 0..100,0.1...
+                                // i.e. timestamp - first_neg_timestamp... (so neg --(=+) first_neg_timestamp)
+                                (timestamp_us.saturating_sub(self.first_neg_timestamp_us) / 100)
+                                    as u32
+                            }, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
                             standard_header: DltStandardHeader {
                                 htyp: self.htyp,
                                 mcnt: (index & 0xff) as u8,
@@ -256,10 +316,10 @@ where
                         let cap_str = captures.as_str();
                         let loc_timestamp = self.capture_locations_canfd.get(1).unwrap();
                         let timestamp = &cap_str[loc_timestamp.0..loc_timestamp.1];
-                        let dot_idx = timestamp.find('.').unwrap_or_default();
-                        let timestamp_us: u64 =
-                            (timestamp[0..dot_idx].parse::<u64>().unwrap_or_default() * US_PER_SEC)
-                                + timestamp[dot_idx + 1..].parse::<u64>().unwrap_or_default();
+                        let timestamp_us = parse_signed_time_str(timestamp);
+                        if timestamp_us.is_negative() && self.first_neg_timestamp_us == 0 {
+                            self.first_neg_timestamp_us = timestamp_us;
+                        }
                         let loc_can_id = self.capture_locations_canfd.get(2).unwrap();
                         // we map the can_id to the ECU to be used:
                         let can_id = &cap_str[loc_can_id.0..loc_can_id.1]
@@ -317,9 +377,17 @@ where
                         self.index += 1;
                         return Some(DltMessage {
                             index,
-                            reception_time_us: self.date_us + timestamp_us,
+                            reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
                             ecu: ecu.to_owned(),
-                            timestamp_dms: (timestamp_us / 100) as u32, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
+                            timestamp_dms: if timestamp_us >= 0 {
+                                (timestamp_us / 100) as u32
+                            } else {
+                                // for neg timestamps the reception time is correct but the timestamp needs to be corrected
+                                // to always be monotonicaly increasing so we convert e.g. -100...-0.,0.1... to 0..100,0.1...
+                                // i.e. timestamp - first_neg_timestamp... (so neg --(=+) first_neg_timestamp)
+                                (timestamp_us.saturating_sub(self.first_neg_timestamp_us) / 100)
+                                    as u32
+                            }, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
                             standard_header: DltStandardHeader {
                                 htyp: self.htyp,
                                 mcnt: (index & 0xff) as u8,
@@ -346,10 +414,10 @@ where
                         let cap_str = captures.as_str();
                         let loc_timestamp = self.capture_locations_canfd_errorframe.get(1).unwrap();
                         let timestamp = &cap_str[loc_timestamp.0..loc_timestamp.1];
-                        let dot_idx = timestamp.find('.').unwrap_or_default();
-                        let timestamp_us: u64 =
-                            (timestamp[0..dot_idx].parse::<u64>().unwrap_or_default() * US_PER_SEC)
-                                + timestamp[dot_idx + 1..].parse::<u64>().unwrap_or_default();
+                        let timestamp_us = parse_signed_time_str(timestamp);
+                        if timestamp_us.is_negative() && self.first_neg_timestamp_us == 0 {
+                            self.first_neg_timestamp_us = timestamp_us;
+                        }
                         let loc_can_id = self.capture_locations_canfd_errorframe.get(2).unwrap();
                         // we map the can_id to the ECU to be used:
                         let can_id = &cap_str[loc_can_id.0..loc_can_id.1]
@@ -372,9 +440,17 @@ where
                         self.index += 1;
                         return Some(DltMessage {
                             index,
-                            reception_time_us: self.date_us + timestamp_us,
+                            reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
                             ecu: ecu.to_owned(),
-                            timestamp_dms: (timestamp_us / 100) as u32, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
+                            timestamp_dms: if timestamp_us >= 0 {
+                                (timestamp_us / 100) as u32
+                            } else {
+                                // for neg timestamps the reception time is correct but the timestamp needs to be corrected
+                                // to always be monotonicaly increasing so we convert e.g. -100...-0.,0.1... to 0..100,0.1...
+                                // i.e. timestamp - first_neg_timestamp... (so neg --(=+) first_neg_timestamp)
+                                (timestamp_us.saturating_sub(self.first_neg_timestamp_us) / 100)
+                                    as u32
+                            }, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
                             standard_header: DltStandardHeader {
                                 htyp: self.htyp,
                                 mcnt: (index & 0xff) as u8,
@@ -394,7 +470,8 @@ where
                         if let Some(date) = captures.get(1) {
                             let nt = asc_parse_date(date.as_str());
                             if let Ok(nt) = nt {
-                                self.date_us = (nt.timestamp_nanos() / 1000) as u64;
+                                self.date_us = nt.timestamp_micros() as u64;
+                                self.first_neg_timestamp_us = 0; // reset here if mult. files get concatenated
                             }
                             if let Some(log) = self.log {
                                 trace!(
@@ -492,7 +569,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{asc_parse_date, Asc2DltMsgIterator};
+    use super::{asc_parse_date, parse_signed_time_str, Asc2DltMsgIterator};
     use crate::{
         dlt::{DltMessageControlType, DltMessageNwType, DltMessageType, DLT_MAX_STORAGE_MSG_SIZE},
         utils::LowMarkBufReader,
@@ -585,21 +662,30 @@ mod tests {
     fn asc_canfd1() {
         let reader = r##"
 //BusMapping: CAN 1 = ECU_CAN_FD
-0.169843 CANFD 1 Rx 135   1 0 8 8 f0 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0"##
+-0.169843 CANFD 1 Rx 135   1 0 8 8 f0 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0
+-0.159843 CANFD 1 Rx 135   1 0 8 8 f1 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0
+0.169843 CANFD 1 Rx 135   1 0 8 8 f2 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0"##
             .as_bytes();
         let mut it = Asc2DltMsgIterator::new(0, reader, None);
         let mut iterated_msgs: u32 = 0;
-        for _m in &mut it {
+        for m in &mut it {
             iterated_msgs += 1;
             // todo verify payload println!("m={:?}", m);
+            match iterated_msgs {
+                2 => assert_eq!(m.timestamp_dms, 0_u32), // the first neg. gets a 0 timestamp
+                3 => assert_eq!(m.timestamp_dms, 100_u32), // the 10ms = 100dms apart
+                4 => assert_eq!(m.timestamp_dms, 1698_u32),
+                _ => {}
+            }
         }
-        assert_eq!(iterated_msgs, 2); // one ctrl and the canfd msg
+        assert_eq!(iterated_msgs, 4); // one ctrl and three canfd msgs
     }
 
     #[test]
     fn asc_canfd_errorframe() {
         let reader = r##"
 //BusMapping: CAN 1 = ECU_CAN_FD 431
+-0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0
 0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0"##
             .as_bytes();
         let mut it = Asc2DltMsgIterator::new(0, reader, None);
@@ -608,6 +694,45 @@ mod tests {
             iterated_msgs += 1;
             // todo verify payload println!("m={:?}", m);
         }
-        assert_eq!(iterated_msgs, 2); // one ctrl and the canfd msg
+        assert_eq!(iterated_msgs, 3); // one ctrl and two canfd msgs
+    }
+
+    #[test]
+    fn asc_can1() {
+        let reader = r##"
+//BusMapping: CAN 1 = ECU_CAN 431
+-0.985210 1 36f Rx d 5 f2 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879
+-0.000100 1 36f Rx d 5 f2 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879
+0.000000 1 36f Rx d 5 f3 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879
+0.000100 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let mut it = Asc2DltMsgIterator::new(0, reader, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            // todo verify payload println!("m={:?}", m);
+            match iterated_msgs {
+                2 => assert_eq!(m.timestamp_dms, 0_u32), // the first neg. gets a 0 timestamp
+                3 => assert_eq!(m.timestamp_dms, 9851_u32), // 9851dms after the first one
+                4 => assert_eq!(m.timestamp_dms, 0_u32),
+                5 => assert_eq!(m.timestamp_dms, 1_u32),
+                _ => {}
+            }
+        }
+        assert_eq!(iterated_msgs, 5); // one ctrl and four can msgs
+    }
+
+    #[test]
+    fn parse_signed_time_str_1() {
+        assert_eq!(parse_signed_time_str("-0.123456"), -123456_i64);
+        assert_eq!(parse_signed_time_str("0.123456"), 123456_i64);
+        assert_eq!(parse_signed_time_str("0.12345"), 123450_i64); // even though one digit missing!
+        assert_eq!(parse_signed_time_str("-42.1"), -42100000_i64);
+        assert_eq!(parse_signed_time_str("4242.123456"), 4242123456_i64);
+        assert_eq!(parse_signed_time_str("42"), 42000000_i64);
+        assert_eq!(parse_signed_time_str(""), 0_i64);
+        assert_eq!(parse_signed_time_str("-"), 0_i64);
+        assert_eq!(parse_signed_time_str(".1"), 100000_i64);
+        assert_eq!(parse_signed_time_str("-.1"), -100000_i64);
     }
 }
