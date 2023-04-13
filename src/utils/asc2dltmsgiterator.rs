@@ -14,7 +14,7 @@ use crate::{
 use chrono::NaiveDateTime;
 use lazy_static::lazy_static;
 use regex::{CaptureLocations, Regex};
-use slog::{debug, error, warn};
+use slog::{debug, error, trace};
 use std::{
     collections::HashMap,
     io::{BufRead, Lines},
@@ -169,7 +169,7 @@ where
                         let frame_id = if let Some(stripped) = id.strip_suffix('x') {
                             let frame_id = u32::from_str_radix(stripped, 16).unwrap_or_default();
                             if let Some(log) = self.log {
-                                debug!(
+                                trace!(
                                             log,
                                             "Asc2DltMsgIterator.next got msg with extended id={} {} at line #{}",
                                             id,
@@ -279,7 +279,7 @@ where
                         let frame_id = if let Some(stripped) = id.strip_suffix('x') {
                             let frame_id = u32::from_str_radix(stripped, 16).unwrap_or_default();
                             if let Some(log) = self.log {
-                                debug!(
+                                trace!(
                                         log,
                                         "Asc2DltMsgIterator.next got canfd msg with extended id={} {} at line #{}",
                                         id,
@@ -397,7 +397,7 @@ where
                                 self.date_us = (nt.timestamp_nanos() / 1000) as u64;
                             }
                             if let Some(log) = self.log {
-                                debug!(
+                                trace!(
                                     log,
                                     "Asc2DltMsgIterator.next got date {} as {:?} at line #{}",
                                     date.as_str(),
@@ -414,7 +414,7 @@ where
                                 if let Ok(id) = id.trim().parse::<u8>() {
                                     let name = name.trim();
                                     if let Some(log) = self.log {
-                                        debug!(
+                                        trace!(
                                         log,
                                         "Asc2DltMsgIterator.next got BusMapping {} = {} at line #{}",
                                         id,
@@ -465,7 +465,7 @@ where
                     } else if !line.is_empty() {
                         self.lines_skipped += 1;
                         if let Some(log) = self.log {
-                            warn!(
+                            debug!(
                                 log,
                                 "Asc2DltMsgIterator.next unknown line {} at line #{}",
                                 line,
