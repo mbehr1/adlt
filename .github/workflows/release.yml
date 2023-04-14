@@ -186,13 +186,12 @@ jobs:
           tar czf "$staging.tar.gz" "$staging"
           echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
         fi
-
     - name: Upload release archive
-      uses: sekwah41/upload-release-assets@main
+      id: upload_artifact
+      uses: softprops/action-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ${{ env.ASSET }}
-        asset_name: ${{ env.ASSET }}
-        asset_content_type: application/octet-stream
+        tag_name: ${{ needs.create-release.outputs.adlt_version }}
+        name: ${{ needs.create-release.outputs.adlt_version }}
+        files: ${{ env.ASSET }}
