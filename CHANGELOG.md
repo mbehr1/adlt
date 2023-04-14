@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.32.2 - 2023-04-14
+#### Bug Fixes
+- use asomeip 0.4.1 with can decoding fixes - (5ed125a) - Matthias Behr
+- support neg timestamps and hex canfd params - (7499f9c) - Matthias Behr
+#### Miscellaneous Chores
+- downgraded some logs from debug to trace - (4267841) - Matthias Behr
+
+- - -
+
 ## v0.32.1 - 2023-04-11
 #### Bug Fixes
 - can plugin missing frames - (01a9698) - Matthias Behr
