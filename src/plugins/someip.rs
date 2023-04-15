@@ -516,7 +516,7 @@ const r=/\.(?:changed|set|get)_.*?_field{"(.+?)":(.+)}\[OK\]$/;
 const m=r.exec(params.msg.payloadString);
 let o={};
 if(m!==null){
-    const v=JSON.parse(m[2]);
+    const v=JSON5.parse(m[2]);
     const fn=(p,v,o)=> {
         switch(typeof v){
             case 'number': o[p]=v;break;
@@ -544,7 +544,7 @@ let o={};
 if(m!==null){
     const evName=m[1];
     if (m[2].length>2){
-        const v=JSON.parse(m[2]);
+        const v=JSON5.parse(m[2]);
         const fn=(p,v,o)=> {
             switch(typeof v){
                 case 'number': o[p]=v;break;

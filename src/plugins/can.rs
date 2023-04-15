@@ -237,7 +237,7 @@ const r=/]:{"(.+?)":(.+)}$/;
 const m=r.exec(params.msg.payloadString);
 let o={};
 if(m!==null){
-    const v=JSON.parse(m[2]);
+    const v=JSON5.parse(m[2]);
     const fn=(p,v,o)=> {
         switch(typeof v){
             case 'number': o[p]=v;break;
