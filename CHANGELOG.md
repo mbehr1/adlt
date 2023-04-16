@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.33.0 - 2023-04-16
+#### Bug Fixes
+- use json5 for conversionFns - (b4825ac) - Matthias Behr
+#### Continuous Integration
+- use actions-gh-release to upload artifacts - (ffe986e) - Matthias Behr
+#### Features
+- can plugin report with texttables/enums - (10bab0c) - Matthias Behr
+
+- - -
+
 ## v0.32.2 - 2023-04-14
 #### Bug Fixes
 - use asomeip 0.4.1 with can decoding fixes - (5ed125a) - Matthias Behr
