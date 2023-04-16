@@ -233,7 +233,7 @@ It should be extended/replaced by a better mechanism where more type info from t
 (e.g. invalid values, *bitfields*, min/max, mapping to enums (as they are not printed)...)
  */
 const JS_FRAME_CONVERSION_FUNCTION: &str = r##"
-const r=/]:{"(.+?)":(.+)}$/;
+const r=params.localObj.r || (params.localObj.r=/]:{"(.+?)":(.+)}$/);
 const m=r.exec(params.msg.payloadString);
 let o={};
 if(m!==null){
@@ -249,6 +249,75 @@ if(m!==null){
 }
 return o;
 "##;
+
+// todos/ideas:
+// + (done using array with tuple/array mask/v/text) add bitfield text table as sep. EVENTs (or STATE with auto null?) (own graph for each of those?)
+// - add stable order to enums (e.g. by key value) (currently it's by: occurrence in data)
+// - add scale support incl. units (e.g. 4000 -> 1000V for a *0.25 scale)
+// - remove CRC&ALIVE? (or at least as EVENTS to prevent lines?)
+// + (done using stSet) optimize case STATE+EVENT cases to not always set the STATE_p=null if EVENT_p is used
+
+const JS_FRAME_CONVERSION_FUNCTION_MAP: &str = r##"
+const r=params.localObj.r || (params.localObj.r=/]:{"(.+?)":(.+)}$/);
+const m=r.exec(params.msg.payloadString);
+let o={};
+if(m!==null){
+    const map=params.localObj.vMap || (params.localObj.stSet=new Set(), params.localObj.vMap=new Map([{{VMAP}}]));
+    const stSet = params.localObj.stSet;
+    const v=JSON5.parse(m[2]);
+    const fn=(p,v,o,m)=> {
+        switch(typeof v){
+            case 'number': if(m){
+                if (Array.isArray(m)){
+                    let f=false;
+                    for (const tup of m){
+                        const [mask,val,tex]=tup;
+                        const nam = `TL_${p}_${tex}`
+                        if ((v & mask) === val){
+                            f=true;
+                            o[nam]='0x'+val.toString(16)+'|0x'+v.toString(16)+'|lightblue';
+                            stSet.add(nam);
+                        }else{
+                            if (stSet.has(nam)){
+                                o[nam]='off||grey|';
+                                stSet.delete(nam);
+                            }
+                        }
+                    };
+                    if (!f){
+                        o[`EVENT_${p}`]=v;
+                    }
+                }else{
+                    const mv=m.get(v);
+                    if (mv!==undefined){
+                        o[`STATE_${p}`]=mv;
+                        stSet.add(p);
+                    } else {
+                        if (stSet.has(p)){
+                            o[`STATE_${p}`]=null;
+                            stSet.delete(p);
+                        }
+                        o[`EVENT_${p}`]=v;
+                    }
+                }
+            } else { o[p]=v; }
+            break;
+            case 'string': o[`STATE_${p}`]=v;break;
+            case 'object': Object.keys(v).forEach(vc=>{const oM=m ? m.get(vc):undefined; fn(`${p}.${vc}`, v[vc],o, oM);}); break;
+        }
+    };
+    fn(m[1],v,o,map);
+}
+return o;
+"##;
+
+fn js_frame_conversion_function(js_value_map: &str) -> String {
+    if js_value_map.is_empty() {
+        JS_FRAME_CONVERSION_FUNCTION.to_string()
+    } else {
+        JS_FRAME_CONVERSION_FUNCTION_MAP.replace("{{VMAP}}", js_value_map)
+    }
+}
 
 fn tree_item_for_frame(
     fd: &FibexData,
@@ -279,26 +348,54 @@ fn tree_item_for_frame(
                         "conversionFunction": JS_FRAME_CONVERSION_FUNCTION
                     }
                 }),
-            "children": frame.pdu_instances.iter().map(|pdu_instance|{tree_item_for_pdu(fd, pdu_instance)}).collect::<Vec<serde_json::Value>>(),
+            "children": frame.pdu_instances.iter().map(|pdu_instance|{tree_item_for_pdu(fd, pdu_instance, channel_short_name, identifier)}).collect::<Vec<serde_json::Value>>(),
         })
     } else {
         json!({ "label": format!("0x{:03x} frame ref {} unknown!", identifier, frame_ref) })
     }
 }
 
-fn tree_item_for_pdu(fd: &FibexData, pdu_instance: &PduInstance) -> serde_json::Value {
+fn tree_item_for_pdu(
+    fd: &FibexData,
+    pdu_instance: &PduInstance,
+    channel_short_name: &str,
+    identifier: &u32,
+) -> serde_json::Value {
     let no_name = "<no shortname>";
     let no_desc = "<no desc>";
 
     let pdu = fd.elements.pdus_map_by_id.get(&pdu_instance.pdu_ref);
     if let Some(pdu) = pdu {
         let short_name = pdu.short_name.as_deref().unwrap_or(no_name);
+
+        // do we have a js mapping table?
+        let js_map = pdu
+            .signal_instances
+            .iter()
+            .filter_map(|signal_instance| js_for_signal(fd, signal_instance))
+            .collect::<Vec<String>>()
+            .join(",");
+
+        let filter_frag = if js_map.is_empty() {
+            json!(null)
+        } else {
+            serde_json::json!({
+                "apid":"CAN",
+                "ctid":"TC",
+                "payloadRegex":format!("^. {} 0x{:03x} ", channel_short_name, identifier),
+                "reportOptions":{
+                    "conversionFunction": js_frame_conversion_function(&js_map)
+                }
+            })
+        };
+
         json!({ "label": format!("{}", short_name),
             "tooltip": format!("description:\n{}\nbyte length: {}\nsignals:\n{}",
                 pdu.desc.as_deref().unwrap_or(no_desc),
                 pdu.byte_length,
                 pdu.signal_instances.iter().map(|s|format!("{}:tbd", s.signal_ref.as_str(), )).collect::<Vec<_>>().join("\n")
             ),
+            "filterFrag": filter_frag,
             "children": pdu.signal_instances.iter().map(|signal_instance|{tree_item_for_signal(fd, signal_instance
             )}).collect::<Vec<serde_json::Value>>(),
         })
@@ -410,6 +507,112 @@ fn md_for_compu_methods(compu_methods: &Vec<CompuMethod>) -> String {
     }
     r += "\n";
     r
+}
+
+fn js_for_signal(fd: &FibexData, signal_instance: &SignalInstance) -> Option<String> {
+    let no_name = "<no shortname>";
+
+    let signal = fd
+        .elements
+        .signals_map_by_id
+        .get(&signal_instance.signal_ref);
+    if let Some(signal) = signal {
+        let short_name = signal.short_name.as_deref().unwrap_or(no_name);
+        Some(format!(
+            "[\"{}\",{}]",
+            short_name,
+            js_for_coding(fd, &signal.coding_ref)
+        ))
+    } else {
+        None
+    }
+}
+
+fn js_for_coding(fd: &FibexData, coding_ref: &str) -> String {
+    if let Some(cod) = fd.pi.codings.get(coding_ref) {
+        js_for_compu_methods(&cod.compu_methods)
+    } else {
+        js_for_compu_methods(&vec![])
+    }
+}
+
+/// Generate javascript code that defines a map initializer
+/// that maps values to enums/text table entries.
+///
+/// returns 'undefined' for no text table entries or 'new Map([[key1, value1],...])' where key1 = raw value, value1 = enum/text
+fn js_for_compu_methods(compu_methods: &Vec<CompuMethod>) -> String {
+    let mut r = String::with_capacity(1024);
+    let initial_r_len = r.len();
+    let mut closing_str = String::with_capacity(2);
+    for cm in compu_methods {
+        match cm.category {
+            CompuCategory::TextTable => {
+                if r.len() == initial_r_len {
+                    // we support only either a TextTable or  Bitfield
+                    r += "new Map(["; // texttable uses a Map
+                    closing_str += "])";
+                    r += &cm
+                        .internal_to_phys_scales
+                        .iter()
+                        .filter(|cs| cs.get_single_value().is_some() && cs.compu_const.is_some())
+                        .map(|cs| {
+                            format!(
+                                "[{},{:?}]",
+                                cs.get_single_value().unwrap(),
+                                if let Some(afibex::fibex::VvT::VT(en)) = &cs.compu_const {
+                                    en // todo needs escaping of "!
+                                } else {
+                                    ""
+                                }
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                }
+            }
+            CompuCategory::BitfieldTextTable => {
+                if r.len() == initial_r_len {
+                    // we encode the bitfields as an array or tuple(array) with mask/value/text
+                    r += "[";
+                    r += &cm
+                        .internal_to_phys_scales
+                        .iter()
+                        .filter(|cs| {
+                            cs.get_single_value().is_some()
+                                && cs.mask.is_some()
+                                && cs.compu_const.is_some()
+                                && cs.get_single_value().unwrap() != &XsDouble::I64(0)
+                        })
+                        .map(|cs| {
+                            let v = cs.get_single_value().unwrap();
+                            let mask = cs.mask.unwrap();
+                            format!(
+                                "[{},{},{:?}]",
+                                mask,
+                                v,
+                                if let Some(afibex::fibex::VvT::VT(en)) = &cs.compu_const {
+                                    en // todo needs escaping of "!
+                                } else {
+                                    ""
+                                }
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    closing_str += "]";
+                }
+            }
+            _ => {}
+        }
+    }
+    if r.len() == initial_r_len {
+        r.clear();
+        r += "undefined";
+        r
+    } else {
+        r += &closing_str;
+        r
+    }
 }
 
 impl CanPlugin {
@@ -542,6 +745,7 @@ impl CanPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use afibex::fibex::{CompuScale, IntervalType};
     use serde_json::json;
 
     #[test]
@@ -565,5 +769,56 @@ mod tests {
         let state_obj = state_value.as_object().unwrap();
         assert!(state_obj.contains_key("name"));
         assert!(state_obj.contains_key("treeItems"));
+    }
+
+    #[test]
+    fn js_for_compu_methods_test1() {
+        let cm = vec![];
+        let r = js_for_compu_methods(&cm);
+        assert_eq!(r, "undefined");
+
+        let cm = vec![CompuMethod {
+            category: CompuCategory::TextTable,
+            internal_to_phys_scales: vec![],
+        }];
+        let r = js_for_compu_methods(&cm);
+        assert_eq!(r, "new Map([])");
+
+        let v1: XsDouble = XsDouble::I64(1_i64);
+
+        let cm = vec![CompuMethod {
+            category: CompuCategory::TextTable,
+            internal_to_phys_scales: vec![CompuScale {
+                mask: None,
+                lower_limit: Some(IntervalType(std::ops::Bound::Included(v1.clone()))),
+                upper_limit: Some(IntervalType(std::ops::Bound::Included(v1.clone()))),
+                compu_const: Some(afibex::fibex::VvT::VT("foo".to_string())),
+            }],
+        }];
+        let r = js_for_compu_methods(&cm);
+        assert_eq!(r, r##"new Map([[1,"foo"]])"##);
+
+        let v2: XsDouble = XsDouble::I64(2_i64);
+        let cm = vec![CompuMethod {
+            category: CompuCategory::BitfieldTextTable,
+            internal_to_phys_scales: vec![
+                CompuScale {
+                    mask: Some(1u64),
+                    lower_limit: Some(IntervalType(std::ops::Bound::Included(v1.clone()))),
+                    upper_limit: Some(IntervalType(std::ops::Bound::Included(v1))),
+                    compu_const: Some(afibex::fibex::VvT::VT("mask1".to_string())),
+                },
+                CompuScale {
+                    mask: Some(2u64),
+                    lower_limit: Some(IntervalType(std::ops::Bound::Included(v2.clone()))),
+                    upper_limit: Some(IntervalType(std::ops::Bound::Included(v2))),
+                    compu_const: Some(afibex::fibex::VvT::VT("mask2".to_string())),
+                },
+            ],
+        }];
+        let r = js_for_compu_methods(&cm);
+        assert_eq!(r, r##"[[1,1,"mask1"],[2,2,"mask2"]]"##);
+
+        // todo think about BigInt support...
     }
 }
