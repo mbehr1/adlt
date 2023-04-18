@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.33.1 - 2023-04-18
+#### Bug Fixes
+- **(CAN)** respect endianess for signal instances - (4e934e2) - Matthias Behr
+
+- - -
+
 ## v0.33.0 - 2023-04-16
 #### Bug Fixes
 - use json5 for conversionFns - (b4825ac) - Matthias Behr
