@@ -485,13 +485,15 @@ where
                         }
                     } else if RE_COMMENT.is_match(line) {
                         let comment = &line[2..].trim();
-                        if comment.starts_with("BusMapping: CAN ") {
+                        if comment.starts_with("BusMapping: CAN") {
                             // use BusMapping: CAN x = <name> and send the name as ECU name?
-                            if let Some((id, name)) = comment[15..].split_once('=') {
+                            // or CANFD x = <name>
+                            let id_idx = 14 + comment[14..].find(' ').unwrap_or(1);
+                            if let Some((id, name)) = comment[id_idx..].split_once('=') {
                                 if let Ok(id) = id.trim().parse::<u8>() {
                                     let name = name.trim();
                                     if let Some(log) = self.log {
-                                        trace!(
+                                        debug!(
                                         log,
                                         "Asc2DltMsgIterator.next got BusMapping {} = {} at line #{}",
                                         id,
@@ -684,7 +686,7 @@ mod tests {
     #[test]
     fn asc_canfd_errorframe() {
         let reader = r##"
-//BusMapping: CAN 1 = ECU_CAN_FD 431
+//BusMapping: CANFD 1 = ECU_CAN_FD 559
 -0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0
 0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0"##
             .as_bytes();
