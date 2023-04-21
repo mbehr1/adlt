@@ -1,3 +1,6 @@
+use std::fs::File;
+use std::io::Read;
+
 use adlt::utils::eac_stats::EacStats;
 use criterion::{
     /*black_box,*/ criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
@@ -84,5 +87,27 @@ pub fn eac_stats1(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(util_benches, eac_stats1);
+pub fn asc_iterator1(c: &mut Criterion) {
+    let path = std::path::Path::new("./tests/can_example1.asc");
+    let mut fi = File::open(path).ok().unwrap();
+    let mut buf = vec![0u8; 10 * 1024usize];
+    let read_size = fi.read(&mut buf).unwrap();
+    let expected_msgs = 101_u64;
+    let mut group = c.benchmark_group("asc_iterator");
+    group.throughput(Throughput::Elements(expected_msgs));
+    group.bench_function("asc_iterator 10k", |b| {
+        b.iter(|| {
+            let mut it = Asc2DltMsgIterator::new(0, &buf[0..read_size], None);
+            let mut iterated_msgs: u64 = 0;
+            for m in &mut it {
+                iterated_msgs += 1;
+                // todo verify payload println!("m={:?}", m);
+            }
+            assert_eq!(iterated_msgs, expected_msgs);
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(util_benches, eac_stats1, asc_iterator1);
 criterion_main!(util_benches);

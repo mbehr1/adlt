@@ -6,7 +6,7 @@ use std::{
 mod lowmarkbufreader;
 pub use self::lowmarkbufreader::LowMarkBufReader;
 mod asc2dltmsgiterator;
-use self::asc2dltmsgiterator::Asc2DltMsgIterator;
+pub use self::asc2dltmsgiterator::Asc2DltMsgIterator;
 mod dltmessageiterator;
 pub use self::dltmessageiterator::{get_first_message_from_file, DltMessageIterator};
 pub mod eac_stats;
