@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::Read;
+use std::io::Seek;
 
 use adlt::utils::eac_stats::EacStats;
 use criterion::{
@@ -110,5 +111,31 @@ pub fn asc_iterator1(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(util_benches, eac_stats1, asc_iterator1);
+pub fn file_info(c: &mut Criterion) {
+    let path = std::path::Path::new("./tests/can_example1.asc");
+    let mut fi = File::open(path).ok().unwrap();
+    let read_size = 512 * 1024;
+    let mut group = c.benchmark_group("get_dlt_infos_from_file");
+    /*
+    group.bench_function("get_first_message", |b| {
+        let namespace = get_new_namespace();
+        b.iter(|| {
+            fi.rewind().unwrap();
+            assert!(get_first_message_from_file("asc", &mut fi, read_size, namespace).is_some());
+        });
+    });*/
+    group.bench_function("get_dlt_infos_from_file", |b| {
+        let namespace = get_new_namespace();
+        b.iter(|| {
+            fi.rewind().unwrap();
+            let dfi = get_dlt_infos_from_file("asc", &mut fi, read_size, namespace);
+            assert!(dfi.is_ok());
+            assert!(dfi.unwrap().first_msg.is_some());
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(util_benches, eac_stats1, asc_iterator1, file_info);
 criterion_main!(util_benches);

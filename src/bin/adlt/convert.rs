@@ -244,11 +244,20 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             match fi {
                 Ok(mut f) => {
                     let file_ext = std::path::Path::new(&f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-                    let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024, namespace);
-                    if m1.is_none() {
-                        warn!(log, "file {} ({}) (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext;);
+                    let dfi = adlt::utils::get_dlt_infos_from_file(file_ext, &mut f, 512*1024, namespace);
+                    match dfi {
+                        Ok(dfi) => {
+                            let m1 = &dfi.first_msg;
+                            if m1.is_none() {
+                                warn!(log, "file {} ({}) (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext;);
+                            }
+                            vec![(path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).to_string_lossy().to_string(), Ok(dfi))]
+                        },
+                        Err(e) => {
+                            warn!(log, "file {} ({}) (ext: '{}') had io error '{}'. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext, e;);
+                            vec![(path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).to_string_lossy().to_string(), Err(e))]
+                        }
                     }
-                    vec![(path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).to_string_lossy().to_string(), Ok(m1))]
                 }
                 _ => {
                     // file does not exist. Let's check whether its a glob expression (as windows doesn't support glob on cmd)
@@ -269,12 +278,22 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                             let fi = File::open(glob_name);
                             if let Ok(mut f)=fi {
                                 let file_ext = std::path::Path::new(glob_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-                                let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024, namespace);
-                                if m1.is_none() {
-                                    warn!(log, "globbed file '{}' (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+
+                                let dfi = adlt::utils::get_dlt_infos_from_file(file_ext, &mut f, 512*1024, namespace);
+                                match dfi {
+                                    Ok(dfi) => {
+                                        let m1 = &dfi.first_msg;
+                                        if m1.is_none() {
+                                            warn!(log, "globbed file '{}' (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+                                        }
+                                        let path_glob = std::path::Path::new(glob_name);
+                                        (path_glob.canonicalize().unwrap_or_else(|_|glob_name.to_path_buf()).to_string_lossy().to_string(), Ok(dfi))
+                                    },
+                                    Err(e) => {
+                                        warn!(log, "file {} ({}) (ext: '{}') had io error '{}'. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext, e;);
+                                        (glob_name.to_string_lossy().to_string(), Err(e))
+                                    }
                                 }
-                                let path_glob = std::path::Path::new(glob_name);
-                                (path_glob.canonicalize().unwrap_or_else(|_|glob_name.to_path_buf()).to_string_lossy().to_string(), Ok(m1))
                             }else{
                                 (glob_name.to_string_lossy().to_string(), Err(std::io::Error::from(std::io::ErrorKind::NotFound)))
                             }
@@ -296,10 +315,15 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let mut file_msgs: Vec<_> = files_ok
         .into_iter()
         .map(|(a, b)| (a, b.unwrap()))
-        .filter(|(_a, b)| b.is_some())
-        .map(|(a, b)| (a, b.unwrap()))
+        .filter(|(_a, b)| b.first_msg.is_some())
         .collect();
-    file_msgs.sort_by(|a, b| a.1.reception_time_us.cmp(&b.1.reception_time_us));
+    file_msgs.sort_by(|a, b| {
+        a.1.first_msg
+            .as_ref()
+            .unwrap()
+            .reception_time_us
+            .cmp(&b.1.first_msg.as_ref().unwrap().reception_time_us)
+    });
     // todo if the reception time is similar for duplicates the ones with same name might not be consecutive! (will need additional sorting)
 
     input_file_names = file_msgs.iter().map(|(a, _b)| a.clone()).collect();

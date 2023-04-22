@@ -1,8 +1,6 @@
 use crate::dlt::{parse_dlt_with_storage_header, DltMessage, DltMessageIndexType};
 use slog::debug;
-use std::io::{BufRead, BufReader, Read};
-
-use super::get_dlt_message_iterator;
+use std::io::BufRead;
 
 pub struct DltMessageIterator<'a, R> {
     reader: R,
@@ -58,44 +56,13 @@ where
     }
 }
 
-pub fn get_first_message(
-    file_ext: &str,
-    reader: impl BufRead,
-    namespace: u32,
-) -> Option<DltMessage> {
-    let mut it = get_dlt_message_iterator(file_ext, 0, reader, namespace, None);
-    it.next()
-}
-
-/// return the first DltMessage from the first read_size bytes in the file provided
-///
-/// Reads read_size bytes into a buf and searches for the first DltMessage there
-pub fn get_first_message_from_file(
-    file_ext: &str,
-    file: &mut std::fs::File,
-    read_size: usize,
-    namespace: u32,
-) -> Option<DltMessage> {
-    let mut buf = vec![0u8; read_size];
-    let res = file.read(&mut buf);
-    match res {
-        Ok(res) => get_first_message(
-            file_ext,
-            BufReader::with_capacity(read_size, &buf[0..res]),
-            namespace,
-        ),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dlt::{DltChar4, DltStandardHeader, DltStorageHeader, DLT_MAX_STORAGE_MSG_SIZE};
-    use crate::utils::{get_new_namespace, LowMarkBufReader, US_PER_SEC};
+    use crate::utils::{LowMarkBufReader, US_PER_SEC};
     use std::fs::File;
     use std::io::prelude::*;
-    use std::io::BufReader;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -105,12 +72,16 @@ mod tests {
         let file_path = String::from(file.path().to_str().unwrap());
 
         let persisted_msgs: DltMessageIndexType = 10;
-        let ecu = DltChar4::from_buf(b"ECU1");
+        let ecus = vec![
+            DltChar4::from_buf(b"ECU1"),
+            DltChar4::from_buf(b"ECU2"),
+            DltChar4::from_buf(b"ECU3"),
+        ];
         for i in 0..persisted_msgs {
             let sh = DltStorageHeader {
                 secs: (1640995200000000 / US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
                 micros: 0,
-                ecu,
+                ecu: ecus[i as usize % ecus.len()],
             };
             let standard_header = DltStandardHeader {
                 htyp: 1 << 5, // vers 1
@@ -139,24 +110,5 @@ mod tests {
         assert_eq!(it.bytes_skipped, 0);
         assert_eq!(it.bytes_processed, file_size as usize);
         assert_eq!(it.index, start_index + iterated_msgs);
-
-        let namespace = get_new_namespace();
-
-        let m1 = get_first_message(
-            "dlt",
-            BufReader::with_capacity(512 * 1024, File::open(&file_path).unwrap()),
-            namespace,
-        );
-        assert!(m1.is_some());
-        assert_eq!(m1.unwrap().mcnt(), 0);
-
-        let m1 = get_first_message_from_file(
-            "dlt",
-            &mut File::open(&file_path).unwrap(),
-            512 * 1024,
-            namespace,
-        );
-        assert!(m1.is_some());
-        assert_eq!(m1.unwrap().mcnt(), 0);
     }
 }
