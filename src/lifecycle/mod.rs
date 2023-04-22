@@ -779,6 +779,7 @@ mod tests {
     use crate::dlt::*;
     use crate::lifecycle::*;
     use crate::utils::get_dlt_message_iterator;
+    use crate::utils::get_new_namespace;
     use crate::utils::LowMarkBufReader;
     use ntest::timeout;
     use std::fs::File;
@@ -1691,6 +1692,7 @@ mod tests {
                 .unwrap_or(""),
             messages_processed,
             buf_reader,
+            get_new_namespace(),
             None,
         );
         for msg in it.by_ref() {

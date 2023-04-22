@@ -10,8 +10,8 @@ use adlt::{
         plugins_process_msgs,
     },
     utils::{
-        eac_stats::EacStats, get_dlt_message_iterator, get_first_message_from_file, remote_types,
-        LowMarkBufReader,
+        eac_stats::EacStats, get_dlt_message_iterator, get_first_message_from_file,
+        get_new_namespace, remote_types, LowMarkBufReader,
     },
 };
 use clap::{Arg, Command};
@@ -331,6 +331,7 @@ impl StreamContext {
 #[derive(Debug)]
 struct FileContext {
     file_names: Vec<String>,
+    namespace: u32,
     sort_by_time: bool,                          // sort by timestamp
     plugins_active: Vec<Box<dyn Plugin + Send>>, // will be moved to parsing_thread
     plugin_states: Vec<(u32, Arc<RwLock<PluginState>>)>,
@@ -395,6 +396,8 @@ impl FileContext {
                 "at least one file name needed",
             ));
         }
+        let namespace = get_new_namespace();
+
         // map input_file_names to name/first msg
         let file_msgs = file_names.iter().map(|f_name| {
             let fi = File::open(f_name);
@@ -402,7 +405,7 @@ impl FileContext {
                 Ok(mut f) => {
                     let file_len = f.metadata().map_or(0, |m|m.len());
                     let file_ext = std::path::Path::new(f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-                    let m1 = get_first_message_from_file(file_ext, &mut f, 512 * 1024);
+                    let m1 = get_first_message_from_file(file_ext, &mut f, 512 * 1024, namespace);
                     if m1.is_none() {
                         warn!(log, "file {} (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
                     }
@@ -477,6 +480,7 @@ impl FileContext {
 
         Ok(FileContext {
             file_names,
+            namespace,
             sort_by_time,
             plugins_active,
             plugin_states,
@@ -566,6 +570,7 @@ fn process_incoming_text_message<T: Read + Write>(
                         s.parsing_thread = Some(create_parser_thread(
                             log.clone(),
                             s.file_names.clone(),
+                            s.namespace,
                             s.sort_by_time,
                             plugins_active,
                         ));
@@ -1307,6 +1312,7 @@ struct ParserThreadType {
 fn create_parser_thread(
     log: slog::Logger,
     input_file_names: Vec<String>,
+    namespace: u32,
     sort_by_time: bool,
     plugins_active: Vec<Box<dyn Plugin + Send>>,
 ) -> ParserThreadType {
@@ -1381,6 +1387,7 @@ fn create_parser_thread(
                         file_ext,
                         messages_processed,
                         buf_reader,
+                        namespace,
                         Some(&log),
                     );
                     loop {
