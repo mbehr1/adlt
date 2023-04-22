@@ -10,8 +10,8 @@ use adlt::{
         plugins_process_msgs,
     },
     utils::{
-        eac_stats::EacStats, get_dlt_message_iterator, get_first_message_from_file,
-        get_new_namespace, remote_types, LowMarkBufReader,
+        eac_stats::EacStats, get_dlt_infos_from_file, get_dlt_message_iterator, get_new_namespace,
+        remote_types, LowMarkBufReader,
     },
 };
 use clap::{Arg, Command};
@@ -403,13 +403,23 @@ impl FileContext {
             let fi = File::open(f_name);
             match fi {
                 Ok(mut f) => {
-                    let file_len = f.metadata().map_or(0, |m|m.len());
                     let file_ext = std::path::Path::new(f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-                    let m1 = get_first_message_from_file(file_ext, &mut f, 512 * 1024, namespace);
-                    if m1.is_none() {
-                        warn!(log, "file {} (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+
+                    let dfi = get_dlt_infos_from_file(file_ext, &mut f, 512*1024, namespace);
+                    match dfi {
+                        Ok(dfi) =>{
+                            let m1 = &dfi.first_msg;
+                            if m1.is_none() {
+                                warn!(log, "file {} (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+                            }
+                            let file_len = dfi.file_len.unwrap_or(0);
+                            (f_name, Some(dfi), file_len)
+                        }
+                        Err(e)=>{
+                            warn!(log, "reading {} got io error '{}'. Skipping!", f_name, e;);
+                            (f_name, None, 0)
+                        }
                     }
-                    (f_name, m1, file_len)
                 }
                 _ => {
                     warn!(log, "couldn't open {}. Skipping!", f_name;);
@@ -417,12 +427,24 @@ impl FileContext {
                 }
             }
         });
-        let mut file_msgs: Vec<_> = file_msgs.filter(|(_a, b, _c)| b.is_some()).collect();
+        let mut file_msgs: Vec<_> = file_msgs
+            .filter(|(_a, b, _c)| b.is_some() && b.as_ref().unwrap().first_msg.is_some())
+            .collect();
         file_msgs.sort_by(|a, b| {
             a.1.as_ref()
                 .unwrap()
+                .first_msg
+                .as_ref()
+                .unwrap()
                 .reception_time_us
-                .cmp(&b.1.as_ref().unwrap().reception_time_us)
+                .cmp(
+                    &b.1.as_ref()
+                        .unwrap()
+                        .first_msg
+                        .as_ref()
+                        .unwrap()
+                        .reception_time_us,
+                )
         });
 
         // file size for all files:

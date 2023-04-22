@@ -1,6 +1,9 @@
-use crate::dlt::{DltArg, DltMessage, DltMessageIndexType, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_STRG};
+use crate::dlt::{
+    DltArg, DltChar4, DltMessage, DltMessageIndexType, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_STRG,
+};
 use std::{
-    io::BufRead,
+    collections::HashSet,
+    io::{BufRead, BufReader, Read},
     sync::{
         atomic::AtomicU32,
         mpsc::{Receiver, Sender},
@@ -11,7 +14,7 @@ pub use self::lowmarkbufreader::LowMarkBufReader;
 mod asc2dltmsgiterator;
 pub use self::asc2dltmsgiterator::Asc2DltMsgIterator;
 mod dltmessageiterator;
-pub use self::dltmessageiterator::{get_first_message_from_file, DltMessageIterator};
+pub use self::dltmessageiterator::DltMessageIterator;
 pub mod eac_stats;
 pub mod remote_types;
 
@@ -47,6 +50,71 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
             it.log = log;
             it
         }),
+    }
+}
+
+pub struct DltFileInfos {
+    pub file_len: Option<u64>,         // length of the file
+    pub read_size: usize,              // number of bytes that have been tried to read/parse
+    pub first_msg: Option<DltMessage>, // the first DLT message
+    pub namespace: u32,                // namespace (for the ECU names)
+    pub ecus_seen: HashSet<DltChar4>,  // the ECU ids within the read_size range
+}
+
+/// Returns infos of a partial parsing from a DLT supported file
+///
+/// Returned info contain e.g. the ECU ids encountered in the DLT messages within the first read_size number of bytes.
+///
+/// **Note:** consumes up to read_size bytes from the file!
+///
+/// # Examples
+///
+/// ```
+/// use std::fs::File;
+/// use adlt::dlt::DltChar4;
+/// use adlt::utils::get_dlt_infos_from_file;
+/// let dfi = get_dlt_infos_from_file("asc", &mut File::open("./tests/can_example1.asc").unwrap(), 512*1024, 0).unwrap();
+/// assert!(dfi.first_msg.is_some());
+/// assert!(dfi.ecus_seen.contains(&DltChar4::from_buf(b"CAN1")));
+/// ```
+
+pub fn get_dlt_infos_from_file(
+    file_ext: &str,
+    file: &mut std::fs::File,
+    read_size: usize,
+    namespace: u32,
+) -> std::io::Result<DltFileInfos> {
+    let mut buf = vec![0u8; read_size];
+    let res = file.read(&mut buf);
+    match res {
+        Ok(res) => {
+            let file_len = file.metadata().map_or(None, |m| Some(m.len()));
+            let mut it = get_dlt_message_iterator(
+                file_ext,
+                0,
+                BufReader::with_capacity(read_size, &buf[0..res]),
+                namespace,
+                None,
+            );
+            let first_msg = it.next();
+            let mut ecus_seen = HashSet::with_capacity(8);
+            if let Some(first_m) = &first_msg {
+                ecus_seen.insert(first_m.ecu);
+                // scan other msgs as well:
+                for m in it {
+                    ecus_seen.insert(m.ecu);
+                }
+            }
+
+            Ok(DltFileInfos {
+                file_len,
+                read_size,
+                first_msg,
+                namespace,
+                ecus_seen,
+            })
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -529,12 +597,45 @@ pub fn payload_from_args<'a>(args: &'a [DltArg<'a>]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use crate::dlt::DltMessage;
+    use crate::dlt::{DltMessage, DltStandardHeader, DltStorageHeader};
     use crate::lifecycle::*;
     use crate::utils::*;
+    use std::fs::File;
+    use std::io::Write;
     use std::sync::mpsc::channel;
     //    use std::time::Instant;
     use chrono::{Datelike, Timelike};
+    use tempfile::NamedTempFile;
+
+    pub fn get_first_message(
+        file_ext: &str,
+        reader: impl BufRead,
+        namespace: u32,
+    ) -> Option<DltMessage> {
+        let mut it = get_dlt_message_iterator(file_ext, 0, reader, namespace, None);
+        it.next()
+    }
+
+    /// return the first DltMessage from the first read_size bytes in the file provided
+    ///
+    /// Reads read_size bytes into a buf and searches for the first DltMessage there
+    pub fn get_first_message_from_file(
+        file_ext: &str,
+        file: &mut std::fs::File,
+        read_size: usize,
+        namespace: u32,
+    ) -> Option<DltMessage> {
+        let mut buf = vec![0u8; read_size];
+        let res = file.read(&mut buf);
+        match res {
+            Ok(res) => get_first_message(
+                file_ext,
+                BufReader::with_capacity(read_size, &buf[0..res]),
+                namespace,
+            ),
+            _ => None,
+        }
+    }
 
     #[test]
     fn get_dlt_message_it() {
@@ -546,6 +647,74 @@ mod tests {
         let mut it_dlt =
             get_dlt_message_iterator("dlt", 0, &[] as &[u8], get_new_namespace(), None);
         assert!(it_dlt.next().is_none());
+    }
+
+    #[test]
+    fn get_first_message_tests() {
+        // create a test file with 1M DLT messages:
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        let persisted_msgs: DltMessageIndexType = 10;
+        let ecus = vec![
+            DltChar4::from_buf(b"ECU1"),
+            DltChar4::from_buf(b"ECU2"),
+            DltChar4::from_buf(b"ECU3"),
+        ];
+        for i in 0..persisted_msgs {
+            let sh = DltStorageHeader {
+                secs: (1640995200000000 / US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu: ecus[i as usize % ecus.len()],
+            };
+            let standard_header = DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(&mut file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+        let file_len = std::fs::metadata(&file_path).unwrap().len();
+
+        let namespace = get_new_namespace();
+
+        let m1 = get_first_message(
+            "dlt",
+            BufReader::with_capacity(512 * 1024, File::open(&file_path).unwrap()),
+            namespace,
+        );
+        assert!(m1.is_some());
+        assert_eq!(m1.unwrap().mcnt(), 0);
+
+        let m1 = get_first_message_from_file(
+            "dlt",
+            &mut File::open(&file_path).unwrap(),
+            512 * 1024,
+            namespace,
+        );
+        assert!(m1.is_some());
+        assert_eq!(m1.unwrap().mcnt(), 0);
+
+        let dfi = get_dlt_infos_from_file(
+            "dlt",
+            &mut File::open(&file_path).unwrap(),
+            512 * 1024,
+            namespace,
+        )
+        .unwrap();
+        assert_eq!(dfi.read_size, 512 * 1024);
+        assert_eq!(dfi.namespace, namespace);
+        assert!(dfi.first_msg.is_some());
+        assert!(dfi.file_len.is_some());
+        assert_eq!(dfi.file_len.unwrap(), file_len);
+        assert!(dfi
+            .ecus_seen
+            .symmetric_difference(&HashSet::from_iter(ecus.iter().cloned()))
+            .collect::<HashSet<_>>()
+            .is_empty());
     }
 
     #[test]
