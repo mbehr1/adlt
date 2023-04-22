@@ -15,7 +15,9 @@ use adlt::{
         anonymize::AnonymizePlugin, file_transfer::FileTransferPlugin, plugin::Plugin,
         plugins_process_msgs,
     },
-    utils::{buf_as_hex_to_io_write, get_dlt_message_iterator, LowMarkBufReader},
+    utils::{
+        buf_as_hex_to_io_write, get_dlt_message_iterator, get_new_namespace, LowMarkBufReader,
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -235,13 +237,14 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     // we follow this path even if there is just one paramater as it might be a glob expression
 
     // map input_file_names to name/first msg
+    let namespace = get_new_namespace();
     let file_msgs = input_file_names.iter().flat_map(|f_name| {
             let path = std::path::Path::new(f_name);
             let fi = File::open(path);
             match fi {
                 Ok(mut f) => {
                     let file_ext = std::path::Path::new(&f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-                    let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024);
+                    let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024, namespace);
                     if m1.is_none() {
                         warn!(log, "file {} ({}) (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext;);
                     }
@@ -266,7 +269,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                             let fi = File::open(glob_name);
                             if let Ok(mut f)=fi {
                                 let file_ext = std::path::Path::new(glob_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-                                let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024);
+                                let m1 = adlt::utils::get_first_message_from_file(file_ext, &mut f, 512 * 1024, namespace);
                                 if m1.is_none() {
                                     warn!(log, "globbed file '{}' (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
                                 }
@@ -517,6 +520,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 .unwrap_or(""),
             messages_processed,
             buf_reader,
+            namespace,
             Some(log),
         );
         loop {

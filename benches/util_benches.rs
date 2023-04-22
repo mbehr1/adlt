@@ -96,10 +96,11 @@ pub fn asc_iterator1(c: &mut Criterion) {
     let mut group = c.benchmark_group("asc_iterator");
     group.throughput(Throughput::Elements(expected_msgs));
     group.bench_function("asc_iterator 10k", |b| {
+        let namespace = get_new_namespace();
         b.iter(|| {
-            let mut it = Asc2DltMsgIterator::new(0, &buf[0..read_size], None);
+            let mut it = Asc2DltMsgIterator::new(0, &buf[0..read_size], namespace, None);
             let mut iterated_msgs: u64 = 0;
-            for m in &mut it {
+            for _m in &mut it {
                 iterated_msgs += 1;
                 // todo verify payload println!("m={:?}", m);
             }

@@ -19,6 +19,7 @@ use std::{
     collections::HashMap,
     io::{BufRead, Lines},
     str::FromStr,
+    sync::RwLock,
 };
 
 /// an iterator that creates/iterates over dlt messages created from an .asc CAN file.
@@ -49,6 +50,7 @@ use std::{
 pub struct Asc2DltMsgIterator<'a, R> {
     lines: Lines<R>, // todo could optimize with e.g. stream_iterator for &str instead of string copies!
     pub index: DltMessageIndexType,
+    namespace: u32,
     pub lines_processed: usize,
     pub lines_skipped: usize,
     pub log: Option<&'a slog::Logger>,
@@ -69,6 +71,7 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
     pub fn new(
         start_index: DltMessageIndexType,
         reader: R,
+        namespace: u32,
         log: Option<&'a slog::Logger>,
     ) -> Asc2DltMsgIterator<'a, R> {
         let htyp = DLT_STD_HDR_VERSION
@@ -86,6 +89,7 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
         Asc2DltMsgIterator {
             lines: reader.lines(),
             index: start_index,
+            namespace,
             lines_processed: 0,
             lines_skipped: 0,
             log,
@@ -102,16 +106,11 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
         }
     }
 
-    fn get_ecu(&mut self, can_id: u8) -> &DltChar4 {
-        self.can_id_ecu_map.entry(can_id).or_insert_with(|| {
-            if can_id < 10 {
-                DltChar4::from_str(format!("CAN{}", can_id).as_str()).unwrap()
-            } else if can_id < 100 {
-                DltChar4::from_str(format!("CA{}", can_id).as_str()).unwrap()
-            } else {
-                DltChar4::from_str(format!("C{}", can_id).as_str()).unwrap()
-            }
-        })
+    fn get_ecu(&mut self, can_id: u8, name: &Option<&str>) -> DltChar4 {
+        self.can_id_ecu_map
+            .entry(can_id)
+            .or_insert_with(|| get_ecuid_for_namespace(self.namespace, name))
+            .to_owned()
     }
 }
 
@@ -129,7 +128,32 @@ lazy_static! {
         // timestamp CANFD channel_id Rx|Tx ErrorFrame (rest ignored)
         Regex::new(r"^(-?\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ErrorFrame").unwrap();
 
+    // map by namespace to a map for name to ecu-id:
+    static ref CAN_GLOBAL_ECU_MAP: RwLock<HashMap<u32, HashMap<String, DltChar4>>> = RwLock::new(HashMap::new());
 }
+
+fn get_ecuid_for_namespace(namespace: u32, name: &Option<&str>) -> DltChar4 {
+    let mut namespace_map = CAN_GLOBAL_ECU_MAP.write().unwrap();
+    let map = namespace_map.entry(namespace).or_insert_with(HashMap::new);
+    let next_id = map.len() + 1;
+    map.entry(name.map_or_else(|| format!("AUTO_CAN_ID_{}", next_id), |f| f.to_string()))
+        .or_insert_with(|| {
+            if next_id < 10 {
+                DltChar4::from_str(format!("CAN{}", next_id).as_str()).unwrap()
+            } else if next_id < 100 {
+                DltChar4::from_str(format!("CA{}", next_id).as_str()).unwrap()
+            } else {
+                DltChar4::from_str(format!("C{}", next_id).as_str()).unwrap()
+            }
+        })
+        .to_owned()
+}
+
+/* todo for now we do never clear the namespaces map. could use some ref counted...
+fn remove_namespace_global_ecu_map(namespace: u32) -> Option<HashMap<String, DltChar4>> {
+    let mut map = CAN_GLOBAL_ECU_MAP.write().unwrap();
+    map.remove(&namespace)
+} */
 
 fn asc_parse_date(date_str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
     // we expect them in the following format:
@@ -207,15 +231,6 @@ where
                         let can_id = &cap_str[loc_can_id.0..loc_can_id.1]
                             .parse::<u8>()
                             .unwrap_or_default();
-                        let ecu = self.can_id_ecu_map.entry(*can_id).or_insert_with(|| {
-                            if *can_id < 10 {
-                                DltChar4::from_str(format!("CAN{}", can_id).as_str()).unwrap()
-                            } else if *can_id < 100 {
-                                DltChar4::from_str(format!("CA{}", can_id).as_str()).unwrap()
-                            } else {
-                                DltChar4::from_str(format!("C{}", can_id).as_str()).unwrap()
-                            }
-                        });
                         let loc_id = self.capture_locations_can.get(3).unwrap();
                         let id = &cap_str[loc_id.0..loc_id.1];
                         let frame_id = if let Some(stripped) = id.strip_suffix('x') {
@@ -272,10 +287,12 @@ where
                         // return a DltMessage
                         let index = self.index;
                         self.index += 1;
+                        let ecu = self.get_ecu(*can_id, &None);
+
                         return Some(DltMessage {
                             index,
                             reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
-                            ecu: ecu.to_owned(),
+                            ecu,
                             timestamp_dms: if timestamp_us >= 0 {
                                 (timestamp_us / 100) as u32
                             } else {
@@ -325,15 +342,6 @@ where
                         let can_id = &cap_str[loc_can_id.0..loc_can_id.1]
                             .parse::<u8>()
                             .unwrap_or_default();
-                        let ecu = self.can_id_ecu_map.entry(*can_id).or_insert_with(|| {
-                            if *can_id < 10 {
-                                DltChar4::from_str(format!("CAN{}", can_id).as_str()).unwrap()
-                            } else if *can_id < 100 {
-                                DltChar4::from_str(format!("CA{}", can_id).as_str()).unwrap()
-                            } else {
-                                DltChar4::from_str(format!("C{}", can_id).as_str()).unwrap()
-                            }
-                        });
                         let loc_id = self.capture_locations_canfd.get(4).unwrap();
                         let id = &cap_str[loc_id.0..loc_id.1];
                         let frame_id = if let Some(stripped) = id.strip_suffix('x') {
@@ -375,10 +383,13 @@ where
                         // return a DltMessage
                         let index = self.index;
                         self.index += 1;
+
+                        let ecu = self.get_ecu(*can_id, &None);
+
                         return Some(DltMessage {
                             index,
                             reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
-                            ecu: ecu.to_owned(),
+                            ecu,
                             timestamp_dms: if timestamp_us >= 0 {
                                 (timestamp_us / 100) as u32
                             } else {
@@ -423,25 +434,19 @@ where
                         let can_id = &cap_str[loc_can_id.0..loc_can_id.1]
                             .parse::<u8>()
                             .unwrap_or_default();
-                        let ecu = self.can_id_ecu_map.entry(*can_id).or_insert_with(|| {
-                            if *can_id < 10 {
-                                DltChar4::from_str(format!("CAN{}", can_id).as_str()).unwrap()
-                            } else if *can_id < 100 {
-                                DltChar4::from_str(format!("CA{}", can_id).as_str()).unwrap()
-                            } else {
-                                DltChar4::from_str(format!("C{}", can_id).as_str()).unwrap()
-                            }
-                        });
 
                         let payload = vec![];
 
                         // return a DltMessage
                         let index = self.index;
                         self.index += 1;
+
+                        let ecu = self.get_ecu(*can_id, &None);
+
                         return Some(DltMessage {
                             index,
                             reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
-                            ecu: ecu.to_owned(),
+                            ecu,
                             timestamp_dms: if timestamp_us >= 0 {
                                 (timestamp_us / 100) as u32
                             } else {
@@ -521,7 +526,7 @@ where
                                     return Some(DltMessage {
                                         index,
                                         reception_time_us: self.date_us,
-                                        ecu: self.get_ecu(id).to_owned(),
+                                        ecu: self.get_ecu(id, &Some(name)),
                                         timestamp_dms: 0u32,
                                         standard_header: DltStandardHeader {
                                             htyp: self.htyp,
@@ -573,12 +578,15 @@ where
 mod tests {
     use super::{asc_parse_date, parse_signed_time_str, Asc2DltMsgIterator};
     use crate::{
-        dlt::{DltMessageControlType, DltMessageNwType, DltMessageType, DLT_MAX_STORAGE_MSG_SIZE},
-        utils::LowMarkBufReader,
+        dlt::{
+            DltChar4, DltMessageControlType, DltMessageNwType, DltMessageType,
+            DLT_MAX_STORAGE_MSG_SIZE,
+        },
+        utils::{get_new_namespace, LowMarkBufReader},
     };
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     use slog::{o, Drain, Logger};
-    use std::fs::File;
+    use std::{fs::File, str::FromStr};
 
     fn new_logger() -> Logger {
         let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
@@ -615,6 +623,7 @@ mod tests {
         let mut it = Asc2DltMsgIterator::new(
             start_index,
             LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
+            get_new_namespace(),
             Some(&log),
         );
         let mut iterated_msgs = 0;
@@ -668,7 +677,7 @@ mod tests {
 -0.159843 CANFD 1 Rx 135   1 0 8 8 f1 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0
 0.169843 CANFD 1 Rx 135   1 0 8 8 f2 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -690,7 +699,7 @@ mod tests {
 -0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0
 0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None);
         let mut iterated_msgs: u32 = 0;
         for _m in &mut it {
             iterated_msgs += 1;
@@ -708,7 +717,7 @@ mod tests {
 0.000000 1 36f Rx d 5 f3 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879
 0.000100 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -736,5 +745,117 @@ mod tests {
         assert_eq!(parse_signed_time_str("-"), 0_i64);
         assert_eq!(parse_signed_time_str(".1"), 100000_i64);
         assert_eq!(parse_signed_time_str("-.1"), -100000_i64);
+    }
+
+    // test multiple files support:
+    // we expect:
+    // msgs get ECU CAN., CA.., C... fitting to BusMapping infos
+    #[test]
+    fn asc_multiple_files_diff_can_id() {
+        let reader1 = r##"
+//BusMapping: CAN 1 = ECU_CAN 431
+0.000100 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let namespace = get_new_namespace();
+        let mut it = Asc2DltMsgIterator::new(0, reader1, namespace, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            if iterated_msgs == 2 {
+                assert_eq!(m.ecu, DltChar4::from_str("CAN1").ok().unwrap());
+            }
+        }
+        assert_eq!(iterated_msgs, 2); // one ctrl and 1 can msgs
+
+        // 2nd CAN should get a new number even though CAN id in the file is 1...
+        // as the BusMapping: can name is different!
+        let reader2 = r##"
+//BusMapping: CAN 1 = ECU2_CAN 432
+0.000101 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            if iterated_msgs == 2 {
+                assert_eq!(m.ecu, DltChar4::from_str("CAN2").ok().unwrap());
+            }
+        }
+        assert_eq!(iterated_msgs, 2); // one ctrl and 1 can msgs
+
+        // 3rd CAN should get the same number as CAN 2  as Busmapping is the same
+        let reader2 = r##"
+//BusMapping: CAN 1 = ECU2_CAN 432
+0.000102 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            if iterated_msgs == 2 {
+                assert_eq!(m.ecu, DltChar4::from_str("CAN2").ok().unwrap());
+            }
+        }
+        assert_eq!(iterated_msgs, 2); // one ctrl and 1 can msgs
+
+        // 4th CAN should get the same number as CAN 2  as Busmapping maps to same name
+        let reader2 = r##"
+//BusMapping: CAN 5 = ECU2_CAN 432
+0.000102 5 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            if iterated_msgs == 2 {
+                assert_eq!(m.ecu, DltChar4::from_str("CAN2").ok().unwrap());
+            }
+        }
+        assert_eq!(iterated_msgs, 2); // one ctrl and 1 can msgs
+    }
+
+    #[test]
+    fn asc_multiple_files_no_busmapping() {
+        let reader1 = r##"
+0.000100 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let namespace = get_new_namespace();
+        let mut it = Asc2DltMsgIterator::new(0, reader1, namespace, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            if iterated_msgs == 1 {
+                assert_eq!(m.ecu, DltChar4::from_str("CAN1").ok().unwrap());
+            }
+        }
+        assert_eq!(iterated_msgs, 1);
+
+        // 2nd CAN file should get a different ecu id even though the channel is the same but as we dont have a busmapping
+        let reader2 = r##"
+0.000101 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            if iterated_msgs == 1 {
+                assert_eq!(m.ecu, DltChar4::from_str("CAN2").ok().unwrap());
+            }
+        }
+        assert_eq!(iterated_msgs, 1);
+
+        // 3rd CAN should get the a different ecu name as the id is different
+        let reader2 = r##"
+0.000102 42 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            if iterated_msgs == 1 {
+                assert_eq!(m.ecu, DltChar4::from_str("CAN3").ok().unwrap());
+            }
+        }
+        assert_eq!(iterated_msgs, 1);
     }
 }

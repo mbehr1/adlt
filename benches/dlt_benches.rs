@@ -210,12 +210,18 @@ pub fn dlt_iterator1(c: &mut Criterion) {
             &buf_capacity,
             |b, &buf_capacity| {
                 b.iter(|| {
+                    let namespace = get_new_namespace();
                     let fi = File::open(&file_path).unwrap();
                     let buf_reader =
                         LowMarkBufReader::new(fi, buf_capacity, DLT_MAX_STORAGE_MSG_SIZE);
                     let mut messages_processed = 0;
-                    let mut it =
-                        get_dlt_message_iterator("dlt", messages_processed, buf_reader, None);
+                    let mut it = get_dlt_message_iterator(
+                        "dlt",
+                        messages_processed,
+                        buf_reader,
+                        namespace,
+                        None,
+                    );
                     for msg in it.by_ref() {
                         messages_processed += 1;
                         drop(msg);

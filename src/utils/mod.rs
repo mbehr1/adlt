@@ -1,7 +1,10 @@
 use crate::dlt::{DltArg, DltMessage, DltMessageIndexType, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_STRG};
 use std::{
     io::BufRead,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        atomic::AtomicU32,
+        mpsc::{Receiver, Sender},
+    },
 };
 mod lowmarkbufreader;
 pub use self::lowmarkbufreader::LowMarkBufReader;
@@ -12,6 +15,21 @@ pub use self::dltmessageiterator::{get_first_message_from_file, DltMessageIterat
 pub mod eac_stats;
 pub mod remote_types;
 
+static GLOBAL_NEXT_NAMESPACE: AtomicU32 = AtomicU32::new(0);
+
+/// return a new namespace
+///
+/// A namespace is used to provide a grouping for a set of files that are opened
+/// simultaneously. The main purpose is for CAN .asc files that are from different
+/// CAN channels but that all use e.g. the BusMapping CAN 1 = ... identifier 1.
+/// If those files are opened with the same namespace different channels will get
+/// a different ECU id (CAN1, CAN2). If opened with different namespaces they might
+/// both end up in CAN1 ECU id.
+///
+pub fn get_new_namespace() -> u32 {
+    GLOBAL_NEXT_NAMESPACE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// return the proper dlt message iterator for a file type/extension
 ///
 /// Does this currently by extension:
@@ -19,10 +37,11 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
     file_ext: &str,
     start_index: DltMessageIndexType,
     reader: R,
+    namespace: u32,
     log: Option<&'a slog::Logger>,
 ) -> Box<dyn Iterator<Item = DltMessage> + 'a> {
     match file_ext.to_lowercase().as_str() {
-        "asc" => Box::new(Asc2DltMsgIterator::new(start_index, reader, log)),
+        "asc" => Box::new(Asc2DltMsgIterator::new(start_index, reader, namespace, log)),
         _ => Box::new({
             let mut it = DltMessageIterator::new(start_index, reader);
             it.log = log;
@@ -520,10 +539,12 @@ mod tests {
     #[test]
     fn get_dlt_message_it() {
         // todo provide some real test data to see whether proper it is returned!
-        let mut it_asc = get_dlt_message_iterator("asc", 0, &[] as &[u8], None);
+        let mut it_asc =
+            get_dlt_message_iterator("asc", 0, &[] as &[u8], get_new_namespace(), None);
         assert!(it_asc.next().is_none());
 
-        let mut it_dlt = get_dlt_message_iterator("dlt", 0, &[] as &[u8], None);
+        let mut it_dlt =
+            get_dlt_message_iterator("dlt", 0, &[] as &[u8], get_new_namespace(), None);
         assert!(it_dlt.next().is_none());
     }
 
