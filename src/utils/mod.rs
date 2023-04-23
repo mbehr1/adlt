@@ -14,6 +14,7 @@ pub use self::lowmarkbufreader::LowMarkBufReader;
 mod asc2dltmsgiterator;
 pub use self::asc2dltmsgiterator::Asc2DltMsgIterator;
 mod dltmessageiterator;
+pub mod sorting_multi_readeriterator;
 pub use self::dltmessageiterator::DltMessageIterator;
 pub mod eac_stats;
 pub mod remote_types;

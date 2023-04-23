@@ -7,6 +7,9 @@ use std::io::BufWriter;
 use tempfile::NamedTempFile;
 
 use adlt::dlt::*;
+use adlt::utils::sorting_multi_readeriterator::{
+    SequentialMultiIterator, SortingMultiReaderIterator,
+};
 use adlt::utils::*;
 
 pub fn dlt_bench_is_storage_header_pattern(c: &mut Criterion) {
@@ -206,7 +209,7 @@ pub fn dlt_iterator1(c: &mut Criterion) {
         let buf_capacity = 512 * 1024usize;
         group.throughput(Throughput::Bytes(file_size));
         group.bench_with_input(
-            BenchmarkId::from_parameter(buf_capacity),
+            "get_dlt_message_iterator", // BenchmarkId::from_parameter(buf_capacity),
             &buf_capacity,
             |b, &buf_capacity| {
                 b.iter(|| {
@@ -230,17 +233,149 @@ pub fn dlt_iterator1(c: &mut Criterion) {
                 })
             },
         );
+        group.bench_with_input(
+            "sorting_multi_readeriterator", // BenchmarkId::from_parameter(buf_capacity),
+            &buf_capacity,
+            |b, &buf_capacity| {
+                b.iter(|| {
+                    let namespace = get_new_namespace();
+                    let fi = File::open(&file_path).unwrap();
+                    let buf_reader =
+                        LowMarkBufReader::new(fi, buf_capacity, DLT_MAX_STORAGE_MSG_SIZE);
+                    let mut messages_processed = 0;
+                    let it = get_dlt_message_iterator(
+                        "dlt",
+                        messages_processed,
+                        buf_reader,
+                        namespace,
+                        None,
+                    );
+                    let it = SortingMultiReaderIterator::new(0, vec![it]);
+                    for msg in it {
+                        messages_processed += 1;
+                        drop(msg);
+                    }
+                    assert_eq!(persisted_msgs, messages_processed);
+                })
+            },
+        );
+        group.bench_with_input(
+            "sorting_multi_readeriterator_new_or_single_it", // BenchmarkId::from_parameter(buf_capacity),
+            &buf_capacity,
+            |b, &buf_capacity| {
+                b.iter(|| {
+                    let namespace = get_new_namespace();
+                    let fi = File::open(&file_path).unwrap();
+                    let buf_reader =
+                        LowMarkBufReader::new(fi, buf_capacity, DLT_MAX_STORAGE_MSG_SIZE);
+                    let mut messages_processed = 0;
+                    let it = get_dlt_message_iterator(
+                        "dlt",
+                        messages_processed,
+                        buf_reader,
+                        namespace,
+                        None,
+                    );
+                    let it = SortingMultiReaderIterator::new_or_single_it(0, vec![it]);
+                    for msg in it {
+                        messages_processed += 1;
+                        drop(msg);
+                    }
+                    assert_eq!(persisted_msgs, messages_processed);
+                })
+            },
+        );
+
+        group.bench_with_input(
+            "sequential_multi_iterator", // BenchmarkId::from_parameter(buf_capacity),
+            &buf_capacity,
+            |b, &buf_capacity| {
+                b.iter(|| {
+                    let files = vec![&file_path];
+                    let namespace = get_new_namespace();
+                    let its = files.into_iter().map(|file_name| {
+                        let buf_reader = LowMarkBufReader::new(
+                            File::open(file_name).unwrap(),
+                            buf_capacity,
+                            DLT_MAX_STORAGE_MSG_SIZE,
+                        );
+                        get_dlt_message_iterator("dlt", 0, buf_reader, namespace, None)
+                    });
+
+                    let it = SequentialMultiIterator::new(0, its);
+                    let mut messages_processed = 0;
+                    for msg in it {
+                        messages_processed += 1;
+                        drop(msg);
+                    }
+                    assert_eq!(persisted_msgs, messages_processed);
+                })
+            },
+        );
+        group.bench_with_input(
+            "sequential_multi_iterator_new_or_single_it", // BenchmarkId::from_parameter(buf_capacity),
+            &buf_capacity,
+            |b, &buf_capacity| {
+                b.iter(|| {
+                    let files = vec![&file_path];
+                    let namespace = get_new_namespace();
+                    let its = files.into_iter().map(|file_name| {
+                        let buf_reader = LowMarkBufReader::new(
+                            File::open(file_name).unwrap(),
+                            buf_capacity,
+                            DLT_MAX_STORAGE_MSG_SIZE,
+                        );
+                        get_dlt_message_iterator("dlt", 0, buf_reader, namespace, None)
+                    });
+
+                    let it = SequentialMultiIterator::new_or_single_it(0, its);
+                    let mut messages_processed = 0;
+                    for msg in it {
+                        messages_processed += 1;
+                        drop(msg);
+                    }
+                    assert_eq!(persisted_msgs, messages_processed);
+                })
+            },
+        );
+
+        /* todo could try itertools::kmerge and apply/update (for the index) group.bench_with_input(
+            "sorting_multi_readeriterator by kmerge", // BenchmarkId::from_parameter(buf_capacity),
+            &buf_capacity,
+            |b, &buf_capacity| {
+                b.iter(|| {
+                    let namespace = get_new_namespace();
+                    let fi = File::open(&file_path).unwrap();
+                    let buf_reader =
+                        LowMarkBufReader::new(fi, buf_capacity, DLT_MAX_STORAGE_MSG_SIZE);
+                    let mut messages_processed = 0;
+                    let it = get_dlt_message_iterator(
+                        "dlt",
+                        messages_processed,
+                        buf_reader,
+                        namespace,
+                        None,
+                    );
+                    let it = vec![it].into_iter().kmerge();
+                    for msg in it {
+                        messages_processed += 1;
+                        drop(msg);
+                    }
+                    assert_eq!(persisted_msgs, messages_processed);
+                })
+            },
+        );*/
     }
     group.finish();
 }
 
 criterion_group!(
     dlt_benches,
+    dlt_iterator1,
     dlt_bench_is_storage_header_pattern,
     dlt_bench_buf_as_hex_to_write,
     dlt_header_as_text_to_write,
     dlt_bench1,
     dlt_bench2,
-    dlt_iterator1
 );
 criterion_main!(dlt_benches);
