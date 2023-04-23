@@ -1,6 +1,6 @@
 [package]
 name = "adlt"
-version = "0.33.2"
+version = "0.34.0"
 edition = "2021"
 authors = ["Matthias Behr"]
 license = "CC-BY-NC-SA-4.0"

@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.34.0 - 2023-04-23
+#### Features
+- open time-wise overlapping files - (05e5590) - Matthias Behr
+- open multiple can files - (547566f) - Matthias Behr
+#### Performance Improvements
+- add bench for Asc2DltMsgIterator - (d87ecb8) - Matthias Behr
+#### Refactoring
+- introduce get_dlt_infos_from_file - (298d79f) - Matthias Behr
+
+- - -
+
 ## v0.33.2 - 2023-04-19
 #### Bug Fixes
 - CAN: support CANFD busmapping - (97b5875) - Matthias Behr
