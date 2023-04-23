@@ -3,6 +3,7 @@ use clap::{Arg, Command};
 use glob::{glob_with, MatchOptions};
 use slog::{debug, error, info, warn};
 use std::{
+    collections::HashSet,
     fs::File,
     io::{prelude::*, BufWriter},
     sync::mpsc::channel,
@@ -16,7 +17,9 @@ use adlt::{
         plugins_process_msgs,
     },
     utils::{
-        buf_as_hex_to_io_write, get_dlt_message_iterator, get_new_namespace, LowMarkBufReader,
+        buf_as_hex_to_io_write, get_dlt_message_iterator, get_new_namespace,
+        sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
+        LowMarkBufReader,
     },
 };
 
@@ -163,7 +166,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     sub_m: &clap::ArgMatches,
     mut writer_screen: W,
 ) -> std::io::Result<ConvertResult<W>> {
-    let mut input_file_names: Vec<String> = sub_m
+    let input_file_names: Vec<String> = sub_m
         .get_many::<String>("file")
         .unwrap()
         .map(|a| a.to_owned())
@@ -311,24 +314,56 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     if files_ok.is_empty() {
         return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
     }
+    let max_files = files_ok.len();
 
-    let mut file_msgs: Vec<_> = files_ok
+    // collect from all existing files the ones with at least one DltMessage:
+    let file_msgs = files_ok
         .into_iter()
         .map(|(a, b)| (a, b.unwrap()))
-        .filter(|(_a, b)| b.first_msg.is_some())
-        .collect();
-    file_msgs.sort_by(|a, b| {
-        a.1.first_msg
-            .as_ref()
-            .unwrap()
-            .reception_time_us
-            .cmp(&b.1.first_msg.as_ref().unwrap().reception_time_us)
-    });
-    // todo if the reception time is similar for duplicates the ones with same name might not be consecutive! (will need additional sorting)
+        .filter(|(_a, b)| b.first_msg.is_some());
 
-    input_file_names = file_msgs.iter().map(|(a, _b)| a.clone()).collect();
-    input_file_names.dedup(); // remove duplicates now that they are sorted/consecutive
-    debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
+    // now we do need to "partition" into non-overlapping streams. "non-overlapping" = ranges [reception_time.start..reception_time.end] do
+    // not overlap.
+    // We do so by the following indirect way:
+    // if they are from the same ecu(s) -> assumed to be recorded in the same way -> sort by reception_time.start
+    // if from different ecu(s) -> use a different "bucket" and later on process them using the SortingMultiReaderIterator in "parallel".
+    // So we do determine the files per ecus.
+    // Example: 3 files: (ecu1, ecu2, ecu1+2) -> will be parsed as 3 parallel streams
+    // The ecu1+2 case is a bit weird but seems a common pattern where e.g. ecu2 gets tunneled via ecu1
+
+    // as the amount of files is usually limited/small we use a naive approach:
+    type SetOfEcuIds = HashSet<DltChar4>;
+    type StreamEntry = (SetOfEcuIds, Vec<(u64, String)>);
+
+    let mut input_file_streams: Vec<StreamEntry> = Vec::with_capacity(max_files);
+    for fm in file_msgs {
+        let stream = input_file_streams
+            .iter_mut()
+            .find(|e| e.0 == fm.1.ecus_seen);
+        match stream {
+            Some((_, l)) => {
+                l.push((fm.1.first_msg.as_ref().unwrap().reception_time_us, fm.0));
+            }
+            None => {
+                input_file_streams.push((
+                    fm.1.ecus_seen,
+                    vec![(fm.1.first_msg.as_ref().unwrap().reception_time_us, fm.0)],
+                ));
+            }
+        }
+    }
+
+    // now we do need to sort and dedup each stream only:
+    let input_file_streams: Vec<(HashSet<DltChar4>, Vec<String>)> = input_file_streams
+        .into_iter()
+        .map(|(hashset, mut time_files)| {
+            time_files.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut files: Vec<String> = time_files.into_iter().map(|(_, files)| files).collect();
+            files.dedup(); // remove duplicates
+            (hashset, files)
+        })
+        .collect();
+    debug!(log, "sorted input_files by first message reception time and ecus_seen:"; "input_file_streams" => format!("{:?}",&input_file_streams));
 
     // determine plugins
     let mut plugins_active: Vec<Box<dyn Plugin + Send>> = vec![];
@@ -533,33 +568,59 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
     let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
 
-    for input_file_name in &input_file_names {
-        let fi = File::open(input_file_name)?;
-        info!(log, "opened file {} {:?}", &input_file_name, &fi);
-        let buf_reader = LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
-        let mut it = get_dlt_message_iterator(
-            std::path::Path::new(&input_file_name)
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or(""),
-            messages_processed,
-            buf_reader,
-            namespace,
-            Some(log),
-        );
-        loop {
-            match it.next() {
-                Some(msg) => {
-                    messages_processed += 1;
-                    tx_for_parse_thread.send(msg).unwrap(); // todo handle error
-                }
-                None => {
-                    debug!(log, "finished processing a file";"messages_processed"=>messages_processed);
-                    break;
-                }
+    let get_single_it =
+        |input_file_name: &str, start_index: adlt::dlt::DltMessageIndexType| match File::open(
+            input_file_name,
+        ) {
+            Ok(fi) => {
+                info!(log, "opened file {} {:?}", &input_file_name, &fi);
+                let buf_reader =
+                    LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
+                get_dlt_message_iterator(
+                    std::path::Path::new(&input_file_name)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(""),
+                    start_index,
+                    buf_reader,
+                    namespace,
+                    Some(log),
+                )
+            }
+            Err(e) => {
+                error!(
+                    log,
+                    "failed to open file {} due to {}!", &input_file_name, e
+                );
+                Box::new(std::iter::empty())
+            }
+        };
+
+    let mut dlt_msg_iterator = SortingMultiReaderIterator::new_or_single_it(
+        0,
+        input_file_streams
+            .into_iter()
+            .map(|(_, files)| {
+                SequentialMultiIterator::new_or_single_it(
+                    0,
+                    files.into_iter().map(|file| get_single_it(&file, 0)),
+                )
+            })
+            .collect(),
+    );
+    loop {
+        match dlt_msg_iterator.next() {
+            Some(msg) => {
+                messages_processed += 1;
+                tx_for_parse_thread.send(msg).unwrap(); // todo handle error
+            }
+            None => {
+                debug!(log, "finished processing all msgs";"messages_processed"=>messages_processed);
+                break;
             }
         }
     }
+
     drop(tx_for_parse_thread);
     let _lcs_w = lc_thread.join().unwrap();
 

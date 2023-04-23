@@ -2,7 +2,7 @@
 // [ ] sort by time is only per lifecycle. could interleave lifecycles from different ecus as well (eg bugs-41250)
 
 use adlt::{
-    dlt::{DltMessageIndexType, DLT_MAX_STORAGE_MSG_SIZE},
+    dlt::{DltChar4, DltMessageIndexType, DLT_MAX_STORAGE_MSG_SIZE},
     lifecycle::LifecycleId,
     plugins::{
         factory::get_plugin,
@@ -10,17 +10,22 @@ use adlt::{
         plugins_process_msgs,
     },
     utils::{
-        eac_stats::EacStats, get_dlt_infos_from_file, get_dlt_message_iterator, get_new_namespace,
-        remote_types, LowMarkBufReader,
+        eac_stats::EacStats,
+        get_dlt_infos_from_file, get_dlt_message_iterator, get_new_namespace, remote_types,
+        sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
+        LowMarkBufReader,
     },
 };
 use clap::{Arg, Command};
 use slog::{debug, error, info, warn};
-use std::net::TcpListener;
-use std::{collections::BTreeMap, time::Instant};
-use std::{fs::File, sync::Arc};
-use std::{io::prelude::*, sync::RwLock};
-
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs::File,
+    io::prelude::*,
+    net::TcpListener,
+    sync::{Arc, RwLock},
+    time::Instant,
+};
 use tungstenite::{
     accept_hdr_with_config,
     handshake::server::{Request, Response},
@@ -271,9 +276,9 @@ impl StreamContext {
         match &v["filters"] {
             serde_json::Value::Array(a) => {
                 for filter in a {
-                    info!(log, "StreamContext filters got '{}'", filter.to_string());
+                    debug!(log, "StreamContext filters got '{}'", filter.to_string());
                     let filter_struct = Filter::from_json(&filter.to_string())?;
-                    info!(log, "StreamContext filters parsed as '{:?}'", filter_struct);
+                    debug!(log, "StreamContext filters parsed as '{:?}'", filter_struct);
                     if filter_struct.enabled {
                         // otherwise the no pos filter -> ... logic doesnt work
                         filters[filter_struct.kind].push(filter_struct);
@@ -330,7 +335,7 @@ impl StreamContext {
 
 #[derive(Debug)]
 struct FileContext {
-    file_names: Vec<String>,
+    file_streams: Vec<Vec<String>>, // set of files that need to be processed as parallel streams
     namespace: u32,
     sort_by_time: bool,                          // sort by timestamp
     plugins_active: Vec<Box<dyn Plugin + Send>>, // will be moved to parsing_thread
@@ -427,28 +432,48 @@ impl FileContext {
                 }
             }
         });
-        let mut file_msgs: Vec<_> = file_msgs
+        // filter/remove the files that dont have a first DLT message:
+        let file_msgs = file_msgs
             .filter(|(_a, b, _c)| b.is_some() && b.as_ref().unwrap().first_msg.is_some())
-            .collect();
-        file_msgs.sort_by(|a, b| {
-            a.1.as_ref()
-                .unwrap()
-                .first_msg
-                .as_ref()
-                .unwrap()
-                .reception_time_us
-                .cmp(
-                    &b.1.as_ref()
-                        .unwrap()
-                        .first_msg
-                        .as_ref()
-                        .unwrap()
-                        .reception_time_us,
-                )
-        });
+            .map(|(a, b, c)| (a, b.unwrap(), c));
 
-        // file size for all files:
-        let sum_file_len: u64 = file_msgs.iter().map(|f| f.2).sum();
+        type SetOfEcuIds = HashSet<DltChar4>;
+        type StreamEntry = (SetOfEcuIds, Vec<(u64, String)>);
+        let mut input_file_streams: Vec<StreamEntry> = Vec::with_capacity(file_names.len());
+        let mut sum_file_len: u64 = 0;
+        for (file_name, dfi, file_len) in file_msgs {
+            sum_file_len += file_len;
+            let stream = input_file_streams.iter_mut().find(|e| e.0 == dfi.ecus_seen);
+            match stream {
+                Some((_, l)) => {
+                    l.push((
+                        dfi.first_msg.as_ref().unwrap().reception_time_us,
+                        file_name.to_owned(),
+                    ));
+                }
+                None => {
+                    input_file_streams.push((
+                        dfi.ecus_seen,
+                        vec![(
+                            dfi.first_msg.as_ref().unwrap().reception_time_us,
+                            file_name.to_owned(),
+                        )],
+                    ));
+                }
+            }
+        }
+        // now we do need to sort and dedup each stream only:
+        let input_file_streams: Vec<Vec<String>> = input_file_streams
+            .into_iter()
+            .map(|(_hashset, mut time_files)| {
+                time_files.sort_by(|a, b| a.0.cmp(&b.0));
+                let files: Vec<String> = time_files.into_iter().map(|(_, files)| files).collect();
+                // files.dedup(); // remove duplicates (not needed here)
+                files
+            })
+            .collect();
+        info!(log, "sorted input_files by first message reception time and ecus_seen:"; "input_file_streams" => format!("{:?}",&input_file_streams));
+
         let all_msgs_len_estimate = sum_file_len / 128; // todo better heuristics? e.g. 20gb dlt -> 117mio msgs
         info!(
             log,
@@ -457,13 +482,7 @@ impl FileContext {
             all_msgs_len_estimate
         );
 
-        let file_names: Vec<_> = file_msgs
-            .iter_mut()
-            .map(|(a, _b, _c)| (*a).into())
-            .collect();
-        //debug!(log, "sorted input_files by first message reception time:"; "input_file_names" => format!("{:?}",&input_file_names));
-
-        if file_names.is_empty() {
+        if input_file_streams.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "cannot open files or files contain no DLT messages",
@@ -501,7 +520,7 @@ impl FileContext {
         let plugin_states = plugins_active.iter().map(|p| (0u32, p.state())).collect();
 
         Ok(FileContext {
-            file_names,
+            file_streams: input_file_streams,
             namespace,
             sort_by_time,
             plugins_active,
@@ -573,7 +592,7 @@ fn process_incoming_text_message<T: Read + Write>(
                     .write_message(Message::Text(format!(
                         "err: open '{}' failed as file(s) '{:?}' is open. close first!",
                         params,
-                        file_context.as_ref().unwrap().file_names
+                        file_context.as_ref().unwrap().file_streams
                     )))
                     .unwrap(); // todo
             } else {
@@ -591,7 +610,7 @@ fn process_incoming_text_message<T: Read + Write>(
                         let plugins_active = std::mem::take(&mut s.plugins_active);
                         s.parsing_thread = Some(create_parser_thread(
                             log.clone(),
-                            s.file_names.clone(),
+                            s.file_streams.clone(),
                             s.namespace,
                             s.sort_by_time,
                             plugins_active,
@@ -1333,7 +1352,7 @@ struct ParserThreadType {
 /// Returns the thread handle and the channel receiver where the parsed messages will be send to.
 fn create_parser_thread(
     log: slog::Logger,
-    input_file_names: Vec<String>,
+    input_file_streams: Vec<Vec<String>>,
     namespace: u32,
     sort_by_time: bool,
     plugins_active: Vec<Box<dyn Plugin + Send>>,
@@ -1396,35 +1415,62 @@ fn create_parser_thread(
                 // we use a relatively small 512kb chunk size as we're processing
                 // the data multithreaded. reading in bigger chunks is in total slower
 
-                for ref input_file_name in input_file_names {
-                    let fi = File::open(input_file_name)?;
-                    let file_ext = std::path::Path::new(input_file_name)
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or_default();
-                    info!(log, "opened file {} {:?}", input_file_name, &fi);
-                    let buf_reader =
-                        LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
-                    let mut it = get_dlt_message_iterator(
-                        file_ext,
-                        messages_processed,
-                        buf_reader,
-                        namespace,
-                        Some(&log),
-                    );
-                    loop {
-                        match it.next() {
-                            Some(msg) => {
-                                messages_processed += 1;
-                                if let Err(e) = tx_for_parse_thread.send(msg) {
-                                    info!(log, "parser_thread aborted on err={}", e; "msgs_processed" => messages_processed);
-                                    return Err(Box::new(e));
-                                }
+                let get_single_it =
+                    |input_file_name: &str, start_index: adlt::dlt::DltMessageIndexType| {
+                        match File::open(input_file_name) {
+                            Ok(fi) => {
+                                let file_ext = std::path::Path::new(input_file_name)
+                                    .extension()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or_default();
+                                info!(log, "opened file {} {:?}", input_file_name, &fi);
+                                let buf_reader = LowMarkBufReader::new(
+                                    fi,
+                                    BUFREADER_CAPACITY,
+                                    DLT_MAX_STORAGE_MSG_SIZE,
+                                );
+                                get_dlt_message_iterator(
+                                    file_ext,
+                                    start_index,
+                                    buf_reader,
+                                    namespace,
+                                    Some(&log),
+                                )
                             }
-                            None => {
-                                debug!(log, "finished processing a file"; "messages_processed"=>messages_processed);
-                                break;
+                            Err(e) => {
+                                error!(
+                                    log,
+                                    "failed to open file {} due to {}!", &input_file_name, e
+                                );
+                                Box::new(std::iter::empty())
                             }
+                        }
+                    };
+                let mut dlt_msg_iterator = SortingMultiReaderIterator::new_or_single_it(
+                    0,
+                    input_file_streams
+                        .into_iter()
+                        .map(|files| {
+                            SequentialMultiIterator::new_or_single_it(
+                                0,
+                                files.into_iter().map(|file| get_single_it(&file, 0)),
+                            )
+                        })
+                        .collect(),
+                );
+
+                loop {
+                    match dlt_msg_iterator.next() {
+                        Some(msg) => {
+                            messages_processed += 1;
+                            if let Err(e) = tx_for_parse_thread.send(msg) {
+                                info!(log, "parser_thread aborted on err={}", e; "msgs_processed" => messages_processed);
+                                return Err(Box::new(e));
+                            }
+                        }
+                        None => {
+                            debug!(log, "finished processing all msgs"; "messages_processed"=>messages_processed);
+                            break;
                         }
                     }
                 }
@@ -1533,10 +1579,11 @@ mod tests {
         assert!(fc.is_ok());
         let fc = fc.unwrap();
         assert!(!fc.sort_by_time); // defaults to false
-        assert_eq!(fc.file_names.len(), 2);
+        assert_eq!(fc.file_streams.len(), 1);
+        assert_eq!(fc.file_streams[0].len(), 2);
         // files should be sorted now!
         assert_eq!(
-            fc.file_names,
+            fc.file_streams[0],
             vec![file_path, file2.path().to_str().unwrap().to_owned()]
         );
         println!("fc with 2 files sorted={:?}", fc); // we can debug print it
