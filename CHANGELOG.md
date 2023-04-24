@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.35.0 - 2023-04-24
+#### Features
+- **(filetransfer)** show files sorted by name as well - (558d5fc) - Matthias Behr
+
+- - -
+
 ## v0.34.0 - 2023-04-23
 #### Features
 - open time-wise overlapping files - (05e5590) - Matthias Behr
