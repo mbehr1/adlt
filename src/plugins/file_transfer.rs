@@ -657,8 +657,8 @@ impl FileTransferPlugin {
             }
         }
 
-        state.value = serde_json::json!({"name":self.name, "treeItems":
-            self.transfers.iter().enumerate().map(|(idx,t)|{json!({
+        let map_filetransfer_to_json = |idx: usize, t: &FileTransfer| {
+            json!({
                 "label":
                 match t.state {
                     FileTransferState::Started => {
@@ -689,8 +689,44 @@ impl FileTransferPlugin {
                 },
                 "tooltip":format!("{}, LC id={}, serial #{}, '{}', created at '{}', file size {} ", t.ecu, t.lifecycle, t.serial, t.file_name, t.file_creation_date, t.file_size),
                 "meta":json!({"lc":t.lifecycle, "autoSavedTo": t.auto_saved_to}),
-            })}).collect::<Vec<serde_json::Value>>()
-        });
+            })
+        };
+
+        let transfer_tree_items = {
+            if !self.transfers.is_empty() {
+                let transfers_by_occurrence = self
+                    .transfers
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, t)| map_filetransfer_to_json(idx, t))
+                    .collect::<Vec<serde_json::Value>>();
+
+                // for sorting by name we do need to keep the idx as from the orig one
+                // so we clone the regular ones and then sort the json vec.
+                let mut transfers_by_name = self
+                    .transfers
+                    .iter()
+                    .zip(transfers_by_occurrence.clone().into_iter())
+                    .collect::<Vec<_>>();
+                transfers_by_name.sort_by(|a, b| a.0.file_name.cmp(&b.0.file_name));
+                let transfers_by_name = transfers_by_name
+                    .into_iter()
+                    .map(|(_, b)| b)
+                    .collect::<Vec<_>>();
+
+                [
+                    vec![json!({"label":"Sorted by name", "children":transfers_by_name})],
+                    transfers_by_occurrence,
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            } else {
+                vec![]
+            }
+        };
+
+        state.value = serde_json::json!({"name":self.name, "treeItems": transfer_tree_items});
         state.generation += 1;
     }
 

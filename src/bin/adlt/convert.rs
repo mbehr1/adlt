@@ -725,7 +725,11 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     // output the files detected:
                     if let Some(tree_items) = state.value["treeItems"].as_array() {
                         if !tree_items.is_empty() {
-                            writeln!(writer_screen, "have {} file transfers:", tree_items.len())?;
+                            writeln!(
+                                writer_screen,
+                                "have {} file transfers:",
+                                tree_items.len() - 1 // need to remove the Sorted...
+                            )?;
                         }
 
                         for item in tree_items {
