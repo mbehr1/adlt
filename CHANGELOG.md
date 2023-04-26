@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.36.0 - 2023-04-26
+#### Features
+- can plugin: multiplexer support - (3cb607f) - Matthias Behr
+
+- - -
+
 ## v0.35.0 - 2023-04-24
 #### Features
 - **(filetransfer)** show files sorted by name as well - (558d5fc) - Matthias Behr
