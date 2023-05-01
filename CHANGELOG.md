@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.36.1 - 2023-05-01
+#### Bug Fixes
+- **(can)** avoid overlapping timestamps - (3e6e5a0) - Matthias Behr
+#### Continuous Integration
+- add trigger_release workflow - (1248442) - Matthias Behr
+- - -
+
 ## v0.36.0 - 2023-04-26
 #### Features
 - can plugin: multiplexer support - (3cb607f) - Matthias Behr
