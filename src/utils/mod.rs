@@ -37,15 +37,34 @@ pub fn get_new_namespace() -> u32 {
 /// return the proper dlt message iterator for a file type/extension
 ///
 /// Does this currently by extension:
+///  - `asc` uses the Asc2DltMsgIterator
+///  - others use the DltMessageIterator
+///
+/// ### Arguments
+/// * `file_ext` - the file extension used to determine the iterator
+/// * `start_index` - the start_index to use for the messages generated
+/// * `reader` - the reader providing the byte stream to parse
+/// * `` - the namespace to use. Used for CAN files. Different channels in the same
+///   namespace will use a different CANx ecu id.
+/// * `first_reception_time_us` - used to provide a time used as reference
+///   for the timestamps for CAN files. Should be from the first file opened.
+///   Not needed/ignored for DLT files.
 pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
     file_ext: &str,
     start_index: DltMessageIndexType,
     reader: R,
     namespace: u32,
+    first_reception_time_us: Option<u64>,
     log: Option<&'a slog::Logger>,
 ) -> Box<dyn Iterator<Item = DltMessage> + 'a> {
     match file_ext.to_lowercase().as_str() {
-        "asc" => Box::new(Asc2DltMsgIterator::new(start_index, reader, namespace, log)),
+        "asc" => Box::new(Asc2DltMsgIterator::new(
+            start_index,
+            reader,
+            namespace,
+            first_reception_time_us,
+            log,
+        )),
         _ => Box::new({
             let mut it = DltMessageIterator::new(start_index, reader);
             it.log = log;
@@ -95,6 +114,7 @@ pub fn get_dlt_infos_from_file(
                 0,
                 BufReader::with_capacity(read_size, &buf[0..res]),
                 namespace,
+                None,
                 None,
             );
             let first_msg = it.next();
@@ -613,7 +633,7 @@ mod tests {
         reader: impl BufRead,
         namespace: u32,
     ) -> Option<DltMessage> {
-        let mut it = get_dlt_message_iterator(file_ext, 0, reader, namespace, None);
+        let mut it = get_dlt_message_iterator(file_ext, 0, reader, namespace, None, None);
         it.next()
     }
 
@@ -642,11 +662,11 @@ mod tests {
     fn get_dlt_message_it() {
         // todo provide some real test data to see whether proper it is returned!
         let mut it_asc =
-            get_dlt_message_iterator("asc", 0, &[] as &[u8], get_new_namespace(), None);
+            get_dlt_message_iterator("asc", 0, &[] as &[u8], get_new_namespace(), None, None);
         assert!(it_asc.next().is_none());
 
         let mut it_dlt =
-            get_dlt_message_iterator("dlt", 0, &[] as &[u8], get_new_namespace(), None);
+            get_dlt_message_iterator("dlt", 0, &[] as &[u8], get_new_namespace(), None, None);
         assert!(it_dlt.next().is_none());
     }
 

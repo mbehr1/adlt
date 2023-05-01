@@ -333,9 +333,12 @@ impl StreamContext {
     }
 }
 
+type SetOfEcuIds = HashSet<DltChar4>;
+type StreamEntry = (SetOfEcuIds, Vec<(u64, String)>);
+
 #[derive(Debug)]
 struct FileContext {
-    file_streams: Vec<Vec<String>>, // set of files that need to be processed as parallel streams
+    file_streams: Vec<StreamEntry>, // set of files that need to be processed as parallel streams
     namespace: u32,
     sort_by_time: bool,                          // sort by timestamp
     plugins_active: Vec<Box<dyn Plugin + Send>>, // will be moved to parsing_thread
@@ -437,8 +440,6 @@ impl FileContext {
             .filter(|(_a, b, _c)| b.is_some() && b.as_ref().unwrap().first_msg.is_some())
             .map(|(a, b, c)| (a, b.unwrap(), c));
 
-        type SetOfEcuIds = HashSet<DltChar4>;
-        type StreamEntry = (SetOfEcuIds, Vec<(u64, String)>);
         let mut input_file_streams: Vec<StreamEntry> = Vec::with_capacity(file_names.len());
         let mut sum_file_len: u64 = 0;
         for (file_name, dfi, file_len) in file_msgs {
@@ -463,13 +464,12 @@ impl FileContext {
             }
         }
         // now we do need to sort and dedup each stream only:
-        let input_file_streams: Vec<Vec<String>> = input_file_streams
+        let input_file_streams: Vec<StreamEntry> = input_file_streams
             .into_iter()
-            .map(|(_hashset, mut time_files)| {
+            .map(|(hashset, mut time_files)| {
                 time_files.sort_by(|a, b| a.0.cmp(&b.0));
-                let files: Vec<String> = time_files.into_iter().map(|(_, files)| files).collect();
-                // files.dedup(); // remove duplicates (not needed here)
-                files
+                // time_files.dedup(); // remove duplicates (not needed here)
+                (hashset, time_files)
             })
             .collect();
         info!(log, "sorted input_files by first message reception time and ecus_seen:"; "input_file_streams" => format!("{:?}",&input_file_streams));
@@ -1352,7 +1352,7 @@ struct ParserThreadType {
 /// Returns the thread handle and the channel receiver where the parsed messages will be send to.
 fn create_parser_thread(
     log: slog::Logger,
-    input_file_streams: Vec<Vec<String>>,
+    input_file_streams: Vec<StreamEntry>,
     namespace: u32,
     sort_by_time: bool,
     plugins_active: Vec<Box<dyn Plugin + Send>>,
@@ -1416,7 +1416,9 @@ fn create_parser_thread(
                 // the data multithreaded. reading in bigger chunks is in total slower
 
                 let get_single_it =
-                    |input_file_name: &str, start_index: adlt::dlt::DltMessageIndexType| {
+                    |input_file_name: &str,
+                     start_index: adlt::dlt::DltMessageIndexType,
+                     first_reception_time_us: Option<u64>| {
                         match File::open(input_file_name) {
                             Ok(fi) => {
                                 let file_ext = std::path::Path::new(input_file_name)
@@ -1434,6 +1436,7 @@ fn create_parser_thread(
                                     start_index,
                                     buf_reader,
                                     namespace,
+                                    first_reception_time_us,
                                     Some(&log),
                                 )
                             }
@@ -1450,10 +1453,17 @@ fn create_parser_thread(
                     0,
                     input_file_streams
                         .into_iter()
-                        .map(|files| {
+                        .map(|(_, files)| {
+                            let first_reception_time_us = if files.is_empty() {
+                                None
+                            } else {
+                                Some(files[0].0)
+                            };
                             SequentialMultiIterator::new_or_single_it(
                                 0,
-                                files.into_iter().map(|file| get_single_it(&file, 0)),
+                                files.into_iter().map(move |(_, file)| {
+                                    get_single_it(&file, 0, first_reception_time_us)
+                                }),
                             )
                         })
                         .collect(),
@@ -1580,10 +1590,14 @@ mod tests {
         let fc = fc.unwrap();
         assert!(!fc.sort_by_time); // defaults to false
         assert_eq!(fc.file_streams.len(), 1);
-        assert_eq!(fc.file_streams[0].len(), 2);
+        assert_eq!(fc.file_streams[0].1.len(), 2);
         // files should be sorted now!
         assert_eq!(
-            fc.file_streams[0],
+            fc.file_streams[0]
+                .1
+                .iter()
+                .map(|(_, b)| b.clone())
+                .collect::<Vec<String>>(),
             vec![file_path, file2.path().to_str().unwrap().to_owned()]
         );
         println!("fc with 2 files sorted={:?}", fc); // we can debug print it

@@ -51,11 +51,13 @@ pub struct Asc2DltMsgIterator<'a, R> {
     lines: Lines<R>, // todo could optimize with e.g. stream_iterator for &str instead of string copies!
     pub index: DltMessageIndexType,
     namespace: u32,
+    timestamp_reference_time_us: Option<u64>,
     pub lines_processed: usize,
     pub lines_skipped: usize,
     pub log: Option<&'a slog::Logger>,
 
     date_us: u64,                // will be parsed from first asc line "date ..."
+    timestamp_offset_dms: u32, // offset to be added to timestamps. Used if timestamp_reference_time is provided.
     first_neg_timestamp_us: i64, // first neg. timestamp after date line
     capture_locations_can: CaptureLocations,
     capture_locations_canfd: CaptureLocations,
@@ -72,6 +74,7 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
         start_index: DltMessageIndexType,
         reader: R,
         namespace: u32,
+        timestamp_reference_time_us: Option<u64>,
         log: Option<&'a slog::Logger>,
     ) -> Asc2DltMsgIterator<'a, R> {
         let htyp = DLT_STD_HDR_VERSION
@@ -90,10 +93,12 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
             lines: reader.lines(),
             index: start_index,
             namespace,
+            timestamp_reference_time_us,
             lines_processed: 0,
             lines_skipped: 0,
             log,
             date_us: (chrono::Utc::now().naive_utc().timestamp_micros()) as u64, // init to avoid underrun if only neg timestamps are provided
+            timestamp_offset_dms: 0,
             first_neg_timestamp_us: 0,
             capture_locations_can: RE_MSG.capture_locations(),
             capture_locations_canfd: RE_MSG_CANFD.capture_locations(),
@@ -111,6 +116,21 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
             .entry(can_id)
             .or_insert_with(|| get_ecuid_for_namespace(self.namespace, name))
             .to_owned()
+    }
+
+    fn timestamp_dms_from(&self, timestamp_us: i64) -> u32 {
+        if timestamp_us >= 0 {
+            self.timestamp_offset_dms + ((timestamp_us / 100) as u32)
+        } else if self.timestamp_offset_dms > 0 {
+            self.timestamp_offset_dms
+                .saturating_sub((-timestamp_us / 100) as u32)
+        } else {
+            // for neg timestamps the reception time is correct but the timestamp needs to be corrected
+            // to always be monotonicaly increasing so we convert e.g. -100...-0.,0.1... to 0..100,0.1...
+            // i.e. timestamp - first_neg_timestamp... (so neg --(=+) first_neg_timestamp)
+            // we do this only if we have no timestamp_offset_dms set (so no reference time to use)
+            (timestamp_us.saturating_sub(self.first_neg_timestamp_us) / 100) as u32
+        } // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
     }
 }
 
@@ -155,7 +175,7 @@ fn remove_namespace_global_ecu_map(namespace: u32) -> Option<HashMap<String, Dlt
     map.remove(&namespace)
 } */
 
-fn asc_parse_date(date_str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
+pub fn asc_parse_date(date_str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
     // we expect them in the following format:
     NaiveDateTime::parse_from_str(date_str, "%a %b %d %I:%M:%S %p %Y")
 }
@@ -270,21 +290,6 @@ where
                             payload.append(&mut data);
                         }
 
-                        /*if let Some(log) = self.log {
-                            debug!(
-                                        log,
-                                        "Asc2DltMsgIterator.next got msg frame_id={} timestamp_us={} can_id={} id={} rxtx={} d={} payload={:?} at line #{}",
-                                        frame_id,
-                                        timestamp_us,
-                                        can_id,
-                                        id,
-                                        rxtx,
-                                        data_len,
-                                        payload,
-                                        self.lines_processed
-                                    );
-                        }*/
-                        // return a DltMessage
                         let index = self.index;
                         self.index += 1;
                         let ecu = self.get_ecu(*can_id, &None);
@@ -293,15 +298,7 @@ where
                             index,
                             reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
                             ecu,
-                            timestamp_dms: if timestamp_us >= 0 {
-                                (timestamp_us / 100) as u32
-                            } else {
-                                // for neg timestamps the reception time is correct but the timestamp needs to be corrected
-                                // to always be monotonicaly increasing so we convert e.g. -100...-0.,0.1... to 0..100,0.1...
-                                // i.e. timestamp - first_neg_timestamp... (so neg --(=+) first_neg_timestamp)
-                                (timestamp_us.saturating_sub(self.first_neg_timestamp_us) / 100)
-                                    as u32
-                            }, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
+                            timestamp_dms: self.timestamp_dms_from(timestamp_us),
                             standard_header: DltStandardHeader {
                                 htyp: self.htyp,
                                 mcnt: (index & 0xff) as u8,
@@ -390,15 +387,7 @@ where
                             index,
                             reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
                             ecu,
-                            timestamp_dms: if timestamp_us >= 0 {
-                                (timestamp_us / 100) as u32
-                            } else {
-                                // for neg timestamps the reception time is correct but the timestamp needs to be corrected
-                                // to always be monotonicaly increasing so we convert e.g. -100...-0.,0.1... to 0..100,0.1...
-                                // i.e. timestamp - first_neg_timestamp... (so neg --(=+) first_neg_timestamp)
-                                (timestamp_us.saturating_sub(self.first_neg_timestamp_us) / 100)
-                                    as u32
-                            }, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
+                            timestamp_dms: self.timestamp_dms_from(timestamp_us),
                             standard_header: DltStandardHeader {
                                 htyp: self.htyp,
                                 mcnt: (index & 0xff) as u8,
@@ -447,15 +436,7 @@ where
                             index,
                             reception_time_us: self.date_us.saturating_add_signed(timestamp_us),
                             ecu,
-                            timestamp_dms: if timestamp_us >= 0 {
-                                (timestamp_us / 100) as u32
-                            } else {
-                                // for neg timestamps the reception time is correct but the timestamp needs to be corrected
-                                // to always be monotonicaly increasing so we convert e.g. -100...-0.,0.1... to 0..100,0.1...
-                                // i.e. timestamp - first_neg_timestamp... (so neg --(=+) first_neg_timestamp)
-                                (timestamp_us.saturating_sub(self.first_neg_timestamp_us) / 100)
-                                    as u32
-                            }, // rounding? or prefer round down to not move into the future? (could do w.o. timestamp_dms as well)
+                            timestamp_dms: self.timestamp_dms_from(timestamp_us),
                             standard_header: DltStandardHeader {
                                 htyp: self.htyp,
                                 mcnt: (index & 0xff) as u8,
@@ -475,8 +456,17 @@ where
                         if let Some(date) = captures.get(1) {
                             let nt = asc_parse_date(date.as_str());
                             if let Ok(nt) = nt {
-                                self.date_us = nt.timestamp_micros() as u64;
+                                let nt_us = nt.timestamp_micros() as u64;
+                                self.date_us = nt_us;
                                 self.first_neg_timestamp_us = 0; // reset here if mult. files get concatenated
+                                if let Some(timestamp_reference_time_us) =
+                                    self.timestamp_reference_time_us
+                                {
+                                    if timestamp_reference_time_us < nt_us {
+                                        self.timestamp_offset_dms =
+                                            ((nt_us - timestamp_reference_time_us) / 100) as u32;
+                                    }
+                                }
                             }
                             if let Some(log) = self.log {
                                 trace!(
@@ -527,7 +517,7 @@ where
                                         index,
                                         reception_time_us: self.date_us,
                                         ecu: self.get_ecu(id, &Some(name)),
-                                        timestamp_dms: 0u32,
+                                        timestamp_dms: self.timestamp_offset_dms,
                                         standard_header: DltStandardHeader {
                                             htyp: self.htyp,
                                             mcnt: (index & 0xff) as u8,
@@ -624,6 +614,7 @@ mod tests {
             start_index,
             LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
             get_new_namespace(),
+            None,
             Some(&log),
         );
         let mut iterated_msgs = 0;
@@ -677,7 +668,7 @@ mod tests {
 -0.159843 CANFD 1 Rx 135   1 0 8 8 f1 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0
 0.169843 CANFD 1 Rx 135   1 0 8 8 f2 1a 7d 00 a6 ff ff ff 0 0 3000 0 0 0 0 0"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None);
+        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -699,7 +690,7 @@ mod tests {
 -0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0
 0.017230 CANFD 1 Rx ErrorFrame                                                 0 0 0 Data 0 0 0 0 0 0 0 11 0 0 0 0 0"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None);
+        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None, None);
         let mut iterated_msgs: u32 = 0;
         for _m in &mut it {
             iterated_msgs += 1;
@@ -717,7 +708,7 @@ mod tests {
 0.000000 1 36f Rx d 5 f3 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879
 0.000100 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None);
+        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -727,6 +718,42 @@ mod tests {
                 3 => assert_eq!(m.timestamp_dms, 9851_u32), // 9851dms after the first one
                 4 => assert_eq!(m.timestamp_dms, 0_u32),
                 5 => assert_eq!(m.timestamp_dms, 1_u32),
+                _ => {}
+            }
+        }
+        assert_eq!(iterated_msgs, 5); // one ctrl and four can msgs
+    }
+
+    #[test]
+    fn asc_can1_reference_time() {
+        let reader = r##"
+date Thu Apr 20 10:26:43 AM 2023
+//BusMapping: CAN 1 = ECU_CAN 431
+-0.985210 1 36f Rx d 5 f2 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879
+-0.000100 1 36f Rx d 5 f2 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879
+0.000000 1 36f Rx d 5 f3 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879
+0.000100 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
+            .as_bytes();
+        let timestamp_reference_time = asc_parse_date("Thu Apr 20 10:25:26 AM 2023")
+            .ok()
+            .map(|a| a.timestamp_micros() as u64);
+
+        let mut it = Asc2DltMsgIterator::new(
+            0,
+            reader,
+            get_new_namespace(),
+            timestamp_reference_time,
+            None,
+        );
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            // todo verify payload println!("m={:?}", m);
+            match iterated_msgs {
+                2 => assert_eq!(m.timestamp_dms, 770000_u32 - 9852), // the first neg. gets the timestamp fitting to reference time
+                3 => assert_eq!(m.timestamp_dms, 770000_u32 - 9852 + 9851_u32), // 9851dms after the first one
+                4 => assert_eq!(m.timestamp_dms, 770000_u32),
+                5 => assert_eq!(m.timestamp_dms, 770001_u32),
                 _ => {}
             }
         }
@@ -757,7 +784,7 @@ mod tests {
 0.000100 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
         let namespace = get_new_namespace();
-        let mut it = Asc2DltMsgIterator::new(0, reader1, namespace, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader1, namespace, None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -773,7 +800,7 @@ mod tests {
 //BusMapping: CAN 1 = ECU2_CAN 432
 0.000101 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -788,7 +815,7 @@ mod tests {
 //BusMapping: CAN 1 = ECU2_CAN 432
 0.000102 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -803,7 +830,7 @@ mod tests {
 //BusMapping: CAN 5 = ECU2_CAN 432
 0.000102 5 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -820,7 +847,7 @@ mod tests {
 0.000100 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
         let namespace = get_new_namespace();
-        let mut it = Asc2DltMsgIterator::new(0, reader1, namespace, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader1, namespace, None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -834,7 +861,7 @@ mod tests {
         let reader2 = r##"
 0.000101 1 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;
@@ -848,7 +875,7 @@ mod tests {
         let reader2 = r##"
 0.000102 42 36f Rx d 5 f4 f7 fe ff 14 Length = 0 BitCount = 0 ID = 879"##
             .as_bytes();
-        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None);
+        let mut it = Asc2DltMsgIterator::new(0, reader2, namespace, None, None);
         let mut iterated_msgs: u32 = 0;
         for m in &mut it {
             iterated_msgs += 1;

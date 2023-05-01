@@ -1694,6 +1694,7 @@ mod tests {
             buf_reader,
             get_new_namespace(),
             None,
+            None,
         );
         for msg in it.by_ref() {
             messages_processed += 1;
