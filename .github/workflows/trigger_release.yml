@@ -1,0 +1,39 @@
+name: Trigger release creation
+on:
+  workflow_dispatch:
+    inputs:
+      do-release:
+        type: boolean
+        description: 'Do a release or check only'
+        required: true
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: install cargo bump
+        run: |
+          cargo install cargo-bump
+      - name: Conventional commits check
+        id: cog_release
+        uses: cocogitto/cocogitto-action@v3
+        with:
+          check-latest-tag-only: true
+          release: ${{ github.event.inputs.do-release }}
+          git-user: 'github-actions'
+          git-user-email: 'mbehr+adlt_actions@mcbehr.de'
+      - name: Print version
+        run: "echo '${{ steps.cog_release.outputs.version }}'"
+      - name: push changes to repository
+        run: |
+          git config user.name github-actions
+          git config user.email mbehr+adlt_actions@mcbehr.de
+          git status
+          git log -n 3
+          git diff HEAD~1
+          git push && git push --tags
