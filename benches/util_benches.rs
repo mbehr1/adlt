@@ -99,7 +99,7 @@ pub fn asc_iterator1(c: &mut Criterion) {
     group.bench_function("asc_iterator 10k", |b| {
         let namespace = get_new_namespace();
         b.iter(|| {
-            let mut it = Asc2DltMsgIterator::new(0, &buf[0..read_size], namespace, None);
+            let mut it = Asc2DltMsgIterator::new(0, &buf[0..read_size], namespace, None, None);
             let mut iterated_msgs: u64 = 0;
             for _m in &mut it {
                 iterated_msgs += 1;

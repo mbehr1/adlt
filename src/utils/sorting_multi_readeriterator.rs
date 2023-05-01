@@ -165,6 +165,7 @@ impl<'a, O: Iterator<Item = Box<dyn Iterator<Item = DltMessage> + 'a>>> Iterator
 mod tests {
     use super::*;
     use crate::dlt::DLT_MAX_STORAGE_MSG_SIZE;
+    use crate::utils::asc2dltmsgiterator::asc_parse_date;
     use crate::utils::{get_dlt_message_iterator, get_new_namespace, LowMarkBufReader};
     use std::fs::File;
 
@@ -175,7 +176,7 @@ mod tests {
             512 * 1024usize,
             DLT_MAX_STORAGE_MSG_SIZE,
         );
-        let it1 = get_dlt_message_iterator("asc", 0, buf_reader, get_new_namespace(), None);
+        let it1 = get_dlt_message_iterator("asc", 0, buf_reader, get_new_namespace(), None, None);
         let mit = SortingMultiReaderIterator::new(0, vec![it1]);
         let mut iterated_msgs = 0;
         for m in mit {
@@ -193,14 +194,14 @@ mod tests {
             DLT_MAX_STORAGE_MSG_SIZE,
         );
         let namespace = get_new_namespace();
-        let it1 = get_dlt_message_iterator("asc", 0, buf_reader1, namespace, None);
+        let it1 = get_dlt_message_iterator("asc", 0, buf_reader1, namespace, None, None);
 
         let buf_reader2 = LowMarkBufReader::new(
             File::open("./tests/can_example1c.asc").unwrap(),
             512 * 1024usize,
             DLT_MAX_STORAGE_MSG_SIZE,
         );
-        let it2 = get_dlt_message_iterator("asc", 0, buf_reader2, namespace, None);
+        let it2 = get_dlt_message_iterator("asc", 0, buf_reader2, namespace, None, None);
 
         let mit = SortingMultiReaderIterator::new(0, vec![it2, it1]);
         let mut iterated_msgs = 0;
@@ -225,7 +226,7 @@ mod tests {
                 512 * 1024usize,
                 DLT_MAX_STORAGE_MSG_SIZE,
             );
-            get_dlt_message_iterator("asc", 0, buf_reader, namespace, None)
+            get_dlt_message_iterator("asc", 0, buf_reader, namespace, None, None)
         });
 
         assert_eq!((1, Some(1)), its.size_hint());
@@ -247,14 +248,14 @@ mod tests {
             DLT_MAX_STORAGE_MSG_SIZE,
         );
         let namespace = get_new_namespace();
-        let it1 = get_dlt_message_iterator("asc", 0, buf_reader1, namespace, None);
+        let it1 = get_dlt_message_iterator("asc", 0, buf_reader1, namespace, None, None);
 
         let buf_reader2 = LowMarkBufReader::new(
             File::open("./tests/can_example1c.asc").unwrap(),
             512 * 1024usize,
             DLT_MAX_STORAGE_MSG_SIZE,
         );
-        let it2 = get_dlt_message_iterator("asc", 0, buf_reader2, namespace, None);
+        let it2 = get_dlt_message_iterator("asc", 0, buf_reader2, namespace, None, None);
 
         let mit = SequentialMultiIterator::new(0, vec![it2, it1].into_iter());
         let mut iterated_msgs = 0;
@@ -275,7 +276,7 @@ mod tests {
                 512 * 1024usize,
                 DLT_MAX_STORAGE_MSG_SIZE,
             );
-            get_dlt_message_iterator("asc", 0, buf_reader, namespace, None)
+            get_dlt_message_iterator("asc", 0, buf_reader, namespace, None, None)
         });
 
         let mit = SequentialMultiIterator::new(0, its);
@@ -285,5 +286,101 @@ mod tests {
             iterated_msgs += 1;
         }
         assert_eq!(101 + 3, iterated_msgs);
+    }
+
+    #[test]
+    fn test_ser_multiple_it_non_overlap() {
+        let files = vec!["./tests/can_example2a.asc"];
+        let namespace = get_new_namespace();
+        let first_reception_time_us = asc_parse_date("Thu Apr 20 10:25:26 AM 2023")
+            .ok()
+            .map(|a| a.timestamp_micros() as u64);
+
+        let its = files.into_iter().map(|file_name| {
+            let buf_reader = LowMarkBufReader::new(
+                File::open(file_name).unwrap(),
+                512 * 1024usize,
+                DLT_MAX_STORAGE_MSG_SIZE,
+            );
+            get_dlt_message_iterator(
+                "asc",
+                0,
+                buf_reader,
+                namespace,
+                first_reception_time_us,
+                None,
+            )
+        });
+        let mit_2a = SequentialMultiIterator::new(0, its);
+
+        let files = vec!["./tests/can_example2b.asc"];
+        let namespace = get_new_namespace();
+        let its = files.into_iter().map(|file_name| {
+            let buf_reader = LowMarkBufReader::new(
+                File::open(file_name).unwrap(),
+                512 * 1024usize,
+                DLT_MAX_STORAGE_MSG_SIZE,
+            );
+            get_dlt_message_iterator(
+                "asc",
+                0,
+                buf_reader,
+                namespace,
+                first_reception_time_us,
+                None,
+            )
+        });
+        let mit_2b = SequentialMultiIterator::new(0, its);
+
+        let mut mit_2concat = mit_2a.chain(mit_2b);
+
+        // those files don't overlap. so we expect them to have the same times as if read as single files
+        let files = vec!["./tests/can_example2a.asc", "./tests/can_example2b.asc"];
+        let namespace = get_new_namespace();
+        let first_reception_time_us = asc_parse_date("Thu Apr 20 10:25:26 AM 2023")
+            .ok()
+            .map(|a| a.timestamp_micros() as u64);
+        let its = files.into_iter().map(|file_name| {
+            let buf_reader = LowMarkBufReader::new(
+                File::open(file_name).unwrap(),
+                512 * 1024usize,
+                DLT_MAX_STORAGE_MSG_SIZE,
+            );
+            get_dlt_message_iterator(
+                "asc",
+                0,
+                buf_reader,
+                namespace,
+                first_reception_time_us,
+                None,
+            )
+        });
+
+        let mit = SequentialMultiIterator::new(0, its);
+        let mut iterated_msgs = 0;
+        let mut expected_timestamps = [
+            0_u32,
+            6466,
+            777746, /* 10:25:26+77,7746 */
+            770000,
+            777770, /* 10:26:43 + 0.777 = 10:25:26 + 1:17 + 0.777 = 10:25:26 + 77.7770  */
+            770000 + 2266406,
+        ]
+        .into_iter();
+        for m in mit {
+            assert_eq!(m.index, iterated_msgs);
+            iterated_msgs += 1;
+
+            assert_eq!(
+                m.timestamp_dms,
+                expected_timestamps.next().unwrap(),
+                "timestamp mismatch for msg {:?}",
+                m
+            );
+            // reception time should be equal to as if read as single files (they are absolute)
+            let m2 = mit_2concat.next().unwrap();
+            assert_eq!(m.reception_time_us, m2.reception_time_us);
+        }
+        assert_eq!(6, iterated_msgs);
     }
 }

@@ -354,13 +354,12 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     }
 
     // now we do need to sort and dedup each stream only:
-    let input_file_streams: Vec<(HashSet<DltChar4>, Vec<String>)> = input_file_streams
+    let input_file_streams: Vec<StreamEntry> = input_file_streams
         .into_iter()
         .map(|(hashset, mut time_files)| {
             time_files.sort_by(|a, b| a.0.cmp(&b.0));
-            let mut files: Vec<String> = time_files.into_iter().map(|(_, files)| files).collect();
-            files.dedup(); // remove duplicates
-            (hashset, files)
+            time_files.dedup(); // remove duplicates
+            (hashset, time_files)
         })
         .collect();
     debug!(log, "sorted input_files by first message reception time and ecus_seen:"; "input_file_streams" => format!("{:?}",&input_file_streams));
@@ -569,9 +568,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let mut messages_output: adlt::dlt::DltMessageIndexType = 0;
 
     let get_single_it =
-        |input_file_name: &str, start_index: adlt::dlt::DltMessageIndexType| match File::open(
-            input_file_name,
-        ) {
+        |input_file_name: &str,
+         start_index: adlt::dlt::DltMessageIndexType,
+         first_reception_time_us: Option<u64>| match File::open(input_file_name) {
             Ok(fi) => {
                 info!(log, "opened file {} {:?}", &input_file_name, &fi);
                 let buf_reader =
@@ -584,6 +583,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     start_index,
                     buf_reader,
                     namespace,
+                    first_reception_time_us,
                     Some(log),
                 )
             }
@@ -601,9 +601,16 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         input_file_streams
             .into_iter()
             .map(|(_, files)| {
+                let first_reception_time_us = if files.is_empty() {
+                    None
+                } else {
+                    Some(files[0].0)
+                };
                 SequentialMultiIterator::new_or_single_it(
                     0,
-                    files.into_iter().map(|file| get_single_it(&file, 0)),
+                    files
+                        .into_iter()
+                        .map(move |(_, file)| get_single_it(&file, 0, first_reception_time_us)),
                 )
             })
             .collect(),
