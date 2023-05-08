@@ -1116,9 +1116,12 @@ impl DltMessage {
                 _ => {
                     // write in dlt-viewer format [<msg id>] ascii chars| hex dump e.g. [4711] CID|43 49 44
                     write!(&mut text, "[{}] ", message_id)?;
-                    crate::utils::buf_as_printable_ascii_to_write(&mut text, payload, '-')?;
+                    let times_replaced =
+                        crate::utils::buf_as_printable_ascii_to_write(&mut text, payload, '-')?;
                     write!(&mut text, "|")?;
-                    crate::utils::buf_as_hex_to_write(&mut text, payload)?;
+                    if times_replaced > 0 {
+                        crate::utils::buf_as_hex_to_write(&mut text, payload)?;
+                    }
                 }
             }
         }
