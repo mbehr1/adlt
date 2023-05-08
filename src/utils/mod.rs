@@ -162,19 +162,26 @@ static CHARS_HEX_LOW: [char; 16] = [
 
 /// output as buffer as printable ascii to a (char) writer.
 /// Each byte between [0x20...=0x7e] is printed. Others are replaced by the replacement_char.
+///
+/// Returns how often the replacement char was used except for whitespace chars like \r\n\t.
 pub fn buf_as_printable_ascii_to_write(
     writer: &mut impl std::fmt::Write,
     buf: &[u8],
     replacement_char: char,
-) -> Result<(), std::fmt::Error> {
+) -> Result<u32, std::fmt::Error> {
+    let mut times_replaced = 0;
     for item in buf.iter() {
         if *item >= 0x20 && *item <= 0x7e {
             writer.write_char(*item as char)?;
         } else {
             writer.write_char(replacement_char)?;
+            match *item {
+                b'\r' | b'\n' | b'\t' => {}
+                _ => times_replaced += 1,
+            };
         }
     }
-    Ok(())
+    Ok(times_replaced)
 }
 
 /// output a buffer as hex dump to a (char) writer.
@@ -760,16 +767,20 @@ mod tests {
     #[test]
     fn buf_as_ascii() {
         let mut s = String::new();
-        buf_as_printable_ascii_to_write(&mut s, &[], '-').unwrap();
+        let times_replaced = buf_as_printable_ascii_to_write(&mut s, &[], '-').unwrap();
         assert_eq!(s.len(), 0);
+        assert_eq!(times_replaced, 0);
 
-        buf_as_printable_ascii_to_write(
+        let times_replaced = buf_as_printable_ascii_to_write(
             &mut s,
-            &[0x00_u8, 0x1f, 0x20, 0x40, 0x7c, 0x7e, 0x7f, 0xff],
+            &[
+                0x00_u8, 0x1f, 0x20, 0x40, 0x7c, 0x7e, 0x7f, 0xff, b'\t', b'\r', b'\n', b' ',
+            ],
             '-',
         )
         .unwrap();
-        assert_eq!(s, "-- @|~--");
+        assert_eq!(s, "-- @|~----- ");
+        assert_eq!(times_replaced, 4);
     }
 
     #[test]
