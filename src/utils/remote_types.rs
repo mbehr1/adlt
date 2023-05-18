@@ -55,10 +55,20 @@ pub struct BinCtidInfo {
 }
 
 #[derive(Encode, bincode::Decode)]
+pub struct BinStreamInfo {
+    // todo change with index
+    pub stream_id: u32,
+    pub nr_stream_msgs: u32,
+    pub nr_file_msgs_processed: u32,
+    pub nr_file_msgs_total: u32,
+}
+
+#[derive(Encode, bincode::Decode)]
 pub enum BinType {
     FileInfo(BinFileInfo),
     Lifecycles(Vec<BinLifecycle>),
     DltMsgs((u32, Vec<BinDltMsg>)), // stream id and Vec
     EacInfo(Vec<BinEcuStats>),
     PluginState(Vec<String>), // serialized json from each plugin with generation update
+    StreamInfo(BinStreamInfo),
 }
