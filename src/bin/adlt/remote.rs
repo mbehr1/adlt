@@ -1152,16 +1152,18 @@ fn process_file_context<T: Read + Write>(
     // in any stream any messages to send?
     let all_msgs_len = fc.all_msgs.len();
     for mut stream in &mut fc.streams {
-        let mut new_stream_msgs = false; // todo needed?
-                                         // more messages avail?
-        if all_msgs_len > stream.all_msgs_last_processed_len {
-            let have_pos_filters = !stream.filters[FilterKind::Positive].is_empty();
-            let have_event_filters = !stream.filters[FilterKind::Event].is_empty();
-
+        // more messages avail?
+        let last_all_msgs_last_processed_len = stream.all_msgs_last_processed_len;
+        if all_msgs_len > last_all_msgs_last_processed_len {
             if stream.filters_active {
+                let have_pos_filters = !stream.filters[FilterKind::Positive].is_empty();
+                let have_event_filters = !stream.filters[FilterKind::Event].is_empty();
+
                 // check msgs from _processed_len to all_msgs_len
                 // todo use parallel iterator
-                for i in stream.all_msgs_last_processed_len..all_msgs_len {
+                // todo break after some max time/max amount of messages to improve reaction time
+                let mut i = last_all_msgs_last_processed_len;
+                while i < all_msgs_len {
                     let msg: &adlt::dlt::DltMessage = &fc.all_msgs[i];
                     let mut matches = !have_pos_filters;
 
@@ -1204,27 +1206,48 @@ fn process_file_context<T: Read + Write>(
 
                     if matches {
                         stream.filtered_msgs.push(i);
-                        new_stream_msgs = true;
-                        // todo for !is_stream end as soon as enough (msgs.to_send.end) are filtered!
+                        // for !is_stream end as soon as enough are filtered/found
+                        if !stream.is_stream
+                            && stream.filtered_msgs.len() >= stream.msgs_to_send.end
+                        {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    i += 1;
+                    if i % 1_000_000 == 0 {
+                        // process 1mio msgs as a chunk
+                        break;
                     }
                 }
+                stream.all_msgs_last_processed_len = i;
             } else {
-                new_stream_msgs = true;
+                stream.all_msgs_last_processed_len = all_msgs_len;
             }
-            stream.all_msgs_last_processed_len = all_msgs_len;
-        }
-
-        if got_new_msgs || new_stream_msgs { // todo or once at least?
-             // or kind of keep-alive from the stream every sec?
-             // todo post info amount of filtered msgs vs all_msgs?
-             // so that the client can understand whether messages should arrive?
         }
 
         let stream_msgs_len = if stream.filters_active {
             stream.filtered_msgs.len()
         } else {
-            fc.all_msgs.len()
+            all_msgs_len
         };
+
+        if stream.all_msgs_last_processed_len != last_all_msgs_last_processed_len {
+            // or kind of keep-alive from the stream every sec? (todo debounce?)
+            // post info amount of filtered msgs vs all_msgs
+            let encoded: Vec<u8> = bincode::encode_to_vec(
+                remote_types::BinType::StreamInfo(remote_types::BinStreamInfo {
+                    stream_id: stream.id,
+                    nr_stream_msgs: stream_msgs_len as u32,
+                    nr_file_msgs_processed: stream.all_msgs_last_processed_len as u32,
+                    nr_file_msgs_total: all_msgs_len as u32,
+                }),
+                BINCODE_CONFIG,
+            )
+            .unwrap(); // todo
+                       //info!(log, "encoded: #{:?}", &encoded);
+            websocket.write_message(Message::Binary(encoded))?;
+        }
 
         if stream.msgs_sent.end < stream.msgs_to_send.end && stream.msgs_sent.end < stream_msgs_len
         {
@@ -1313,7 +1336,9 @@ fn process_file_context<T: Read + Write>(
             stream.msgs_sent.end = new_end;
             //info!(log, "stream #{} did send {:?}", stream.id, stream.msgs_sent);
         }
-        if (!got_new_msgs || (stream.msgs_sent.end >= stream.msgs_to_send.end)) && !stream.is_stream
+        if ((!got_new_msgs && (stream.all_msgs_last_processed_len >= all_msgs_len)) // no new msgs and all processed
+            || (stream.msgs_sent.end >= stream.msgs_to_send.end)) // or window size achieved
+            && !stream.is_stream
         {
             stream_marked_as_done = true; // will be removed later from the list
             stream.is_done = true;
@@ -1745,6 +1770,7 @@ mod tests {
             let mut got_fileinfo = false; // set once 11696 msgs have been announced
             let mut got_eacinfo = false;
             let mut got_pluginstate = false;
+            let mut got_streaminfo = false;
 
             while let Ok(msg) = ws.read_message() {
                 match msg {
@@ -1788,6 +1814,10 @@ mod tests {
                                     println!("got binary msg DltMsgs: #{}", msgs.len());
                                     got_msgs += msgs.len();
                                 } // _ => {}
+                                BinType::StreamInfo(_si) => {
+                                    got_streaminfo = true;
+                                    // todo add test where this is evaluated!
+                                }
                             }
                         }
                     }
@@ -1806,6 +1836,7 @@ mod tests {
             }
             assert_eq!(got_msgs, 0); // no msgs expected as no stream requested
             assert!(!got_stream_ok);
+            assert!(!got_streaminfo);
 
             // send a cmd to the plugin:
             ws.write_message(tungstenite::protocol::Message::Text(
