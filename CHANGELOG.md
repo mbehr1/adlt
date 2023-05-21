@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.39.0 - 2023-05-21
+#### Features
+- **(remote)** add stream_search command - (dbc7ee0) - Matthias Behr
+- - -
+
 ## v0.38.0 - 2023-05-18
 #### Features
 - **(remote)** send stream infos - (c10f05d) - Matthias Behr
