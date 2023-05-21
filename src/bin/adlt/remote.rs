@@ -709,7 +709,7 @@ fn process_incoming_text_message<T: Read + Write>(
                 }
             }
         }
-        "stop" | "stream_binary_search" | "stream_change_window" => {
+        "stop" | "stream_binary_search" | "stream_change_window" | "stream_search" => {
             let params_splitted = params.split(' ').collect::<Vec<_>>();
             let param0 = params_splitted[0];
             match param0.parse::<u32>() {
@@ -718,6 +718,25 @@ fn process_incoming_text_message<T: Read + Write>(
                         Some(fc) => {
                             if let Some(pos) = fc.streams.iter().position(|x| x.id == id) {
                                 match command {
+                                    "stream_search" => {
+                                        // search within the stram for all messages matching the filters:
+                                        let stream = &fc.streams[pos];
+                                        if let Err(e) = process_stream_search_params(
+                                            log,
+                                            websocket,
+                                            &fc.all_msgs,
+                                            stream,
+                                            command,
+                                            params.split_once(' ').unwrap().1,
+                                        ) {
+                                            websocket
+                                                .write_message(Message::Text(format!(
+                                                    "err: {} failed with err '{}' from '{}'!",
+                                                    command, e, params
+                                                )))
+                                                .unwrap(); // todo
+                                        }
+                                    }
                                     "stream_binary_search" => {
                                         // binary search, i.e. return the first info for a search expr
                                         let stream = &fc.streams[pos];
@@ -1013,6 +1032,138 @@ fn process_incoming_text_message<T: Read + Write>(
     }
 }
 
+/// process a "stream_search" command
+///
+/// executes a filter search within the stream
+/// and returns the relative indices of the messages matching
+///
+/// Input params:
+/// filters: (similar to stream command)
+/// start_idx: idx of the stream msgs to start, defaults to 0
+/// max_results: max. number of msgs to return, defaults to 100
+///
+/// Returns:
+/// A json message to the websocket with:
+/// search_idxs:[...] - array of indices
+/// nextSearchIdx: relative idx of the stream msgs where to start next search. Omitted if search is finished.
+///
+fn process_stream_search_params<T: Read + Write>(
+    log: &slog::Logger,
+    websocket: &mut WebSocket<T>,
+    all_msgs: &[adlt::dlt::DltMessage],
+    stream: &StreamContext,
+    command: &str,
+    params_json: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // parse json
+    let v = serde_json::from_str::<serde_json::Value>(params_json)?;
+    debug!(
+        log,
+        "process_stream_search_params({}:{}) = {:?}", command, params_json, v
+    );
+    let start_idx = match &v["start_idx"] {
+        serde_json::Value::Number(i) => i.as_u64().unwrap_or(0) as usize,
+        serde_json::Value::Null => 0, // keep defaults
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "wrong type for 'start_idx'",
+            )
+            .into());
+        }
+    };
+    let max_results = match &v["max_results"] {
+        serde_json::Value::Number(i) => i.as_u64().unwrap_or(0) as usize,
+        serde_json::Value::Null => 100, // keep defaults
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "wrong type for 'start_idx'",
+            )
+            .into());
+        }
+    };
+    let mut filters: FilterKindContainer<Vec<Filter>> = Default::default();
+
+    match &v["filters"] {
+        serde_json::Value::Array(a) => {
+            for filter in a {
+                debug!(
+                    log,
+                    "process_stream_search_params filters got '{}'",
+                    filter.to_string()
+                );
+                let filter_struct = Filter::from_json(&filter.to_string())?;
+                debug!(
+                    log,
+                    "process_stream_search_params filters parsed as '{:?}'", filter_struct
+                );
+                if filter_struct.enabled {
+                    // otherwise the no pos filter -> ... logic doesnt work
+                    filters[filter_struct.kind].push(filter_struct);
+                }
+            }
+        }
+        serde_json::Value::Null => {} // no filters
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "wrong type for 'filters'",
+            )
+            .into());
+        }
+    }
+
+    // perform the search now synchronous/blocking:
+    let mut search_idxs: Vec<DltMessageIndexType> = Vec::with_capacity(max_results);
+
+    let have_pos_filters = !filters[FilterKind::Positive].is_empty();
+    let have_event_filters = !filters[FilterKind::Event].is_empty();
+
+    // check msgs from _processed_len to all_msgs_len
+    // todo use parallel iterator
+    // todo break after some max time/max amount of messages to improve reaction time
+    let mut i = start_idx;
+    let stream_msgs_len = stream.filtered_msgs.len();
+    while i < stream_msgs_len {
+        let msg: &adlt::dlt::DltMessage = &all_msgs[stream.filtered_msgs[i]];
+        let matches = match_filters(msg, &filters, have_pos_filters, have_event_filters);
+
+        if matches {
+            search_idxs.push(i as u32);
+            if search_idxs.len() >= max_results {
+                i += 1;
+                break;
+            }
+        }
+        i += 1;
+    }
+    let next_search_idx = if i < stream_msgs_len {
+        Some(i + 1)
+    } else {
+        None
+    };
+
+    debug!(
+        log,
+        "process_stream_search_params: start_idx={}, max_results={} filters= pos #{} returning #{}, i={}/{}",
+        start_idx,
+        max_results,
+        filters[FilterKind::Positive].len(),
+        search_idxs.len(), i, stream_msgs_len
+    );
+
+    websocket
+        .write_message(Message::Text(format!(
+            "ok: {} {}={}",
+            command,
+            stream.id,
+            serde_json::json!({"search_idxs":search_idxs, "next_search_idx":next_search_idx}),
+        )))
+        .unwrap(); // todo
+    Ok(())
+}
+
 /// process any messages to be send to the client
 ///
 /// This function should not block longer than e.g. 100ms as otherwise
@@ -1165,44 +1316,8 @@ fn process_file_context<T: Read + Write>(
                 let mut i = last_all_msgs_last_processed_len;
                 while i < all_msgs_len {
                     let msg: &adlt::dlt::DltMessage = &fc.all_msgs[i];
-                    let mut matches = !have_pos_filters;
-
-                    // for now do a simple support of pos. and neg. filters
-                    for filter in &stream.filters[FilterKind::Positive] {
-                        if filter.matches(msg) {
-                            matches = true;
-                            // debug!(log, "stream {} got pos matching msg idx={}", stream.id, i);
-                            break;
-                        }
-                    }
-                    if matches {
-                        // and neg that removes the msg?
-                        for filter in &stream.filters[FilterKind::Negative] {
-                            if filter.matches(msg) {
-                                matches = false;
-                                // debug!(log, "stream {} got neg matching msg idx={}", stream.id, i);
-                                break;
-                            }
-                        }
-                    }
-
-                    // report/event filter?
-                    // if any is set it has to match as well
-                    // so they are applied after the pos/neg filters
-                    // todo think about it... (could be treated as pos filter as well)
-                    if matches && have_event_filters {
-                        matches = false;
-                        for filter in &stream.filters[FilterKind::Event] {
-                            if filter.matches(msg) {
-                                matches = true;
-                                /*debug!(
-                                    log,
-                                    "stream {} got pos matching event msg idx={}", stream.id, i
-                                );*/
-                                break;
-                            }
-                        }
-                    }
+                    let matches =
+                        match_filters(msg, &stream.filters, have_pos_filters, have_event_filters);
 
                     if matches {
                         stream.filtered_msgs.push(i);
@@ -1355,6 +1470,53 @@ fn process_file_context<T: Read + Write>(
         fc.streams.retain(|stream| !stream.is_done);
     }
     Ok(())
+}
+
+fn match_filters(
+    msg: &adlt::dlt::DltMessage,
+    filters: &FilterKindContainer<Vec<Filter>>,
+    have_pos_filters: bool,
+    have_event_filters: bool,
+) -> bool {
+    let mut matches = !have_pos_filters;
+
+    // for now do a simple support of pos. and neg. filters
+    for filter in &filters[FilterKind::Positive] {
+        if filter.matches(msg) {
+            matches = true;
+            // debug!(log, "stream {} got pos matching msg idx={}", stream.id, i);
+            break;
+        }
+    }
+    if matches {
+        // and neg that removes the msg?
+        for filter in &filters[FilterKind::Negative] {
+            if filter.matches(msg) {
+                matches = false;
+                // debug!(log, "stream {} got neg matching msg idx={}", stream.id, i);
+                break;
+            }
+        }
+    }
+
+    // report/event filter?
+    // if any is set it has to match as well
+    // so they are applied after the pos/neg filters
+    // todo think about it... (could be treated as pos filter as well)
+    if matches && have_event_filters {
+        matches = false;
+        for filter in &filters[FilterKind::Event] {
+            if filter.matches(msg) {
+                matches = true;
+                /*debug!(
+                    log,
+                    "stream {} got pos matching event msg idx={}", stream.id, i
+                );*/
+                break;
+            }
+        }
+    }
+    matches
 }
 
 #[derive(Debug)]
