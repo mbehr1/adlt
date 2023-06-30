@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.39.2 - 2023-06-30
+#### Bug Fixes
+- update a few crates - (c81ddb7) - Matthias Behr
+#### Continuous Integration
+- remove windows_gnu build - (1056739) - Matthias Behr
+- - -
+
 ## v0.39.1 - 2023-06-30
 #### Bug Fixes
 - **(filetransfer)** support file names with full path - (d399dd9) - Matthias Behr
