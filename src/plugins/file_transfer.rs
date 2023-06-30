@@ -582,6 +582,20 @@ impl FileTransferPlugin {
         })
     }
 
+    /// return the base name from a filetransfer
+    /// todo: might have to remove other invalid chars as well
+    ///
+    /// This is needed as otherwise a filename like /tmp/foo with autoSave would be written to /tmp...
+    fn base_name_for_filetransfer(file_transfer: &FileTransfer) -> String {
+        let file_name_wo_path = std::path::Path::new(&file_transfer.file_name)
+            .file_name()
+            .map(|s| s.to_string_lossy());
+        match file_name_wo_path {
+            Some(s) => s.into_owned(),
+            _ => format!("<invalid_filename serial {}>", file_transfer.serial),
+        }
+    }
+
     /// check whether that file transfer should be auto saved
     /// and if so try the auto save.
     fn check_auto_save(
@@ -595,13 +609,15 @@ impl FileTransferPlugin {
                 && !file_transfer.file_data.is_empty()
                 && pat.matches(&file_transfer.file_name)
             {
-                // try to save to the path:
+                // try to save to the path: (but only the base name not the full path from the file_name  (e.g. not /tmp/.../foo.txt))
                 let path = if let Some(p) = path {
                     std::path::Path::new(p)
                 } else {
                     std::path::Path::new("./")
                 }
-                .join(&file_transfer.file_name);
+                .join(FileTransferPlugin::base_name_for_filetransfer(
+                    file_transfer,
+                ));
                 // does the file exist? if so -> skip
                 if !path.exists() {
                     if let Some(par_dir) = path.parent() {
@@ -684,7 +700,7 @@ impl FileTransferPlugin {
                     _ => json!(null)
                 },
                 "cmdCtx": match t.state {
-                    FileTransferState::Complete if self.allow_save => json!({"save":{"basename":t.file_name, "idx":idx }}),
+                    FileTransferState::Complete if self.allow_save => json!({"save":{"basename":FileTransferPlugin::base_name_for_filetransfer(t), "idx":idx }}),
                     _ => json!(null)
                 },
                 "tooltip":format!("{}, LC id={}, serial #{}, '{}', created at '{}', file size {} ", t.ecu, t.lifecycle, t.serial, t.file_name, t.file_creation_date, t.file_size),
@@ -1254,7 +1270,7 @@ mod tests {
     #[test]
     fn auto_save() {
         let test_dir = tempfile::tempdir().unwrap();
-        let cfg = json!({"name": "f", "apid":"APID", "ctid":"CTID", "allowSave":false, "keepFLDA":true, "autoSavePath":test_dir.path().to_str().unwrap(), "autoSaveGlob":"test_*.*"});
+        let cfg = json!({"name": "f", "apid":"APID", "ctid":"CTID", "allowSave":false, "keepFLDA":true, "autoSavePath":test_dir.path().to_str().unwrap(), "autoSaveGlob":"**/test_*.*"});
         let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
 
         let payload = payload_from_args(
@@ -1264,7 +1280,7 @@ mod tests {
                     DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
                     &17u32.to_le_bytes(), // serial
                 ),
-                (DLT_TYPE_INFO_STRG, b"test_file.bin\0" as &[u8]), // file name
+                (DLT_TYPE_INFO_STRG, b"/tmp/test_file.bin\0" as &[u8]), // file name
                 (
                     DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
                     &4u32.to_le_bytes(), // filesize
