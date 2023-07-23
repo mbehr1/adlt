@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.40.0 - 2023-07-23
+#### Features
+- **(someip)** add franca_json support - (50599d6) - Matthias Behr
+- - -
+
 ## v0.39.2 - 2023-06-30
 #### Bug Fixes
 - update a few crates - (c81ddb7) - Matthias Behr
