@@ -1302,7 +1302,7 @@ fn process_file_context<T: Read + Write>(
     let mut stream_marked_as_done = false;
     // in any stream any messages to send?
     let all_msgs_len = fc.all_msgs.len();
-    for mut stream in &mut fc.streams {
+    for stream in &mut fc.streams {
         // more messages avail?
         let last_all_msgs_last_processed_len = stream.all_msgs_last_processed_len;
         if all_msgs_len > last_all_msgs_last_processed_len {

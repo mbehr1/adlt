@@ -685,8 +685,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     if let OutputStyle::None = output_style {
         const EMPTY_STR: String = String::new();
         const EMPTY_STR_R: &String = &EMPTY_STR;
-        if let Some(..) = writer_screen {
-            let writer_screen = writer_screen.as_mut().unwrap();
+        if let Some(writer_screen) = writer_screen.as_mut() {
             if let Some(a) = lcs_r.read() {
                 let sorted_lcs = adlt::lifecycle::get_sorted_lifecycles_as_vec(&a);
                 writeln!(writer_screen, "have {} lifecycles:", sorted_lcs.len(),)?;
