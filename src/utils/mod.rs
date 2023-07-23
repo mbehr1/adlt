@@ -436,7 +436,7 @@ where
          lifecycle_id: &crate::lifecycle::LifecycleId,
          msg_reception_time_us: u64,
          buffering_delay: u64| {
-            let mut entry = max_buffering_delays.entry(*ecu).or_insert_with(|| {
+            let entry = max_buffering_delays.entry(*ecu).or_insert_with(|| {
                 (
                     *lifecycle_id,
                     std::collections::VecDeque::with_capacity(windows_size_secs as usize),
