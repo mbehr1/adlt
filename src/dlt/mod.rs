@@ -952,11 +952,18 @@ impl DltMessage {
                 let scod = arg.type_info & DLT_TYPE_INFO_MASK_SCOD;
                 match scod {
                     DLT_SCOD_UTF8 => {
-                        // they should be zero terminated
-                        if arg.payload_raw.len() > 1 {
+                        // according to PRS_Dlt_00156 and PRS_Dlt_00373 the strings should *not* be zero terminated.
+                        // but it seems that some client libs (e.g. genivi/covesa dlt-client) to zero terminate
+                        // so we do autodetect here whether a zero is the last payload_raw byte and if so ignore it.
+
+                        if !arg.payload_raw.is_empty() {
+                            // is the last payload byte a zero term?
+                            let is_zero_term = arg.payload_raw[arg.payload_raw.len() - 1] == 0u8;
+
                             // use copy-on-write strings that alloc only if modification is needed
                             let s = String::from_utf8_lossy(
-                                &arg.payload_raw[0..arg.payload_raw.len() - 1],
+                                &arg.payload_raw
+                                    [0..arg.payload_raw.len() - if is_zero_term { 1 } else { 0 }],
                             );
                             /* todo or ? let s = match s {
                                 std::borrow::Cow::Borrowed(s) => RE.replace_all(s, " "),
@@ -972,29 +979,18 @@ impl DltMessage {
                         // dlt doesn't seem to define the ASCII codepage.
                         // we could use ISO-8859-1 or WINDOWS_1252 "Latin 1"
                         // or we reduce the printable ones to 0x20 (' ') .. 0x7e ('~')
-                        // for now we start with 0x20..0x7e and \n\r\t -> ' '
-                        // they should be zero terminated
-                        if arg.payload_raw.len() > 1 {
+                        // for now we start with WINDOWS_1252 and \n\r\t -> ' '
+                        // zero terminated: (see above, not expected but done by some famous libs)
+                        if !arg.payload_raw.is_empty() {
+                            // is the last payload byte a zero term?
+                            let is_zero_term = arg.payload_raw[arg.payload_raw.len() - 1] == 0u8;
                             // use copy-on-write strings that alloc only if modification is needed
                             let (s, _) = WINDOWS_1252.decode_without_bom_handling(
-                                &arg.payload_raw[0..arg.payload_raw.len() - 1],
+                                &arg.payload_raw
+                                    [0..arg.payload_raw.len() - if is_zero_term { 1 } else { 0 }],
                             );
                             let s = RE_NEW_LINE.replace_all(&s, " ");
                             text.write_str(&s)?;
-
-                            /* instead of WINDOWS-1252 we could use for printable ones only:
-                            for c in &arg.payload_raw[0..arg.payload_raw.len() - 1] {
-                                let c = *c;
-                                let printable_char = if c == b'\n' || c == b'\r' || c == b'\t' {
-                                    ' '
-                                } else if !(0x20..0x7e).contains(&c) {
-                                    '\u{FFFD}'
-                                } else {
-                                    char::from(c)
-                                };
-                                text.write_char(printable_char)?;
-                            }
-                            */
                         }
                     }
 
@@ -2544,21 +2540,27 @@ mod tests {
                 ),
                 (
                     DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
-                    // zero term missing
+                    // w.o. zero term
                     vec![to_endian_vec!(1u16, big_endian), vec![b'a']],
+                    Some("a"),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
+                    // zero term only
+                    vec![to_endian_vec!(1u16, big_endian), vec![0x0]],
                     Some(""),
                 ),
                 (
                     DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
-                    // zero term ok
+                    // with zero term works as well
                     vec![to_endian_vec!(2u16, big_endian), vec![b'a', 0]],
                     Some("a"),
                 ),
                 (
                     DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
-                    // zero term nok ok works as well
+                    // zero term missing
                     vec![to_endian_vec!(2u16, big_endian), vec![b'a', b'b']],
-                    Some("a"),
+                    Some("ab"),
                 ),
                 (
                     DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8,
@@ -2584,19 +2586,25 @@ mod tests {
                     DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
                     // zero term missing
                     vec![to_endian_vec!(1u16, big_endian), vec![b'a']],
+                    Some("a"),
+                ),
+                (
+                    DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
+                    // zero term only
+                    vec![to_endian_vec!(1u16, big_endian), vec![0]],
                     Some(""),
                 ),
                 (
                     DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
-                    // zero term ok
+                    // zero term included works as well
                     vec![to_endian_vec!(2u16, big_endian), vec![b'a', 0]],
                     Some("a"),
                 ),
                 (
                     DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
-                    // zero term nok ok works as well
+                    // zero term missing (as by spec)
                     vec![to_endian_vec!(2u16, big_endian), vec![b'a', b'b']],
-                    Some("a"),
+                    Some("ab"),
                 ),
                 (
                     DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII,
@@ -2640,7 +2648,15 @@ mod tests {
                 let args: Vec<DltArg> = m.into_iter().collect();
                 assert_eq!(m.noar() as usize, noar);
                 if let Some(string_expected) = string_expected {
-                    assert_eq!(args.len(), noar, "testcase #{} args mismatch", i);
+                    assert_eq!(
+                        args.len(),
+                        noar,
+                        "testcase #{} args mismatch; args.len()={}, noar={}, payload={:?}",
+                        i,
+                        args.len(),
+                        noar,
+                        payload,
+                    );
                     assert_eq!(args[0].type_info, testdata.0);
                     assert_eq!(m.payload_as_text().unwrap(), string_expected);
                 } else {
