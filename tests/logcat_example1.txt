@@ -1,0 +1,348 @@
+console:/ # logcat -b all
+logcat -b all
+
+--------- beginning of events
+    18.062   529   529 I auditd  : type=1400 audit(0.0:35): avc: denied { open } for comm="LogManager" path="/data/vdspies/ENC" dev="dm-11" ino=278532 scontext=u:r:logmanager:s0 tcontext=u:object_r:vdspies_dir:s0 tclass=dir permissive=1
+    18.086   529   529 I auditd  : type=1400 audit(0.0:36): avc: denied { create } for comm="LogManager" name="IVI_EUSR_Androidlog" scontext=u:r:logmanager:s0 tcontext=u:object_r:system_data_file:s0 tclass=file permissive=1
+    18.090   529   529 I auditd  : type=1400 audit(0.0:37): avc: denied { append } for comm="LogManager" name="IVI_EUSR_Androidlog" dev="dm-11" ino=278570 scontext=u:r:logmanager:s0 tcontext=u:object_r:system_data_file:s0 tclass=file permissive=1
+    18.090   529   529 I auditd  : type=1400 audit(0.0:38): avc: denied { open } for comm="LogManager" path="/data/vdspies/LogManager/IVI_EUSR_Androidlog" dev="dm-11" ino=278570 scontext=u:r:logmanager:s0 tcontext=u:object_r:system_data_file:s0 tclass=file permissive=1
+    18.090   529   529 I auditd  : type=1400 audit(0.0:39): avc: denied { getattr } for comm="LogManager" path="/data/vdspies/VDDLT" dev="dm-11" ino=278530 scontext=u:r:logmanager:s0 tcontext=u:object_r:vddlt_dir:s0 tclass=dir permissive=1
+    18.090   529   529 I auditd  : type=1400 audit(0.0:40): avc: denied { getattr } for comm="LogManager" path="/data/vdspies/LogManager/IVI_EUSR_Androidlog" dev="dm-11" ino=278570 scontext=u:r:logmanager:s0 tcontext=u:object_r:system_data_file:s0 tclass=file permissive=1
+    18.094   529   529 I auditd  : type=1400 audit(0.0:41): avc: denied { write } for comm="LogManager" name="lm.log" dev="dm-11" ino=278534 scontext=u:r:logmanager:s0 tcontext=u:object_r:system_data_file:s0 tclass=file permissive=1
+    18.374   675   675 I auditd  : type=1400 audit(0.0:42): avc: denied { dac_read_search } for comm="vendor.atestvendor.h" capability=2 scontext=u:r:hal_emp:s0 tcontext=u:r:hal_emp:s0 tclass=capability permissive=1
+    18.542   672   672 I auditd  : type=1400 audit(0.0:43): avc: denied { read } for comm="bsrfupdategatew" name="u:object_r:hwservicemanager_prop:s0" dev="tmpfs" ino=12273 scontext=u:r:bsrfupdategateway:s0 tcontext=u:object_r:hwservicemanager_prop:s0 tclass=file permissive=1
+    18.542   672   672 I auditd  : type=1400 audit(0.0:44): avc: denied { open } for comm="bsrfupdategatew" path="/dev/__properties__/u:object_r:hwservicemanager_prop:s0" dev="tmpfs" ino=12273 scontext=u:r:bsrfupdategateway:s0 tcontext=u:object_r:hwservicemanager_prop:s0 tclass=file permissive=1
+    18.542   672   672 I auditd  : type=1400 audit(0.0:45): avc: denied { getattr } for comm="bsrfupdategatew" path="/dev/__properties__/u:object_r:hwservicemanager_prop:s0" dev="tmpfs" ino=12273 scontext=u:r:bsrfupdategateway:s0 tcontext=u:object_r:hwservicemanager_prop:s0 tclass=file permissive=1
+    18.542   672   672 I auditd  : type=1400 audit(0.0:46): avc: denied { map } for comm="bsrfupdategatew" path="/dev/__properties__/u:object_r:hwservicemanager_prop:s0" dev="tmpfs" ino=12273 scontext=u:r:bsrfupdategateway:s0 tcontext=u:object_r:hwservicemanager_prop:s0 tclass=file permissive=1
+    18.550   672   672 I auditd  : type=1400 audit(0.0:47): avc: denied { call } for comm="bsrfupdategatew" scontext=u:r:bsrfupdategateway:s0 tcontext=u:r:hwservicemanager:s0 tclass=binder permissive=1
+    18.550   675   675 I auditd  : type=1400 audit(0.0:48): avc: denied { read write } for comm="vendor.atestvendor.h" name="gipc8" dev="tmpfs" ino=15654 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    18.550   675   675 I auditd  : type=1400 audit(0.0:49): avc: denied { open } for comm="vendor.atestvendor.h" path="/dev/gipc8" dev="tmpfs" ino=15654 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    18.550   675   675 I auditd  : type=1400 audit(0.0:50): avc: denied { ioctl } for comm="vendor.atestvendor.h" path="/dev/gipc8" dev="tmpfs" ino=15654 ioctlcmd=0x4700 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    18.550   675   675 I auditd  : type=1400 audit(0.0:51): avc: denied { map } for comm="vendor.atestvendor.h" path="/dev/gipc8" dev="tmpfs" ino=15654 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    18.554   275   275 I auditd  : type=1400 audit(0.0:52): avc: denied { transfer } for comm="hwservicemanage" scontext=u:r:hwservicemanager:s0 tcontext=u:r:bsrfupdategateway:s0 tclass=binder permissive=1
+    18.558   672   672 I auditd  : type=1400 audit(0.0:53): avc: denied { call } for comm="bsrfupdategatew" scontext=u:r:bsrfupdategateway:s0 tcontext=u:r:earlypersist-hal-1_0d:s0 tclass=binder permissive=1
+    18.614   734   734 I auditd  : type=1400 audit(0.0:54): avc: denied { read } for comm="getprop" name="u:object_r:default_prop:s0" dev="tmpfs" ino=12219 scontext=u:r:vendor_qti_init_shell:s0 tcontext=u:object_r:default_prop:s0 tclass=file permissive=1
+    18.622   734   734 I auditd  : type=1400 audit(0.0:55): avc: denied { open } for comm="getprop" path="/dev/__properties__/u:object_r:default_prop:s0" dev="tmpfs" ino=12219 scontext=u:r:vendor_qti_init_shell:s0 tcontext=u:object_r:default_prop:s0 tclass=file permissive=1
+    18.622   734   734 I auditd  : type=1400 audit(0.0:56): avc: denied { getattr } for comm="getprop" path="/dev/__properties__/u:object_r:default_prop:s0" dev="tmpfs" ino=12219 scontext=u:r:vendor_qti_init_shell:s0 tcontext=u:object_r:default_prop:s0 tclass=file permissive=1
+    18.622   734   734 I auditd  : type=1400 audit(0.0:57): avc: denied { map } for comm="getprop" path="/dev/__properties__/u:object_r:default_prop:s0" dev="tmpfs" ino=12219 scontext=u:r:vendor_qti_init_shell:s0 tcontext=u:object_r:default_prop:s0 tclass=file permissive=1
+    18.554   275   275 I auditd  : avc:  denied  { find } for interface=vendor.atestvendor.hardware.earlypersist::IEarlyPersist sid=u:r:bsrfupdategateway:s0 pid=672 scontext=u:r:bsrfupdategateway:s0 tcontext=u:object_r:atestvendorEarlypersistHwservice:s0 tclass=hwservice_manager permissive=1
+    18.686   240   240 I auditd  : type=1400 audit(0.0:58): avc: denied { setattr } for comm="init" name="/" dev="sda13" ino=2 scontext=u:r:vendor_init:s0 tcontext=u:object_r:mnt_vdmapdata_file:s0 tclass=dir permissive=1
+    18.686   240   240 I auditd  : type=1400 audit(0.0:59): avc: denied { search } for comm="init" name="/" dev="sda13" ino=2 scontext=u:r:vendor_init:s0 tcontext=u:object_r:mnt_vdmapdata_file:s0 tclass=dir permissive=1
+    18.704   275   275 I auditd  : avc:  denied  { find } for interface=android.hardware.automotive.vehicle::IVehicle sid=u:r:hal_emp:s0 pid=675 scontext=u:r:hal_emp:s0 tcontext=u:object_r:hal_vehicle_hwservice:s0 tclass=hwservice_manager permissive=1
+    18.786   750   750 I auditd  : type=1400 audit(0.0:60): avc: denied { ioctl } for comm="ifconfig" path="socket:[31531]" dev="sockfs" ino=31531 ioctlcmd=0x8914 scontext=u:r:hal_emp:s0 tcontext=u:r:hal_emp:s0 tclass=udp_socket permissive=1
+    18.794   675   675 I auditd  : type=1400 audit(0.0:61): avc: denied { read write } for comm="EMPRxThread" name="gipc8" dev="tmpfs" ino=15654 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    18.794   675   675 I auditd  : type=1400 audit(0.0:62): avc: denied { open } for comm="EMPRxThread" path="/dev/gipc8" dev="tmpfs" ino=15654 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    18.794   675   675 I auditd  : type=1400 audit(0.0:63): avc: denied { ioctl } for comm="EMPRxThread" path="/dev/gipc8" dev="tmpfs" ino=15654 ioctlcmd=0x4700 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    18.794   675   675 I auditd  : type=1400 audit(0.0:64): avc: denied { map } for comm="EMPRxThread" path="/dev/gipc8" dev="tmpfs" ino=15654 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    18.910   518   518 I auditd  : type=1400 audit(0.0:65): avc: denied { search } for comm="vendor.atestvendor.S" name="vdspies" dev="dm-11" ino=278529 scontext=u:r:spyservice:s0 tcontext=u:object_r:vdspies_dir:s0 tclass=dir permissive=1
+    18.910   518   518 I auditd  : type=1400 audit(0.0:66): avc: denied { search } for comm="vendor.atestvendor.S" name="VDDLT" dev="dm-11" ino=278530 scontext=u:r:spyservice:s0 tcontext=u:object_r:vddlt_dir:s0 tclass=dir permissive=1
+    18.910   518   518 I auditd  : type=1400 audit(0.0:67): avc: denied { write } for comm="vendor.atestvendor.S" name="VDDLT" dev="dm-11" ino=278530 scontext=u:r:spyservice:s0 tcontext=u:object_r:vddlt_dir:s0 tclass=dir permissive=1
+    18.910   518   518 I auditd  : type=1400 audit(0.0:68): avc: denied { add_name } for comm="vendor.atestvendor.S" name="dtcinfo.txt" scontext=u:r:spyservice:s0 tcontext=u:object_r:vddlt_dir:s0 tclass=dir permissive=1
+    18.910   518   518 I auditd  : type=1400 audit(0.0:69): avc: denied { create } for comm="vendor.atestvendor.S" name="dtcinfo.txt" scontext=u:r:spyservice:s0 tcontext=u:object_r:vddlt_dir:s0 tclass=file permissive=1
+    18.910   518   518 I auditd  : type=1400 audit(0.0:70): avc: denied { write } for comm="vendor.atestvendor.S" name="dtcinfo.txt" dev="dm-11" ino=278535 scontext=u:r:spyservice:s0 tcontext=u:object_r:vddlt_dir:s0 tclass=file permissive=1
+    18.910   518   518 I auditd  : type=1400 audit(0.0:71): avc: denied { open } for comm="vendor.atestvendor.S" path="/data/vdspies/VDDLT/dtcinfo.txt" dev="dm-11" ino=278535 scontext=u:r:spyservice:s0 tcontext=u:object_r:vddlt_dir:s0 tclass=file permissive=1
+    18.910   518   518 I auditd  : type=1400 audit(0.0:72): avc: denied { getattr } for comm="vendor.atestvendor.S" path="/data/vdspies/VDDLT/dtcinfo.txt" dev="dm-11" ino=278535 scontext=u:r:spyservice:s0 tcontext=u:object_r:vddlt_dir:s0 tclass=file permissive=1
+    19.207   422   422 I boot_progress_preload_start: 19207
+    19.797   520   542 I liblog  : 146
+    19.895   520   542 I liblog  : 126
+    19.950   960   960 I auditd  : type=1400 audit(0.0:73): avc: denied { ioctl } for comm="ifconfig" path="socket:[35219]" dev="sockfs" ino=35219 ioctlcmd=0x8914 scontext=u:r:hal_emp:s0 tcontext=u:r:hal_emp:s0 tclass=udp_socket permissive=1
+    19.954   675   675 I auditd  : type=1400 audit(0.0:74): avc: denied { ioctl } for comm="EMPRxThread" path="/dev/gipc8" dev="tmpfs" ino=15654 ioctlcmd=0x4702 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    20.114   520   542 I liblog  : 72
+    20.127   520   542 I liblog  : 3
+    20.129   486   486 I liblog  : 8
+    20.129   520   542 I liblog  : 13
+    20.130   520   542 I liblog  : 1
+    20.130   928   928 I liblog  : 1
+    20.131   520   542 I liblog  : 1
+    20.144   486   486 I liblog  : 53
+    20.994  1029  1029 I auditd  : type=1400 audit(0.0:75): avc: denied { ioctl } for comm="ifconfig" path="socket:[35393]" dev="sockfs" ino=35393 ioctlcmd=0x8914 scontext=u:r:hal_emp:s0 tcontext=u:r:hal_emp:s0 tclass=udp_socket permissive=1
+    20.994   675   675 I auditd  : type=1400 audit(0.0:76): avc: denied { ioctl } for comm="EMPRxThread" path="/dev/gipc8" dev="tmpfs" ino=15654 ioctlcmd=0x4702 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    22.046  1064  1064 I auditd  : type=1400 audit(0.0:77): avc: denied { ioctl } for comm="ifconfig" path="socket:[35519]" dev="sockfs" ino=35519 ioctlcmd=0x8914 scontext=u:r:hal_emp:s0 tcontext=u:r:hal_emp:s0 tclass=udp_socket permissive=1
+    22.050   675   675 I auditd  : type=1400 audit(0.0:78): avc: denied { ioctl } for comm="EMPRxThread" path="/dev/gipc8" dev="tmpfs" ino=15654 ioctlcmd=0x4702 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    22.093   422   422 I boot_progress_preload_end: 22093
+    22.491  1066  1066 I system_server_start: [1,22478,22478]
+    22.491  1066  1066 I boot_progress_system_run: 22491
+    22.866   909   909 I auditd  : type=1400 audit(0.0:79): avc: denied { quotaget } for comm="Binder:909_1" scontext=u:r:installd:s0 tcontext=u:object_r:mnt_vdswl_file:s0 tclass=filesystem permissive=1
+    22.998   343   343 I auditd  : type=1400 audit(0.0:80): avc: denied { read } for comm="Binder:343_2" name="wakeup2" dev="sysfs" ino=24437 scontext=u:r:system_suspend:s0 tcontext=u:object_r:sysfs:s0 tclass=dir permissive=1
+    22.998   343   343 I auditd  : type=1400 audit(0.0:81): avc: denied { open } for comm="Binder:343_2" path="/sys/devices/platform/soc/a800000.ssusb/dual_role_usb/3-1/wakeup2" dev="sysfs" ino=24437 scontext=u:r:system_suspend:s0 tcontext=u:object_r:sysfs:s0 tclass=dir permissive=1
+    22.998   343   343 I auditd  : type=1400 audit(0.0:82): avc: denied { read } for comm="Binder:343_2" name="event_count" dev="sysfs" ino=24444 scontext=u:r:system_suspend:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=1
+    22.998   343   343 I auditd  : type=1400 audit(0.0:83): avc: denied { open } for comm="Binder:343_2" path="/sys/devices/platform/soc/a800000.ssusb/dual_role_usb/3-1/wakeup2/event_count" dev="sysfs" ino=24444 scontext=u:r:system_suspend:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=1
+    22.998   343   343 I auditd  : type=1400 audit(0.0:84): avc: denied { getattr } for comm="Binder:343_2" path="/sys/devices/platform/soc/a800000.ssusb/dual_role_usb/3-1/wakeup2/event_count" dev="sysfs" ino=24444 scontext=u:r:system_suspend:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=1
+    23.036  1066  1066 I service_manager_stats: [100,28,23035]
+    23.040  1066  1092 I commit_sys_config_file: [batterystats,5]
+    23.044  1066  1092 I commit_sys_config_file: [batterystats,3]
+    23.102   529   529 I auditd  : type=1400 audit(0.0:85): avc: denied { call } for comm="LogManager" scontext=u:r:logmanager:s0 tcontext=u:r:TimeManagerProxy1d:s0 tclass=binder permissive=1
+    23.106  1101  1101 I auditd  : type=1400 audit(0.0:86): avc: denied { ioctl } for comm="ifconfig" path="socket:[35622]" dev="sockfs" ino=35622 ioctlcmd=0x8914 scontext=u:r:hal_emp:s0 tcontext=u:r:hal_emp:s0 tclass=udp_socket permissive=1
+    23.106   675   675 I auditd  : type=1400 audit(0.0:87): avc: denied { ioctl } for comm="EMPRxThread" path="/dev/gipc8" dev="tmpfs" ino=15654 ioctlcmd=0x4702 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    23.118  1066  1066 I rescue_note: [0,1,23118]
+    23.181  1066  1066 I boot_progress_pms_start: 23181
+    23.410  1066  1066 I boot_progress_pms_system_scan_start: 23410
+    23.751  1066  1066 I boot_progress_pms_data_scan_start: 23751
+    23.756  1066  1066 I boot_progress_pms_scan_end: 23756
+    23.945  1066  1066 I commit_sys_config_file: [package-user-0,5]
+    23.950  1066  1066 I commit_sys_config_file: [package-user-10,4]
+    23.950  1066  1066 I commit_sys_config_file: [package,75]
+    23.950  1066  1066 I boot_progress_pms_ready: 23950
+    24.050  1066  1066 I am_uid_running: 1000
+    24.058  1066  1066 I am_uid_active: 1000
+    24.202  1126  1126 I auditd  : type=1400 audit(0.0:88): avc: denied { ioctl } for comm="ifconfig" path="socket:[37232]" dev="sockfs" ino=37232 ioctlcmd=0x8914 scontext=u:r:hal_emp:s0 tcontext=u:r:hal_emp:s0 tclass=udp_socket permissive=1
+    24.206   675   675 I auditd  : type=1400 audit(0.0:89): avc: denied { ioctl } for comm="EMPRxThread" path="/dev/gipc8" dev="tmpfs" ino=15654 ioctlcmd=0x4702 scontext=u:r:hal_emp:s0 tcontext=u:object_r:device:s0 tclass=chr_file permissive=1
+    24.345  1066  1086 I commit_sys_config_file: [overlays,6]
+    24.638  1066  1086 I commit_sys_config_file: [overlays,6]
+    24.640  1066  1104 I battery_status: [1,1,0,0,]
+    24.650   909   909 I auditd  : type=1400 audit(0.0:90): avc: denied { quotaget } for comm="Binder:909_1" scontext=u:r:installd:s0 tcontext=u:object_r:mnt_vdswl_file:s0 tclass=filesystem permissive=1
+--------- beginning of system
+    24.686  1066  1066 I EntropyMixer: Added HW RNG output to entropy pool
+    24.686  1066  1066 I EntropyMixer: Writing entropy...
+--------- beginning of main
+    24.688  1066  1138 I SchedulingPolicyService: Moving 954 back to group default
+    24.691  1066  1066 I SystemServerTiming: StartAccountManagerService
+    24.691  1066  1066 I SystemServiceManager: Starting com.android.server.accounts.AccountManagerService$Lifecycle
+    24.695  1066  1066 I SystemServerTiming: StartContentService
+    24.695  1066  1066 I SystemServiceManager: Starting com.android.server.content.ContentService$Lifecycle
+    24.696  1066  1066 I SystemServerTiming: InstallSystemProviders
+    24.704   675   719 E EthernetService: EMPTestMode: EMP Test Recv Failed.....
+    24.704   675   719 E EthernetService: EMPTestMode: Invalid Test Mode Data
+    24.704   675   719 E EthernetService: EMPTestMode: Bind vlan2 failed:
+    24.712   486   988 E PAL: SndMonitor: monitorThreadLoop: 162: Open failed snd sysfs node
+    24.714  1066  1066 I system_server: The ClassLoaderContext is a special shared library.
+    24.730   592   760 I VHAL    :  83, 184336, 24730, -159613, 0, 0, 0, 0 
+    24.731  1066  1066 W SettingsState: No settings state /data/system/users/0/settings_config.xml
+    24.741   587   726 I ttp     : 24.723000000,6,0,3,0,0x1e,,0,0,0,0,,,,
+    24.744  1066  1066 I SettingsState: directory info for directory/file /data/system/users/0/settings_config.xml with stacktrace 
+    24.744  1066  1066 I SettingsState: java.lang.Exception
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.logSettingsDirectoryInformation(SettingsState.java:892)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.readStateSyncLocked(SettingsState.java:1011)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.<init>(SettingsState.java:292)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.ensureSettingsStateLocked(SettingsProvider.java:2783)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.ensureSettingsForUserLocked(SettingsProvider.java:2748)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.peekSettingsStateLocked(SettingsProvider.java:3091)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.getSettingsNamesLocked(SettingsProvider.java:2713)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.syncSsaidTableOnStart(SettingsProvider.java:2695)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.<init>(SettingsProvider.java:2588)
+    24.744  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider.onCreate(SettingsProvider.java:347)
+    24.744  1066  1066 I SettingsState: 	at android.content.ContentProvider.attachInfo(ContentProvider.java:2388)
+    24.744  1066  1066 I SettingsState: 	at android.content.ContentProvider.attachInfo(ContentProvider.java:2358)
+    24.744  1066  1066 I SettingsState: 	at android.app.ActivityThread.installProvider(ActivityThread.java:7246)
+    24.744  1066  1066 I SettingsState: 	at android.app.ActivityThread.installContentProviders(ActivityThread.java:6787)
+    24.744  1066  1066 I SettingsState: 	at android.app.ActivityThread.installSystemProviders(ActivityThread.java:7439)
+    24.744  1066  1066 I SettingsState: 	at com.android.server.am.ActivityManagerService.installSystemProviders(ActivityManagerService.java:7910)
+    24.744  1066  1066 I SettingsState: 	at com.android.server.SystemServer.startOtherServices(SystemServer.java:1122)
+    24.744  1066  1066 I SettingsState: 	at com.android.server.SystemServer.run(SystemServer.java:598)
+    24.744  1066  1066 I SettingsState: 	at com.android.server.SystemServer.main(SystemServer.java:414)
+    24.744  1066  1066 I SettingsState: 	at java.lang.reflect.Method.invoke(Native Method)
+    24.744  1066  1066 I SettingsState: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:592)
+    24.744  1066  1066 I SettingsState: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:925)
+    24.744  1066  1066 I SettingsState: ancestor directory /data/system/users/0 exists
+    24.745  1066  1066 I SettingsState: ancestor directory /data/system/users/0 permissions: r: true w: true x: true
+    24.745  1066  1066 I SettingsState: ancestor's parent directory /data/system/users permissions: r: true w: true x: true
+    24.750  1066  1066 W SettingsState: No settings state /data/system/users/0/settings_ssaid.xml
+    24.751  1066  1066 I SettingsState: directory info for directory/file /data/system/users/0/settings_ssaid.xml with stacktrace 
+    24.751  1066  1066 I SettingsState: java.lang.Exception
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.logSettingsDirectoryInformation(SettingsState.java:892)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.readStateSyncLocked(SettingsState.java:1011)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.<init>(SettingsState.java:292)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.ensureSettingsStateLocked(SettingsProvider.java:2783)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.ensureSettingsForUserLocked(SettingsProvider.java:2771)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.peekSettingsStateLocked(SettingsProvider.java:3091)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.getSettingsNamesLocked(SettingsProvider.java:2713)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.syncSsaidTableOnStart(SettingsProvider.java:2695)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.<init>(SettingsProvider.java:2588)
+    24.751  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider.onCreate(SettingsProvider.java:347)
+    24.751  1066  1066 I SettingsState: 	at android.content.ContentProvider.attachInfo(ContentProvider.java:2388)
+    24.751  1066  1066 I SettingsState: 	at android.content.ContentProvider.attachInfo(ContentProvider.java:2358)
+    24.751  1066  1066 I SettingsState: 	at android.app.ActivityThread.installProvider(ActivityThread.java:7246)
+    24.751  1066  1066 I SettingsState: 	at android.app.ActivityThread.installContentProviders(ActivityThread.java:6787)
+    24.751  1066  1066 I SettingsState: 	at android.app.ActivityThread.installSystemProviders(ActivityThread.java:7439)
+    24.751  1066  1066 I SettingsState: 	at com.android.server.am.ActivityManagerService.installSystemProviders(ActivityManagerService.java:7910)
+    24.751  1066  1066 I SettingsState: 	at com.android.server.SystemServer.startOtherServices(SystemServer.java:1122)
+    24.751  1066  1066 I SettingsState: 	at com.android.server.SystemServer.run(SystemServer.java:598)
+    24.751  1066  1066 I SettingsState: 	at com.android.server.SystemServer.main(SystemServer.java:414)
+    24.751  1066  1066 I SettingsState: 	at java.lang.reflect.Method.invoke(Native Method)
+    24.751  1066  1066 I SettingsState: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:592)
+    24.751  1066  1066 I SettingsState: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:925)
+    24.751  1066  1066 I SettingsState: ancestor directory /data/system/users/0 exists
+    24.751  1066  1066 I SettingsState: ancestor directory /data/system/users/0 permissions: r: true w: true x: true
+    24.751  1066  1066 I SettingsState: ancestor's parent directory /data/system/users permissions: r: true w: true x: true
+    24.762  1066  1066 W SettingsState: No settings state /data/system/users/10/settings_ssaid.xml
+    24.762  1066  1066 I SettingsState: directory info for directory/file /data/system/users/10/settings_ssaid.xml with stacktrace 
+    24.762  1066  1066 I SettingsState: java.lang.Exception
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.logSettingsDirectoryInformation(SettingsState.java:892)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.readStateSyncLocked(SettingsState.java:1011)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsState.<init>(SettingsState.java:292)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.ensureSettingsStateLocked(SettingsProvider.java:2783)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.ensureSettingsForUserLocked(SettingsProvider.java:2771)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.peekSettingsStateLocked(SettingsProvider.java:3091)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.getSettingsNamesLocked(SettingsProvider.java:2713)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.syncSsaidTableOnStart(SettingsProvider.java:2695)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider$SettingsRegistry.<init>(SettingsProvider.java:2588)
+    24.762  1066  1066 I SettingsState: 	at com.android.providers.settings.SettingsProvider.onCreate(SettingsProvider.java:347)
+    24.762  1066  1066 I SettingsState: 	at android.content.ContentProvider.attachInfo(ContentProvider.java:2388)
+    24.762  1066  1066 I SettingsState: 	at android.content.ContentProvider.attachInfo(ContentProvider.java:2358)
+    24.762  1066  1066 I SettingsState: 	at android.app.ActivityThread.installProvider(ActivityThread.java:7246)
+    24.762  1066  1066 I SettingsState: 	at android.app.ActivityThread.installContentProviders(ActivityThread.java:6787)
+    24.762  1066  1066 I SettingsState: 	at android.app.ActivityThread.installSystemProviders(ActivityThread.java:7439)
+    24.762  1066  1066 I SettingsState: 	at com.android.server.am.ActivityManagerService.installSystemProviders(ActivityManagerService.java:7910)
+    24.762  1066  1066 I SettingsState: 	at com.android.server.SystemServer.startOtherServices(SystemServer.java:1122)
+    24.762  1066  1066 I SettingsState: 	at com.android.server.SystemServer.run(SystemServer.java:598)
+    24.762  1066  1066 I SettingsState: 	at com.android.server.SystemServer.main(SystemServer.java:414)
+    24.762  1066  1066 I SettingsState: 	at java.lang.reflect.Method.invoke(Native Method)
+    24.762  1066  1066 I SettingsState: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:592)
+    24.762  1066  1066 I SettingsState: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:925)
+    24.763  1066  1066 I SettingsState: ancestor directory /data/system/users/10 exists
+    24.763  1066  1066 I SettingsState: ancestor directory /data/system/users/10 permissions: r: true w: true x: true
+    24.763  1066  1066 I SettingsState: ancestor's parent directory /data/system/users permissions: r: true w: true x: true
+    24.771   675   742 I EthernetService: EMPTransport: Parse_EMP_Rx_Packet
+    24.772   675   742 I EthernetService: EMPTransport: S_ID M_ID Length : 0x0002 0x003c 0x00000045
+    24.772   675   742 I EthernetService: EMPTransport: S_ID M_ID Length : 0x0000 0x0000 0x00000000
+    24.774  1066  1066 I SystemServerTiming: StartDropBoxManager
+    24.774  1066  1066 I SystemServiceManager: Starting com.android.server.DropBoxManagerService
+    24.775  1066  1066 I SystemServerTiming: StartVibratorService
+    24.775   274   274 E servicemanager: Could not find android.hardware.vibrator.IVibrator/default in the VINTF manifest.
+    24.776   275   275 I hwservicemanager: getTransport: Cannot find entry android.hardware.vibrator@1.0::IVibrator/default in either framework or device manifest.
+    24.777  1066  1066 E VibratorService: vibratorOff command failed (1).
+    24.777   275   275 I hwservicemanager: getTransport: Cannot find entry android.hardware.vibrator@1.3::IVibrator/default in either framework or device manifest.
+    24.779  1066  1066 I SystemServerTiming: StartDynamicSystemService
+    24.780  1066  1066 I SystemServerTiming: StartConsumerIrService
+    24.781   275   275 I hwservicemanager: getTransport: Cannot find entry android.hardware.ir@1.0::IConsumerIr/default in either framework or device manifest.
+    24.782  1066  1066 I SystemServerTiming: StartAlarmManagerService
+    24.782  1066  1066 W AlarmManagerService: no wall clock RTC found
+    24.783   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.783   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.783   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.783   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.783   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.783   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.783   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.783   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.786   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.786   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.786   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.786   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.786   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.786   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.786   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.786   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.787   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.787   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.787   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.787   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.787   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.787   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.787   529   613 I LMHAL   : in reset head_ 0 tail_ 0 full_ 0 
+    24.787   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.788   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.788   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.788   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.788   529   613 I LMHAL   :  RF is   size 7396
+    24.788   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.788   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.788   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.788   529   613 I LMHAL   :  buffer is full can't write
+    24.788   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.788   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.788   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.788   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.788   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.788   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.788   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.788   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.789   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.789   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.789   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.789   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.789  1066  1066 I AlarmManager: Current time only 24789, advancing to build time 1688321763000
+    24.789   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.789  1066  1066 W AlarmManagerService: Unable to set rtc to 1688321763: No such device
+    24.789   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.789   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.789   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.789   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.790   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.790  1066  1066 E HistoricalRegistry: Interaction before persistence initialized
+    24.790   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.791  1066  1066 I SystemServerTiming: StartInputManagerService
+    24.796  1066  1066 I InputManager: Initializing input manager, mUseDevInputEventForAudioJack=true
+    24.797   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.797   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.798   583   640 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.798   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.799   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.799   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.799   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.803   529   613 I LMHAL   : in reset head_ 0 tail_ 0 full_ 0 
+    24.803   529   613 I LMHAL   :  RF is   size 6879
+    24.803   529   613 I LMHAL   :  buffer is full can't write
+    24.803   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.803   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.803   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.803   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.804  1066  1066 I SystemServerTiming: StartWindowManagerService
+    24.804   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'dual_role_usb' not found
+    24.804   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'OVER_CURRENT_PORT' not found
+    24.804   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'UNRECOGNIZED_USB_DEVICE_ON_PORT' not found
+    24.804   576   654 E NetlinkEvent: NetlinkEvent::FindParam(): Parameter 'DWC3_CNTLR_ERR_EVNT_RCVD_ON' not found
+    24.810   592   760 I VHAL    :  84, 184416, 24810, -159613, 0, 0, 0, 0 
+    24.821   587   726 I ttp     : 24.803000000,6,0,3,0,0x1e,,0,0,0,0,,,,
+    24.826  1066  1087 I WindowTracing: Setting window tracing log level to 1
+    24.826  1066  1087 I WindowTracing: Setting window tracing buffer capacity to 2097152bytes
+    24.838  1066  1066 I SystemServerTiming: SetWindowManagerService
+    24.839  1066  1086 I DropBoxManagerService: add tag=system_server_strictmode isTagEnabled=true flags=0x2
+    24.851   669   669 I SurfaceFlinger: isAnimationEnabled value:0
+    24.862   586   607 I VPS     : heart beat received
+    24.862   586   607 I VPS     : pm active cockpit key on
+    24.863   586   607 I VPS     : currPower is same as newPowerMode,not sending
+    24.868   669   669 I SurfaceFlinger: isAnimationEnabled value:0
+    24.871   675   742 I EthernetService: EMPTransport: Parse_EMP_Rx_Packet
+    24.871   675   742 I EthernetService: EMPTransport: S_ID M_ID Length : 0x0002 0x003c 0x00000045
+    24.871   675   742 I EthernetService: EMPTransport: S_ID M_ID Length : 0x0000 0x0000 0x00000000
+    24.872  1142  1142 I android.hardware.camera.provider@2.4-service: CameraProvider@2.4 legacy service is starting.
+    24.875   522   545 I bsrf_wifi_adapter: vendor/atestvendor/hardware/BsrfWifi/1.0/default/bsrf_wifi_adapter/src/core/LwsClient.cpp:pollEvents:412 =>Polling for Lws events
+    24.885   669   669 I SurfaceFlinger: isAnimationEnabled value:0
+    24.889   423   423 E ActivityRecognitionHardware: activity_recognition HAL is deprecated. class_init is effectively a no-op
+    24.890   592   760 I VHAL    :  85, 184496, 24890, -159613, 0, 0, 0, 0 
+    24.890  1142  1142 E CamPrvdr@2.4-legacy: Could not load camera HAL module: -2 (No such file or directory)
+    24.890  1142  1142 E android.hardware.camera.provider@2.4-service: getProviderImpl: camera provider init failed!
+    24.891  1142  1142 W RefBase : CallStack::getCurrentInternal not linked, returning null
+    24.891  1142  1142 W RefBase : CallStack::logStackInternal not linked
+    24.878  1066  1086 I chatty  : uid=1000(system) android.io identical 4 lines
+    24.882  1066  1086 I DropBoxManagerService: add tag=system_server_strictmode isTagEnabled=true flags=0x2
+    24.894  1066  1066 I ActivityTaskManager: Loaded persisted task ids for user 0
+    24.894  1066  1066 I wm_task_created: [1,-1]
+    24.894  1066  1066 I wm_stack_created: 1
+    24.897  1142  1142 E LegacySupport: Could not get passthrough implementation for android.hardware.camera.provider@2.4::ICameraProvider/legacy/0.
+    24.901  1066  1066 I SystemServerTiming: WindowManagerServiceOnInitReady
+    24.901   587   726 I ttp     : 24.883000000,6,0,3,0,0x1e,,0,0,0,0,,,,
+    24.902   669   669 I SurfaceFlinger: isAnimationEnabled value:0
+    24.902  1066  1085 I dvm_lock_sample: [system_server,1,android.ui,54,ActivityManagerService.java,6820,java.lang.String com.android.server.am.ActivityManagerService.checkContentProviderAccess(java.lang.String, int),-,2174,void com.android.server.am.ActivityManagerService.setWindowManager(com.android.server.wm.WindowManagerService),10]
+    24.903   521   553 I bsrf_sms_adapter: vendor/atestvendor/hardware/BsrfSms/1.0/default/bsrf_sms_adapter/src/core/LwsClient.cpp:pollEvents:412 =>Polling for Lws events
+    24.911  1066  1066 I SystemServerTiming: StartInputManager
+    24.911  1066  1066 I InputManager: Starting input manager
+    24.912  1066  1143 I SystemServerTimingAsync: InitThreadPoolExec:StartHidlServices
+    24.912  1066  1143 I SystemServerTimingAsync: StartHidlServices
+    24.912  1066  1066 I InputManager: Enabling motion classifier because just booted: feature enabled, long press timeout = 400
+    24.912  1066  1066 I InputClassifier: Enabling motion classifier
+    24.913  1066  1066 I SystemServerTiming: DisplayManagerWindowManagerAndInputReady
+    24.913  1066  1066 I SystemServerTiming: StartBluetoothService
+    24.913  1066  1066 I SystemServiceManager: Starting com.android.server.BluetoothService
+    24.914  1066  1143 I HidlServiceManagement: Registered android.frameworks.sensorservice@1.0::ISensorManager/default
+    24.915   275   275 I hwservicemanager: getTransport: Cannot find entry android.hardware.input.classifier@1.0::IInputClassifier/default in either framework or device manifest.
+    24.916  1066  1146 I InputClassifier: Could not obtain InputClassifier HAL
+    24.917  1066  1066 I KPI_Marker: [24.917000] [BluetoothManagerService] [PERF_SRV_START] StartBluetoothService

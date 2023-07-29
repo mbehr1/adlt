@@ -225,6 +225,7 @@ pub fn dlt_iterator1(c: &mut Criterion) {
                         namespace,
                         None,
                         None,
+                        None,
                     );
                     for msg in it.by_ref() {
                         messages_processed += 1;
@@ -249,6 +250,7 @@ pub fn dlt_iterator1(c: &mut Criterion) {
                         messages_processed,
                         buf_reader,
                         namespace,
+                        None,
                         None,
                         None,
                     );
@@ -278,6 +280,7 @@ pub fn dlt_iterator1(c: &mut Criterion) {
                         namespace,
                         None,
                         None,
+                        None,
                     );
                     let it = SortingMultiReaderIterator::new_or_single_it(0, vec![it]);
                     for msg in it {
@@ -302,7 +305,7 @@ pub fn dlt_iterator1(c: &mut Criterion) {
                             buf_capacity,
                             DLT_MAX_STORAGE_MSG_SIZE,
                         );
-                        get_dlt_message_iterator("dlt", 0, buf_reader, namespace, None, None)
+                        get_dlt_message_iterator("dlt", 0, buf_reader, namespace, None, None, None)
                     });
 
                     let it = SequentialMultiIterator::new(0, its);
@@ -328,7 +331,7 @@ pub fn dlt_iterator1(c: &mut Criterion) {
                             buf_capacity,
                             DLT_MAX_STORAGE_MSG_SIZE,
                         );
-                        get_dlt_message_iterator("dlt", 0, buf_reader, namespace, None, None)
+                        get_dlt_message_iterator("dlt", 0, buf_reader, namespace, None, None, None)
                     });
 
                     let it = SequentialMultiIterator::new_or_single_it(0, its);

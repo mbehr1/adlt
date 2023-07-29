@@ -17,7 +17,9 @@ mod dltmessageiterator;
 pub mod sorting_multi_readeriterator;
 pub use self::dltmessageiterator::DltMessageIterator;
 pub mod eac_stats;
+mod logcat2dltmsgiterator;
 pub mod remote_types;
+pub use self::logcat2dltmsgiterator::LogCat2DltMsgIterator;
 
 static GLOBAL_NEXT_NAMESPACE: AtomicU32 = AtomicU32::new(0);
 
@@ -49,12 +51,15 @@ pub fn get_new_namespace() -> u32 {
 /// * `first_reception_time_us` - used to provide a time used as reference
 ///   for the timestamps for CAN files. Should be from the first file opened.
 ///   Not needed/ignored for DLT files.
+/// * `modified_time_us` - the time from the files last created/modified time in us.
+///   Used when e.g. the format supports only relative timestamps.
 pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
     file_ext: &str,
     start_index: DltMessageIndexType,
     reader: R,
     namespace: u32,
     first_reception_time_us: Option<u64>,
+    modified_time_us: Option<u64>,
     log: Option<&'a slog::Logger>,
 ) -> Box<dyn Iterator<Item = DltMessage> + 'a> {
     match file_ext.to_lowercase().as_str() {
@@ -65,6 +70,14 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
             first_reception_time_us,
             log,
         )),
+        "txt" => Box::new(LogCat2DltMsgIterator::new(
+            start_index,
+            reader,
+            namespace,
+            first_reception_time_us,
+            modified_time_us,
+            log,
+        )),
         _ => Box::new({
             let mut it = DltMessageIterator::new(start_index, reader);
             it.log = log;
@@ -73,7 +86,9 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
     }
 }
 
+#[derive(PartialEq, Clone, Debug)]
 pub struct DltFileInfos {
+    pub modified_time_us: Option<u64>, // last modified date of the file in us since 1.1.1970
     pub file_len: Option<u64>,         // length of the file
     pub read_size: usize,              // number of bytes that have been tried to read/parse
     pub first_msg: Option<DltMessage>, // the first DLT message
@@ -108,13 +123,25 @@ pub fn get_dlt_infos_from_file(
     let res = file.read(&mut buf);
     match res {
         Ok(res) => {
-            let file_len = file.metadata().map_or(None, |m| Some(m.len()));
+            let (file_len, modified_time_us) = file.metadata().map_or((None, None), |m| {
+                (
+                    Some(m.len()),
+                    m.modified()
+                        .map(|t| {
+                            t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_micros() as u64
+                        })
+                        .ok(),
+                )
+            });
             let mut it = get_dlt_message_iterator(
                 file_ext,
                 0,
                 BufReader::with_capacity(read_size, &buf[0..res]),
                 namespace,
                 None,
+                modified_time_us,
                 None,
             );
             let first_msg = it.next();
@@ -128,6 +155,7 @@ pub fn get_dlt_infos_from_file(
             }
 
             Ok(DltFileInfos {
+                modified_time_us,
                 file_len,
                 read_size,
                 first_msg,
@@ -640,7 +668,7 @@ mod tests {
         reader: impl BufRead,
         namespace: u32,
     ) -> Option<DltMessage> {
-        let mut it = get_dlt_message_iterator(file_ext, 0, reader, namespace, None, None);
+        let mut it = get_dlt_message_iterator(file_ext, 0, reader, namespace, None, None, None);
         it.next()
     }
 
@@ -668,12 +696,26 @@ mod tests {
     #[test]
     fn get_dlt_message_it() {
         // todo provide some real test data to see whether proper it is returned!
-        let mut it_asc =
-            get_dlt_message_iterator("asc", 0, &[] as &[u8], get_new_namespace(), None, None);
+        let mut it_asc = get_dlt_message_iterator(
+            "asc",
+            0,
+            &[] as &[u8],
+            get_new_namespace(),
+            None,
+            None,
+            None,
+        );
         assert!(it_asc.next().is_none());
 
-        let mut it_dlt =
-            get_dlt_message_iterator("dlt", 0, &[] as &[u8], get_new_namespace(), None, None);
+        let mut it_dlt = get_dlt_message_iterator(
+            "dlt",
+            0,
+            &[] as &[u8],
+            get_new_namespace(),
+            None,
+            None,
+            None,
+        );
         assert!(it_dlt.next().is_none());
     }
 

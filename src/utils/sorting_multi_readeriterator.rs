@@ -176,7 +176,8 @@ mod tests {
             512 * 1024usize,
             DLT_MAX_STORAGE_MSG_SIZE,
         );
-        let it1 = get_dlt_message_iterator("asc", 0, buf_reader, get_new_namespace(), None, None);
+        let it1 =
+            get_dlt_message_iterator("asc", 0, buf_reader, get_new_namespace(), None, None, None);
         let mit = SortingMultiReaderIterator::new(0, vec![it1]);
         let mut iterated_msgs = 0;
         for m in mit {
@@ -194,14 +195,14 @@ mod tests {
             DLT_MAX_STORAGE_MSG_SIZE,
         );
         let namespace = get_new_namespace();
-        let it1 = get_dlt_message_iterator("asc", 0, buf_reader1, namespace, None, None);
+        let it1 = get_dlt_message_iterator("asc", 0, buf_reader1, namespace, None, None, None);
 
         let buf_reader2 = LowMarkBufReader::new(
             File::open("./tests/can_example1c.asc").unwrap(),
             512 * 1024usize,
             DLT_MAX_STORAGE_MSG_SIZE,
         );
-        let it2 = get_dlt_message_iterator("asc", 0, buf_reader2, namespace, None, None);
+        let it2 = get_dlt_message_iterator("asc", 0, buf_reader2, namespace, None, None, None);
 
         let mit = SortingMultiReaderIterator::new(0, vec![it2, it1]);
         let mut iterated_msgs = 0;
@@ -226,7 +227,7 @@ mod tests {
                 512 * 1024usize,
                 DLT_MAX_STORAGE_MSG_SIZE,
             );
-            get_dlt_message_iterator("asc", 0, buf_reader, namespace, None, None)
+            get_dlt_message_iterator("asc", 0, buf_reader, namespace, None, None, None)
         });
 
         assert_eq!((1, Some(1)), its.size_hint());
@@ -248,14 +249,14 @@ mod tests {
             DLT_MAX_STORAGE_MSG_SIZE,
         );
         let namespace = get_new_namespace();
-        let it1 = get_dlt_message_iterator("asc", 0, buf_reader1, namespace, None, None);
+        let it1 = get_dlt_message_iterator("asc", 0, buf_reader1, namespace, None, None, None);
 
         let buf_reader2 = LowMarkBufReader::new(
             File::open("./tests/can_example1c.asc").unwrap(),
             512 * 1024usize,
             DLT_MAX_STORAGE_MSG_SIZE,
         );
-        let it2 = get_dlt_message_iterator("asc", 0, buf_reader2, namespace, None, None);
+        let it2 = get_dlt_message_iterator("asc", 0, buf_reader2, namespace, None, None, None);
 
         let mit = SequentialMultiIterator::new(0, vec![it2, it1].into_iter());
         let mut iterated_msgs = 0;
@@ -276,7 +277,7 @@ mod tests {
                 512 * 1024usize,
                 DLT_MAX_STORAGE_MSG_SIZE,
             );
-            get_dlt_message_iterator("asc", 0, buf_reader, namespace, None, None)
+            get_dlt_message_iterator("asc", 0, buf_reader, namespace, None, None, None)
         });
 
         let mit = SequentialMultiIterator::new(0, its);
@@ -309,6 +310,7 @@ mod tests {
                 namespace,
                 first_reception_time_us,
                 None,
+                None,
             )
         });
         let mit_2a = SequentialMultiIterator::new(0, its);
@@ -327,6 +329,7 @@ mod tests {
                 buf_reader,
                 namespace,
                 first_reception_time_us,
+                None,
                 None,
             )
         });
@@ -352,6 +355,7 @@ mod tests {
                 buf_reader,
                 namespace,
                 first_reception_time_us,
+                None,
                 None,
             )
         });
