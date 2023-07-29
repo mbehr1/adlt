@@ -2,13 +2,12 @@ use lazy_static::lazy_static;
 use regex::{CaptureLocations, Regex};
 use slog::{debug, error, warn};
 /// todos
-/// [] insert apid descriptions with full tag
 /// [] think about a better way to handle multiple files opened. currently they might be wrongly sorted as the timestamp is added as offset
 ///    we'd want the last log from a file to have the recorded time = calculated time
 /// [] support other formats than monotonic timestamp
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io::{BufRead, Lines},
     str::FromStr,
     sync::RwLock,
@@ -19,7 +18,7 @@ use crate::{
         DltChar4, DltExtendedHeader, DltMessage, DltMessageIndexType, DltMessageLogType,
         DltStandardHeader, DLT_EXT_HEADER_SIZE, DLT_MIN_STD_HEADER_SIZE, DLT_STD_HDR_BIG_ENDIAN,
         DLT_STD_HDR_HAS_ECU_ID, DLT_STD_HDR_HAS_EXT_HDR, DLT_STD_HDR_HAS_TIMESTAMP,
-        DLT_STD_HDR_VERSION,
+        DLT_STD_HDR_VERSION, SERVICE_ID_GET_LOG_INFO,
     },
     utils::utc_time_from_us,
 };
@@ -41,6 +40,7 @@ pub struct LogCat2DltMsgIterator<'a, R> {
     tag_apid_map: HashMap<String, DltChar4>,
     ecu: DltChar4,
     ctid: DltChar4,
+    msgs_deque: VecDeque<DltMessage>,
 }
 
 impl<'a, R: BufRead> LogCat2DltMsgIterator<'a, R> {
@@ -89,23 +89,74 @@ impl<'a, R: BufRead> LogCat2DltMsgIterator<'a, R> {
             tag_apid_map: HashMap::new(),
             ecu: DltChar4::from_str(format!("LC{:02}", namespace % 100).as_str()).unwrap(),
             ctid: DltChar4::from_str("LogC").unwrap(),
+            msgs_deque: VecDeque::with_capacity(1),
         }
     }
 
-    fn get_apid(&mut self, tag: &str) -> DltChar4 {
+    /// return an apid for the tag
+    ///
+    /// returns a pair of bool/DltChar4 where the bool indicates whether this tag created a new apid
+    fn get_apid(&mut self, tag: &str) -> (bool, DltChar4) {
         let e = self.tag_apid_map.get(tag);
         match e {
-            Some(e) => e.to_owned(),
+            Some(e) => (false, e.to_owned()),
             None => {
                 let apid = get_apid_for_tag(self.namespace, tag);
                 self.tag_apid_map.insert(tag.to_owned(), apid.to_owned());
-                apid
+                (true, apid)
             }
         }
     }
 
     fn timestamp_dms_from(&self, timestamp_us: u64) -> u32 {
         (timestamp_us / 100) as u32
+    }
+
+    /// return a DLT control response msg GET_LOG_INFO with the apid and tag as description
+    fn get_apid_info_msg(
+        &mut self,
+        apid: &DltChar4,
+        tag: &str,
+        timestamp_us: u64,
+    ) -> Option<DltMessage> {
+        if tag.is_empty() {
+            return None;
+        }
+
+        let mut payload: Vec<u8> = SERVICE_ID_GET_LOG_INFO.to_ne_bytes().into();
+        let apid_buf = apid.as_buf();
+        payload.extend(
+            [7u8]
+                .into_iter()
+                .chain(1u16.to_ne_bytes().into_iter()) // 1 app id, CAN plugin expects == 1
+                .chain(apid_buf.iter().copied())
+                .chain(0u16.to_ne_bytes().into_iter()) // 0 ctx ids
+                .chain((tag.len() as u16).to_ne_bytes().into_iter()) // len of apid desc
+                .chain(tag.as_bytes().iter().copied()),
+        );
+        // return a DltMessage with the LOG INFO APID incl. the BusMapping name
+        let index = self.index;
+        self.index += 1;
+        Some(DltMessage {
+            index,
+            reception_time_us: self.recorded_start_time_us + timestamp_us, // should be from last... (but we'd need to scan all)
+            ecu: self.ecu.to_owned(),
+            timestamp_dms: self.timestamp_dms_from(timestamp_us),
+            standard_header: DltStandardHeader {
+                htyp: self.htyp,
+                mcnt: (index & 0xff) as u8,
+                len: self.len_wo_payload + (payload.len() as u16),
+            },
+            extended_header: Some(DltExtendedHeader {
+                verb_mstp_mtin: (3u8 << 1) | (2u8 << 4), // Control Resp., non verb
+                noar: 2,
+                apid: apid.to_owned(),
+                ctid: self.ctid.to_owned(),
+            }),
+            payload,
+            payload_text: None,
+            lifecycle: 0,
+        })
     }
 }
 
@@ -276,6 +327,10 @@ where
 {
     type Item = DltMessage;
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(msg) = self.msgs_deque.pop_front() {
+            return Some(msg);
+        }
+
         for line in self.lines.by_ref() {
             self.lines_processed += 1;
             match &line {
@@ -303,13 +358,20 @@ where
                         let loc_tag = self.capture_locations_monotonic.get(5).unwrap();
                         let tag = &cap_str[loc_tag.0..loc_tag.1];
 
+                        let (new_apid, apid) = self.get_apid(tag);
+
+                        let apid_info_msg = if new_apid {
+                            self.get_apid_info_msg(&apid, tag, timestamp_us)
+                        } else {
+                            None
+                        };
+
                         let index = self.index;
                         self.index += 1;
                         let payload = vec![];
 
-                        let apid = self.get_apid(tag);
                         let mtin: u8 = log_level as u8;
-                        return Some(DltMessage {
+                        let log_msg = DltMessage {
                             index,
                             reception_time_us: self.recorded_start_time_us + timestamp_us, // should be from last... (but we'd need to scan all)
                             ecu: self.ecu.to_owned(),
@@ -328,7 +390,15 @@ where
                             payload,
                             payload_text: Some(cap_str[loc_timestamp.1 + 1..].to_owned()),
                             lifecycle: 0,
-                        });
+                        };
+
+                        return if apid_info_msg.is_some() {
+                            // return a GET_LOG_INFO message for the new apid and put the log_msg in queue for next iteration
+                            self.msgs_deque.push_back(log_msg);
+                            apid_info_msg
+                        } else {
+                            Some(log_msg)
+                        };
                     } else if !line.is_empty() {
                         self.lines_skipped += 1;
                         if let Some(log) = self.log {
@@ -359,7 +429,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{dlt::DltChar4, utils::US_PER_SEC};
+    use std::fs::File;
+
+    use slog::{o, Drain, Logger};
+
+    use crate::{
+        dlt::{
+            DltChar4, DltMessageControlType, DltMessageLogType, DltMessageType,
+            DLT_MAX_STORAGE_MSG_SIZE,
+        },
+        utils::{get_new_namespace, LogCat2DltMsgIterator, LowMarkBufReader, US_PER_SEC},
+    };
 
     use super::{get_4digit_str, get_apid_for_tag, parse_time_str};
 
@@ -414,5 +494,54 @@ mod tests {
             get_apid_for_tag(0, "CamelBaseAll"),
             DltChar4::from_buf(b"CaBA")
         );
+    }
+
+    fn new_logger() -> Logger {
+        let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        Logger::root(drain, o!())
+    }
+
+    #[test]
+    fn logcat_basic1() {
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("logcat_example1.txt");
+        let fi = File::open(&test_dir).unwrap();
+        let start_index = 1000;
+        let log = new_logger();
+        let mut it = LogCat2DltMsgIterator::new(
+            start_index,
+            LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
+            get_new_namespace(),
+            None,
+            Some(1_000_000_000),
+            Some(&log),
+        );
+        let mut iterated_msgs = 0;
+        for m in &mut it {
+            assert_eq!(m.index, start_index + iterated_msgs);
+            assert_eq!(m.mcnt(), (m.index & 0xff) as u8);
+            match m.index {
+                1000 => assert_eq!(
+                    m.mstp(),
+                    DltMessageType::Control(DltMessageControlType::Response)
+                ),
+                1001 => assert_eq!(
+                    m.mstp(),
+                    DltMessageType::Log(DltMessageLogType::Info),
+                    "m.index={}",
+                    m.index
+                ),
+                _ => {}
+            }
+            iterated_msgs += 1;
+            if m.index == start_index + 1 {
+                // check some static data from example:
+                assert_eq!(m.timestamp_dms, 180620);
+                assert_eq!(m.noar(), 0);
+            }
+        }
+        assert_eq!(iterated_msgs, 398);
     }
 }
