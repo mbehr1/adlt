@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.41.0 - 2023-07-29
+#### Bug Fixes
+- **(logcat)** add apid descriptions - (bf05d80) - Matthias Behr
+#### Features
+- **(logcat)** add first support for logcat files - (26cc12c) - Matthias Behr
+#### Miscellaneous Chores
+- remove some log output - (bfdbb48) - Matthias Behr
+- - -
+
 ## v0.40.1 - 2023-07-26
 #### Bug Fixes
 - dlt strings are non zero terminated by spec - (a17c59f) - Matthias Behr
