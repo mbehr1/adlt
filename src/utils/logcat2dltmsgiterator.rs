@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 use regex::{CaptureLocations, Regex};
-use slog::{debug, error, warn};
+use slog::{debug, error, info};
 /// todos
 /// [] think about a better way to handle multiple files opened. currently they might be wrongly sorted as the timestamp is added as offset
 ///    we'd want the last log from a file to have the recorded time = calculated time
@@ -62,12 +62,8 @@ impl<'a, R: BufRead> LogCat2DltMsgIterator<'a, R> {
                 0u8
             };
         let len_wo_payload = (DLT_MIN_STD_HEADER_SIZE + 4 + 4 + DLT_EXT_HEADER_SIZE) as u16;
-        println!(
-            "LogCat2DltMsgIterator: file_modified_time_us {:?}",
-            file_modified_time_us.map(utc_time_from_us)
-        );
         if let Some(log) = log {
-            warn!(
+            info!(
                 log,
                 "LogCat2DltMsgIterator: file_modified_time_us {:?}",
                 file_modified_time_us.map(utc_time_from_us)
