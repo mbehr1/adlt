@@ -19,7 +19,7 @@ use adlt::{
     utils::{
         buf_as_hex_to_io_write, get_dlt_message_iterator, get_new_namespace,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
-        LowMarkBufReader,
+        DltFileInfos, LowMarkBufReader,
     },
 };
 
@@ -333,7 +333,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     // as the amount of files is usually limited/small we use a naive approach:
     type SetOfEcuIds = HashSet<DltChar4>;
-    type StreamEntry = (SetOfEcuIds, Vec<(u64, String)>);
+    type StreamEntry = (SetOfEcuIds, Vec<(u64, String, DltFileInfos)>);
 
     let mut input_file_streams: Vec<StreamEntry> = Vec::with_capacity(max_files);
     for fm in file_msgs {
@@ -342,12 +342,20 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             .find(|e| e.0 == fm.1.ecus_seen);
         match stream {
             Some((_, l)) => {
-                l.push((fm.1.first_msg.as_ref().unwrap().reception_time_us, fm.0));
+                l.push((
+                    fm.1.first_msg.as_ref().unwrap().reception_time_us,
+                    fm.0,
+                    fm.1,
+                ));
             }
             None => {
                 input_file_streams.push((
-                    fm.1.ecus_seen,
-                    vec![(fm.1.first_msg.as_ref().unwrap().reception_time_us, fm.0)],
+                    fm.1.ecus_seen.clone(),
+                    vec![(
+                        fm.1.first_msg.as_ref().unwrap().reception_time_us,
+                        fm.0,
+                        fm.1,
+                    )],
                 ));
             }
         }
@@ -570,7 +578,8 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let get_single_it =
         |input_file_name: &str,
          start_index: adlt::dlt::DltMessageIndexType,
-         first_reception_time_us: Option<u64>| match File::open(input_file_name) {
+         first_reception_time_us: Option<u64>,
+         modified_time_us: Option<u64>| match File::open(input_file_name) {
             Ok(fi) => {
                 info!(log, "opened file {} {:?}", &input_file_name, &fi);
                 let buf_reader =
@@ -584,6 +593,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     buf_reader,
                     namespace,
                     first_reception_time_us,
+                    modified_time_us,
                     Some(log),
                 )
             }
@@ -608,9 +618,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 };
                 SequentialMultiIterator::new_or_single_it(
                     0,
-                    files
-                        .into_iter()
-                        .map(move |(_, file)| get_single_it(&file, 0, first_reception_time_us)),
+                    files.into_iter().map(move |(_, file, dfi)| {
+                        get_single_it(&file, 0, first_reception_time_us, dfi.modified_time_us)
+                    }),
                 )
             })
             .collect(),

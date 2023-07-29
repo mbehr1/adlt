@@ -221,7 +221,7 @@ pub(crate) const DLT_STD_HDR_HAS_TIMESTAMP: u8 = 1 << 4;
 
 pub(crate) const DLT_STD_HDR_VERSION: u8 = 0x1 << 5; // 3 bits (5,6,7) max.  [Dlt299]
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DltStandardHeader {
     pub htyp: u8,
     pub mcnt: u8,
@@ -388,6 +388,7 @@ impl DltStandardHeader {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum DltMessageLogType {
     Fatal = 1,
     Error,
@@ -541,7 +542,7 @@ impl DltExtendedHeader {
 /// anyhow prepare a type so that it can be easily changed later.
 pub type DltMessageIndexType = u32;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DltMessage {
     pub index: DltMessageIndexType,
     pub reception_time_us: u64, // from storage header, ms would be sufficent but needs same 64 bit

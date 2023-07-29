@@ -13,7 +13,7 @@ use adlt::{
         eac_stats::EacStats,
         get_dlt_infos_from_file, get_dlt_message_iterator, get_new_namespace, remote_types,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
-        LowMarkBufReader,
+        DltFileInfos, LowMarkBufReader,
     },
 };
 use clap::{Arg, Command};
@@ -334,7 +334,7 @@ impl StreamContext {
 }
 
 type SetOfEcuIds = HashSet<DltChar4>;
-type StreamEntry = (SetOfEcuIds, Vec<(u64, String)>);
+type StreamEntry = (SetOfEcuIds, Vec<(u64, String, DltFileInfos)>);
 
 #[derive(Debug)]
 struct FileContext {
@@ -450,14 +450,16 @@ impl FileContext {
                     l.push((
                         dfi.first_msg.as_ref().unwrap().reception_time_us,
                         file_name.to_owned(),
+                        dfi,
                     ));
                 }
                 None => {
                     input_file_streams.push((
-                        dfi.ecus_seen,
+                        dfi.ecus_seen.clone(),
                         vec![(
                             dfi.first_msg.as_ref().unwrap().reception_time_us,
                             file_name.to_owned(),
+                            dfi,
                         )],
                     ));
                 }
@@ -1605,7 +1607,8 @@ fn create_parser_thread(
                 let get_single_it =
                     |input_file_name: &str,
                      start_index: adlt::dlt::DltMessageIndexType,
-                     first_reception_time_us: Option<u64>| {
+                     first_reception_time_us: Option<u64>,
+                     modified_time_us: Option<u64>| {
                         match File::open(input_file_name) {
                             Ok(fi) => {
                                 let file_ext = std::path::Path::new(input_file_name)
@@ -1624,6 +1627,7 @@ fn create_parser_thread(
                                     buf_reader,
                                     namespace,
                                     first_reception_time_us,
+                                    modified_time_us,
                                     Some(&log),
                                 )
                             }
@@ -1648,8 +1652,13 @@ fn create_parser_thread(
                             };
                             SequentialMultiIterator::new_or_single_it(
                                 0,
-                                files.into_iter().map(move |(_, file)| {
-                                    get_single_it(&file, 0, first_reception_time_us)
+                                files.into_iter().map(move |(_, file, dfi)| {
+                                    get_single_it(
+                                        &file,
+                                        0,
+                                        first_reception_time_us,
+                                        dfi.modified_time_us,
+                                    )
                                 }),
                             )
                         })
@@ -1783,7 +1792,7 @@ mod tests {
             fc.file_streams[0]
                 .1
                 .iter()
-                .map(|(_, b)| b.clone())
+                .map(|(_, b, _)| b.clone())
                 .collect::<Vec<String>>(),
             vec![file_path, file2.path().to_str().unwrap().to_owned()]
         );
