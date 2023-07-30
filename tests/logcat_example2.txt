@@ -1,0 +1,5 @@
+
+--------- beginning of events
+    20.130   928   928 I liblog  : 1
+--------- this might be from a new lifecycle? ensure that the recorded time is not earlier than prev one?
+     4.917  1066  1066 I liblog : 2

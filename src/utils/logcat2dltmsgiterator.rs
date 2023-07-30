@@ -540,4 +540,44 @@ mod tests {
         }
         assert_eq!(iterated_msgs, 398);
     }
+
+    #[test]
+    fn logcat_timestamps() {
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("logcat_example2.txt");
+        let fi = File::open(&test_dir).unwrap();
+        let start_index = 0;
+        let log = new_logger();
+        let mut it = LogCat2DltMsgIterator::new(
+            start_index,
+            LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
+            get_new_namespace(),
+            None,
+            Some(1_000_000_000_000_000),
+            Some(&log),
+        );
+        let mut iterated_msgs = 0;
+        for m in &mut it {
+            assert_eq!(m.index, start_index + iterated_msgs);
+            assert_eq!(m.mcnt(), (m.index & 0xff) as u8);
+            iterated_msgs += 1;
+            match m.index {
+                1 => {
+                    assert_eq!(m.timestamp_dms, 201300); // timestamps as in file
+
+                    // recorded time is currently the file_modified_time_us (timestamp) + timestamp_us!
+                    assert_eq!(m.reception_time_us, 1_000_000_000_000_000 + 20130000);
+                }
+                2 => {
+                    assert_eq!(m.timestamp_dms, 49170);
+                    // this is weird as the recorded time is now smaller than before even though the line was
+                    // later in the log!
+                    assert_eq!(m.reception_time_us, 1_000_000_000_000_000 + 4917000);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(iterated_msgs, 3); // 2 + 1 apid log info
+    }
 }
