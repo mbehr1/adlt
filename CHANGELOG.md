@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.42.0 - 2023-09-02
+#### Features
+- **(logcat)** support threadtime format - (f6febfe) - Matthias Behr
+#### Tests
+- logcat2dltmsgiterator timestamp test - (063095e) - Matthias Behr
+- - -
+
 ## v0.41.0 - 2023-07-29
 #### Bug Fixes
 - **(logcat)** add apid descriptions - (bf05d80) - Matthias Behr
