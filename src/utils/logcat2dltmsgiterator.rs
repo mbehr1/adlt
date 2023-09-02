@@ -1,10 +1,11 @@
+use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
 use regex::{CaptureLocations, Regex};
 use slog::{debug, error, info};
 /// todos
 /// [] think about a better way to handle multiple files opened. currently they might be wrongly sorted as the timestamp is added as offset
 ///    we'd want the last log from a file to have the recorded time = calculated time
-/// [] support other formats than monotonic timestamp
+/// [] support other formats than monotonic timestamp and threadtime
 use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
@@ -34,7 +35,14 @@ pub struct LogCat2DltMsgIterator<'a, R> {
     pub lines_skipped: usize,
     pub log: Option<&'a slog::Logger>,
 
+    ref_date: NaiveDate, // reference date used to determine year from mm-dd
+    max_threadtime_treat_as_timestamp: NaiveDateTime, // points to e.g. 1.1.2023 12:00:00
+    max_threadtime_treat_as_timestamp_start: NaiveDateTime, // points to e.g. 1.1.2023 0:00:00
+    threadtime_timestamp_reference: Option<u64>, // first time is used as reference for initial monotonic timestamp value
+    threadtime_last_monotonic_timestamp: u64,
+
     capture_locations_monotonic: CaptureLocations,
+    capture_locations_threadtime: CaptureLocations,
     htyp: u8, // std hdr htyp
     len_wo_payload: u16,
     tag_apid_map: HashMap<String, DltChar4>,
@@ -70,16 +78,36 @@ impl<'a, R: BufRead> LogCat2DltMsgIterator<'a, R> {
             )
         }
 
+        let recorded_start_time_us = file_modified_time_us
+            .unwrap_or_else(|| (chrono::Utc::now().naive_utc().timestamp_micros()) as u64);
+
+        let ref_date =
+            NaiveDateTime::from_timestamp_opt(1 + (recorded_start_time_us / US_PER_SEC) as i64, 0)
+                .unwrap_or_default()
+                .date();
+
+        let max_threadtime_treat_as_timestamp_start =
+            NaiveDate::from_ymd_opt(chrono::Datelike::year(&ref_date), 1, 1).unwrap_or_default();
+
         LogCat2DltMsgIterator {
             lines: reader.lines(),
             index: start_index,
             namespace,
-            recorded_start_time_us: file_modified_time_us
-                .unwrap_or_else(|| (chrono::Utc::now().naive_utc().timestamp_micros()) as u64),
+            recorded_start_time_us,
             lines_processed: 0,
             lines_skipped: 0,
             log,
+            ref_date,
+            threadtime_last_monotonic_timestamp: 10_000 * US_PER_SEC,
+            max_threadtime_treat_as_timestamp_start: max_threadtime_treat_as_timestamp_start
+                .and_hms_opt(0, 0, 0)
+                .unwrap_or_default(),
+            max_threadtime_treat_as_timestamp: max_threadtime_treat_as_timestamp_start
+                .and_hms_opt(12, 0, 0)
+                .unwrap_or_default(),
+            threadtime_timestamp_reference: None,
             capture_locations_monotonic: RE_MONOTONIC.capture_locations(),
+            capture_locations_threadtime: RE_THREADTIME.capture_locations(),
             htyp,
             len_wo_payload,
             tag_apid_map: HashMap::new(),
@@ -113,6 +141,7 @@ impl<'a, R: BufRead> LogCat2DltMsgIterator<'a, R> {
         &mut self,
         apid: &DltChar4,
         tag: &str,
+        reception_time_us: u64,
         timestamp_us: u64,
     ) -> Option<DltMessage> {
         if tag.is_empty() {
@@ -135,7 +164,7 @@ impl<'a, R: BufRead> LogCat2DltMsgIterator<'a, R> {
         self.index += 1;
         Some(DltMessage {
             index,
-            reception_time_us: self.recorded_start_time_us + timestamp_us, // should be from last... (but we'd need to scan all)
+            reception_time_us,
             ecu: self.ecu.to_owned(),
             timestamp_dms: self.timestamp_dms_from(timestamp_us),
             standard_header: DltStandardHeader {
@@ -307,14 +336,79 @@ fn parse_time_str(timestamp: &str) -> u64 {
     timestamp_secs_us + timestamp_fraction_us
 }
 
+/// parse a mmdd string into a NaiveDate:
+///
+/// mmdd: string in format mm-dd
+///
+/// As the year is not specified the following logic is used
+/// Year from refDate except if the date is later than the refDate. Then the prev year is used.
+/// 29th of Feb might be an exception (if current or prev year) is not valid...
+///
+fn parse_mmdd_str(mmdd: &str, ref_date: &NaiveDate) -> Option<NaiveDate> {
+    if mmdd.len() != 5 {
+        return None;
+    }
+    let mm: u32 = mmdd[0..2].parse::<u32>().unwrap_or_default();
+    let dd: u32 = mmdd[3..].parse::<u32>().unwrap_or_default();
+    if (1..=12).contains(&mm) && (1..=31).contains(&dd) {
+        let year = chrono::Datelike::year(ref_date);
+        let nd = NaiveDate::from_ymd_opt(year, mm, dd);
+        if let Some(nd) = nd {
+            if nd > *ref_date {
+                let nd_prev =
+                    NaiveDate::from_ymd_opt(if year > 1970 { year - 1 } else { year }, mm, dd);
+                if nd_prev.is_some() {
+                    return nd_prev;
+                }
+            }
+        } else {
+            // the date with cur year is not valid. try with prev year
+            let nd_prev =
+                NaiveDate::from_ymd_opt(if year > 1970 { year - 1 } else { year }, mm, dd);
+            return nd_prev;
+        }
+        nd // this should fit to the 29.2. and nd>ref_date case
+    } else {
+        None
+    }
+}
+
+/// parse a string in logcat threadtime format:
+/// mm-dd hh:mm:ss.mss
+fn parse_threadtime_str(timestamp: &str, ref_date: &NaiveDate) -> Option<NaiveDateTime> {
+    if timestamp.len() != 18 {
+        None
+    } else {
+        let date = parse_mmdd_str(&timestamp[0..5], ref_date).unwrap_or(*ref_date);
+        let hour: u32 = timestamp[6..8].parse::<u32>().unwrap_or_default();
+        let min: u32 = timestamp[9..11].parse::<u32>().unwrap_or_default();
+        let sec: u32 = timestamp[12..14].parse::<u32>().unwrap_or_default();
+        let milli: u32 = timestamp[15..18].parse::<u32>().unwrap_or_default();
+        date.and_hms_milli_opt(hour, min, sec, milli)
+    }
+}
+
+fn parse_log_level(level_str: &str) -> DltMessageLogType {
+    match &level_str.as_bytes()[0] {
+        b'I' => DltMessageLogType::Info,
+        b'W' => DltMessageLogType::Warn,
+        b'E' => DltMessageLogType::Error,
+        b'V' => DltMessageLogType::Verbose,
+        b'F' | b'S' => DltMessageLogType::Fatal,
+        _ => DltMessageLogType::Debug,
+    }
+}
+
 lazy_static! {
     pub(crate) static ref RE_MONOTONIC: Regex =
         Regex::new(r"^\s*(\d+\.\d+)\s+(\d+)\s+(\d+) ([A-Za-z]) (.*?)\s*: (.*)$").unwrap();
         // captures: monotonic_timestamp pid tid level tag msg
+    pub(crate) static ref RE_THREADTIME: Regex =
+        Regex::new(r"^(\d\d\-\d\d \d\d:\d\d:\d\d\.\d+)\s+(\d+)\s+(\d+) ([A-Za-z]) (.*?)\s*: (.*)$").unwrap();
+        // captures: threadtime pid tid level tag msg
 
     // map by namespace to a map for tag to apid:
     static ref GLOBAL_TAG_APID_MAP: RwLock<HashMap<u32, HashMap<String, DltChar4>>> = RwLock::new(HashMap::new());
-
 }
 
 impl<'a, R> Iterator for LogCat2DltMsgIterator<'a, R>
@@ -340,14 +434,7 @@ where
                             parse_time_str(&cap_str[loc_timestamp.0..loc_timestamp.1]);
 
                         let loc_level = self.capture_locations_monotonic.get(4).unwrap();
-                        let log_level = match &cap_str[loc_level.0..loc_level.1].as_bytes()[0] {
-                            b'I' => DltMessageLogType::Info,
-                            b'W' => DltMessageLogType::Warn,
-                            b'E' => DltMessageLogType::Error,
-                            b'V' => DltMessageLogType::Verbose,
-                            b'F' | b'S' => DltMessageLogType::Fatal,
-                            _ => DltMessageLogType::Debug,
-                        };
+                        let log_level = parse_log_level(&cap_str[loc_level.0..loc_level.1]);
 
                         // let loc_pid = self.capture_locations_monotonic.get(2).unwrap();
 
@@ -357,7 +444,12 @@ where
                         let (new_apid, apid) = self.get_apid(tag);
 
                         let apid_info_msg = if new_apid {
-                            self.get_apid_info_msg(&apid, tag, timestamp_us)
+                            self.get_apid_info_msg(
+                                &apid,
+                                tag,
+                                self.recorded_start_time_us + timestamp_us,
+                                timestamp_us,
+                            )
                         } else {
                             None
                         };
@@ -395,12 +487,118 @@ where
                         } else {
                             Some(log_msg)
                         };
+                    } else if let Some(captures) =
+                        RE_THREADTIME.captures_read(&mut self.capture_locations_threadtime, line)
+                    {
+                        let cap_str = captures.as_str();
+                        let loc_timestamp = self.capture_locations_threadtime.get(1).unwrap();
+                        let threadtime = parse_threadtime_str(
+                            &cap_str[loc_timestamp.0..loc_timestamp.1],
+                            &self.ref_date,
+                        );
+
+                        if let Some(threadtime) = threadtime {
+                            // we determine the monotonic_timestamp by two ways:
+                            // a) if the threadtime was < 1.1. 12:00:00 (so assuming 1.1.70, not true at start of each year!)
+                            //    we do use as monotonic timestamp the time since 1.1.1970
+                            // b) otherwise we do use for the first message 10_000s and use the distance from first message to cur message as timestamp
+                            let (timestamp_us, reception_time_us) = if threadtime
+                                < self.max_threadtime_treat_as_timestamp
+                            {
+                                // case a
+                                // as reception time we use the recorded_start_time_us +timestamp
+                                let timestamp_us = threadtime
+                                    .signed_duration_since(
+                                        self.max_threadtime_treat_as_timestamp_start,
+                                    )
+                                    .num_microseconds()
+                                    .unwrap_or_default()
+                                    as u64;
+                                self.threadtime_last_monotonic_timestamp = timestamp_us;
+                                (timestamp_us, self.recorded_start_time_us + timestamp_us)
+                            } else {
+                                // here we'd need to use the max timestamp_us from the case a) as first timestamp
+                                let recorded_time_us = threadtime.timestamp_micros() as u64;
+                                let timestamp_us = if let Some(timestamp_reference) =
+                                    self.threadtime_timestamp_reference
+                                {
+                                    recorded_time_us.saturating_sub(timestamp_reference)
+                                } else {
+                                    let timestamp_reference =
+                                        recorded_time_us - self.threadtime_last_monotonic_timestamp;
+                                    self.threadtime_timestamp_reference = Some(timestamp_reference);
+                                    self.threadtime_last_monotonic_timestamp
+                                };
+
+                                (timestamp_us, recorded_time_us)
+                            };
+
+                            let loc_level = self.capture_locations_threadtime.get(4).unwrap();
+                            let log_level = parse_log_level(&cap_str[loc_level.0..loc_level.1]);
+
+                            // let loc_pid = self.capture_locations_monotonic.get(2).unwrap();
+
+                            let loc_tag = self.capture_locations_threadtime.get(5).unwrap();
+                            let tag = &cap_str[loc_tag.0..loc_tag.1];
+
+                            let (new_apid, apid) = self.get_apid(tag);
+
+                            let apid_info_msg = if new_apid {
+                                self.get_apid_info_msg(&apid, tag, reception_time_us, timestamp_us)
+                            } else {
+                                None
+                            };
+
+                            let index = self.index;
+                            self.index += 1;
+                            let payload = vec![];
+
+                            let mtin: u8 = log_level as u8;
+                            let log_msg = DltMessage {
+                                index,
+                                reception_time_us,
+                                ecu: self.ecu.to_owned(),
+                                timestamp_dms: self.timestamp_dms_from(timestamp_us),
+                                standard_header: DltStandardHeader {
+                                    htyp: self.htyp,
+                                    mcnt: (index & 0xff) as u8,
+                                    len: self.len_wo_payload + (payload.len() as u16),
+                                },
+                                extended_header: Some(DltExtendedHeader {
+                                    verb_mstp_mtin: (1u8 << 0) /* | (0u8 << 1)*/ | (mtin << 4), // verb, log,
+                                    noar: 0,
+                                    apid,
+                                    ctid: self.ctid.to_owned(),
+                                }),
+                                payload,
+                                payload_text: Some(cap_str[loc_timestamp.1 + 1..].to_owned()),
+                                lifecycle: 0,
+                            };
+
+                            return if apid_info_msg.is_some() {
+                                // return a GET_LOG_INFO message for the new apid and put the log_msg in queue for next iteration
+                                self.msgs_deque.push_back(log_msg);
+                                apid_info_msg
+                            } else {
+                                Some(log_msg)
+                            };
+                        } else {
+                            self.lines_skipped += 1;
+                            if let Some(log) = self.log {
+                                debug!(
+                                log,
+                                "LogCat2DltMsgIterator.next ignored line {} at line #{} due to wrong threadtime",
+                                line,
+                                self.lines_processed
+                            );
+                            }
+                        }
                     } else if !line.is_empty() {
                         self.lines_skipped += 1;
                         if let Some(log) = self.log {
                             debug!(
                                 log,
-                                "LogCat2DltMsgIterator.next unknown line {} at line #{}",
+                                "LogCat2DltMsgIterator.next unknown line '{}' at line #{}",
                                 line,
                                 self.lines_processed
                             );
@@ -437,7 +635,9 @@ mod tests {
         utils::{get_new_namespace, LogCat2DltMsgIterator, LowMarkBufReader, US_PER_SEC},
     };
 
-    use super::{get_4digit_str, get_apid_for_tag, parse_time_str};
+    use super::{
+        get_4digit_str, get_apid_for_tag, parse_mmdd_str, parse_threadtime_str, parse_time_str,
+    };
 
     const MS_PER_SEC: u64 = 1000;
 
@@ -445,6 +645,52 @@ mod tests {
     fn parse_time_str_1() {
         assert_eq!(parse_time_str("19.002"), 19 * US_PER_SEC + 2 * MS_PER_SEC);
         assert_eq!(parse_time_str("0.999"), 999 * MS_PER_SEC);
+    }
+
+    #[test]
+    fn parse_mmdd_str_1() {
+        let ref_date = &chrono::NaiveDate::default();
+        assert_eq!(parse_mmdd_str("", ref_date), None);
+        assert_eq!(parse_mmdd_str("00-01", ref_date), None);
+        assert_eq!(parse_mmdd_str("ab-cd", ref_date), None);
+        assert_eq!(parse_mmdd_str("01-01", ref_date), Some(*ref_date));
+    }
+
+    #[test]
+    fn parse_threadtime_str_1() {
+        let ref_date = &chrono::NaiveDate::from_ymd_opt(2023, 2, 1).unwrap(); // &chrono::NaiveDate::default();
+        assert_eq!(
+            parse_threadtime_str("01-01 00:00:16.626", ref_date),
+            chrono::NaiveDate::from_ymd_opt(2023, 1, 1)
+                .unwrap()
+                .and_hms_milli_opt(0, 0, 16, 626)
+        );
+        assert_eq!(
+            parse_threadtime_str("12-31 00:00:07.007", ref_date),
+            chrono::NaiveDate::from_ymd_opt(2022, 12, 31) // > ref_date so prev year
+                .unwrap()
+                .and_hms_milli_opt(0, 0, 7, 7)
+        );
+
+        let ref_date = &chrono::NaiveDate::from_ymd_opt(2021, 2, 1).unwrap(); // &chrono::NaiveDate::default();
+        assert_eq!(
+            parse_threadtime_str("02-29 23:59:57.999", ref_date),
+            chrono::NaiveDate::from_ymd_opt(2020, 2, 29) // > ref_date so prev year but 29.2. and valid in 2020
+                .unwrap()
+                .and_hms_milli_opt(23, 59, 57, 999)
+        );
+        let ref_date = &chrono::NaiveDate::from_ymd_opt(2020, 2, 1).unwrap(); // &chrono::NaiveDate::default();
+        assert_eq!(
+            parse_threadtime_str("02-29 23:59:57.999", ref_date),
+            chrono::NaiveDate::from_ymd_opt(2020, 2, 29) // > ref_date so prev year but 29.2. not valid in 2019 -> stays at 2020
+                .unwrap()
+                .and_hms_milli_opt(23, 59, 57, 999)
+        );
+        let ref_date = &chrono::NaiveDate::from_ymd_opt(2023, 2, 1).unwrap(); // &chrono::NaiveDate::default();
+        assert_eq!(
+            parse_threadtime_str("02-29 23:59:57.999", ref_date),
+            ref_date.and_hms_milli_opt(23, 59, 57, 999) // > ref_date so prev year but 29.2. not valid in 2022, nor in 2023 -> ref_date
+        );
     }
 
     #[test]
@@ -579,5 +825,107 @@ mod tests {
             }
         }
         assert_eq!(iterated_msgs, 3); // 2 + 1 apid log info
+    }
+
+    const FILE_MODIFIED_TIME: u64 = 1_000 * 137487600000; // some time in 1974
+
+    #[test]
+    fn logcat_threadtime_1() {
+        // example for parsing threadtime format
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("logcat_example3.txt");
+        let fi = File::open(&test_dir).unwrap();
+        let start_index = 1000;
+        let log = new_logger();
+        let mut it = LogCat2DltMsgIterator::new(
+            start_index,
+            LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
+            get_new_namespace(),
+            None,
+            Some(FILE_MODIFIED_TIME),
+            Some(&log),
+        );
+        let mut iterated_msgs = 0;
+        for m in &mut it {
+            assert_eq!(m.index, start_index + iterated_msgs);
+            assert_eq!(m.mcnt(), (m.index & 0xff) as u8);
+            match m.index {
+                1000 => assert_eq!(
+                    m.mstp(),
+                    DltMessageType::Control(DltMessageControlType::Response)
+                ),
+                1001 => assert_eq!(
+                    m.mstp(),
+                    DltMessageType::Log(DltMessageLogType::Warn),
+                    "m.index={}",
+                    m.index
+                ),
+                _ => {}
+            }
+            iterated_msgs += 1;
+            if m.index == start_index + 1 {
+                // check some static data from example:
+                assert_eq!(m.timestamp_dms, 166260); // special case for 1.1.70 -> we use the time as timestamp as well
+                assert_eq!(m.noar(), 0);
+            } else if m.index == start_index + 8 + 5 {
+                // last msg has non 1.1.1970 timestamp
+                assert_eq!(m.timestamp_dms, 165750); // should have the prev. msg timestamp in that case
+
+                // todo the reception timestamp of the prev msgs should be adjusted as well
+                // this is only possible with checking upfront whether this case (jump to abs recorded time)
+                // does exist...
+                // to avoid:
+                // 12 2023/09/02 16:09:54.578404     165750 012 LC00 chat LogC log info V 0 [    0     0 I chatty  : uid=0(root) logd identical 3 lines]
+                // 13 2023/01/02 01:04:05.123000     165750 013 LC00 chat LogC log info V 0 [    0     0 I chatty  : now a jump to non 1.1.1970 timestamps]
+            }
+        }
+        assert_eq!(iterated_msgs, 9 + 5 /*for the apid infos */);
+    }
+
+    #[test]
+    fn logcat_threadtime_2() {
+        // example for parsing threadtime format with timestamps that should be detected as non 1.1.1970
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("logcat_example4.txt");
+        let fi = File::open(&test_dir).unwrap();
+        let start_index = 1000;
+        let log = new_logger();
+        let mut it = LogCat2DltMsgIterator::new(
+            start_index,
+            LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
+            get_new_namespace(),
+            None,
+            Some(FILE_MODIFIED_TIME),
+            Some(&log),
+        );
+        let mut iterated_msgs = 0;
+        for m in &mut it {
+            assert_eq!(m.index, start_index + iterated_msgs);
+            assert_eq!(m.mcnt(), (m.index & 0xff) as u8);
+            match m.index {
+                1000 => assert_eq!(
+                    m.mstp(),
+                    DltMessageType::Control(DltMessageControlType::Response)
+                ),
+                1001 => assert_eq!(
+                    m.mstp(),
+                    DltMessageType::Log(DltMessageLogType::Warn),
+                    "m.index={}",
+                    m.index
+                ),
+                _ => {}
+            }
+            iterated_msgs += 1;
+            if m.index == start_index + 1 {
+                // check some static data from example:
+                assert_eq!(m.timestamp_dms, 10_000 * 10000); // first timestamp as 10'000secs
+                assert_eq!(m.noar(), 0);
+            } else if m.index == start_index + 2 {
+                assert_eq!(m.timestamp_dms, (10_000 * 10000) + 10); // next relative +1ms
+            }
+        }
+        assert_eq!(iterated_msgs, 8 + 5 /*for the apid infos */);
     }
 }

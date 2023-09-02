@@ -1,0 +1,14 @@
+console:/ # logcat -b all
+logcat -b all
+
+--------- beginning of main
+01-01 12:00:16.626   512   512 W LMHAL   : LogManager<< __func__ << before
+01-01 12:00:16.627   512   580 I LMHAL   : initializeBuffers firstTimeinit  0 
+01-01 12:00:16.627   530   530 I TimeManagerProxyHAL: return  secure time  1693315435
+01-01 12:00:16.627   512   580 I LMHAL   :  onLogUpdate logID 0 buffer_name 
+01-01 12:00:16.627   512   580 I LMHAL   : onLogUpdate applied 10M log buffer
+01-01 12:00:17.251   577   577 I NAVD    : getComponent: com.atier1.navsensd.gnss_hal
+--------- beginning of events
+01-01 12:00:17.245   705   705 I auditd  : type=1400 audit(0.0:7): avc: denied { read } for comm="getprop" name="u:object_r:default_prop:s0" dev="tmpfs" ino=14784 scontext=u:r:vendor_qti_init_shell:s0 tcontext=u:object_r:default_prop:s0 tclass=file permissive=0
+--------- beginning of kernel
+01-01 12:00:16.575     0     0 I chatty  : uid=0(root) logd identical 3 lines
