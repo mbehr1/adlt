@@ -1228,7 +1228,7 @@ fn process_file_context<T: Read + Write>(
                                 id: lc.id(),
                                 ecu: lc.ecu.as_u32le(),
                                 nr_msgs: lc.nr_msgs,
-                                start_time: lc.start_time,
+                                start_time: lc.resume_start_time(), // we use the resume start time here as this is never earlier than from the lifecycle it resumed
                                 resume_time: if lc.is_resume() {
                                     Some(lc.resume_time())
                                 } else {
