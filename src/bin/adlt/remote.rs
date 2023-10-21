@@ -749,7 +749,7 @@ fn process_incoming_text_message<T: Read + Write>(
                                             let search_text = params_splitted[1];
                                             let search = search_text.split_once('=');
                                             match search {
-                                                Some((expr, what)) if expr == "time_ms" => {
+                                                Some(("time_ms", what)) => {
                                                     // binary search in all msgs:
                                                     let time_us = 1000u64
                                                         * what.parse::<u64>().unwrap_or_default();

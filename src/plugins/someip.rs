@@ -511,7 +511,7 @@ to parse the json data from fields to a report.
 It should be extended/replaced by a better mechanism where more type info from the fibex is used
 (e.g. invalid values, *bitfields*, min/max,...)
  */
-const JS_FIELD_CONVERSION_FUNCTION: &str = r##"
+const JS_FIELD_CONVERSION_FUNCTION: &str = r#"
 const r=/\.(?:changed|set|get)_.*?_field{"(.+?)":(.+)}\[OK\]$/;
 const m=r.exec(params.msg.payloadString);
 let o={};
@@ -527,7 +527,7 @@ if(m!==null){
     fn(m[1],v,o);
 }
 return o;
-"##;
+"#;
 
 // map events
 // events w.o. parameter get mapped to EVENT_<name> to use scatter and no charts/lines
@@ -537,7 +537,7 @@ return o;
 // * (0000:0000) VehicleInformation(0001).RelativeTime2{"timeSecondCounterRelative":94198733}[OK]
 // * (0000:0000) VehicleInformation(0001).RelativeTime3{"timeSecondCounterRelative":94198733,"timeDayCounterAbsolute":8284}[OK]
 
-const JS_EVENT_CONVERSION_FUNCTION: &str = r##"
+const JS_EVENT_CONVERSION_FUNCTION: &str = r"
 const r=/\)\.(.+)(?={)(.*)\[OK\]$/;
 const m=r.exec(params.msg.payloadString);
 let o={};
@@ -558,7 +558,7 @@ if(m!==null){
     }
 }
 return o;
-"##;
+";
 
 fn tree_item_for_service(
     ((sid, major), service): &(&(u16, u8), &Vec<Service>),
