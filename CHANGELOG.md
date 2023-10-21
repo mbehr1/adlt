@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.42.1 - 2023-10-21
+#### Bug Fixes
+- resume lifecycles sometimes wrongly sorted - (01f2115) - Matthias Behr
+#### Miscellaneous Chores
+- cargo clippy fixes - (1ec4dbf) - Matthias Behr
+- - -
+
 ## v0.42.0 - 2023-09-02
 #### Features
 - **(logcat)** support threadtime format - (f6febfe) - Matthias Behr
