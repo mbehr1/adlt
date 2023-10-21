@@ -232,7 +232,7 @@ to parse the json data from the textual representation of a frame to a report.
 It should be extended/replaced by a better mechanism where more type info from the fibex is used
 (e.g. invalid values, *bitfields*, min/max, mapping to enums (as they are not printed)...)
  */
-const JS_FRAME_CONVERSION_FUNCTION: &str = r##"
+const JS_FRAME_CONVERSION_FUNCTION: &str = r#"
 const r=params.localObj.r || (params.localObj.r=/]:{"(.+?)":(.+)}$/);
 const m=r.exec(params.msg.payloadString);
 let o={};
@@ -248,7 +248,7 @@ if(m!==null){
     fn(m[1],v,o);
 }
 return o;
-"##;
+"#;
 
 // todos/ideas:
 // + (done using array with tuple/array mask/v/text) add bitfield text table as sep. EVENTs (or STATE with auto null?) (own graph for each of those?)
@@ -257,7 +257,7 @@ return o;
 // - remove CRC&ALIVE? (or at least as EVENTS to prevent lines?)
 // + (done using stSet) optimize case STATE+EVENT cases to not always set the STATE_p=null if EVENT_p is used
 
-const JS_FRAME_CONVERSION_FUNCTION_MAP: &str = r##"
+const JS_FRAME_CONVERSION_FUNCTION_MAP: &str = r#"
 const r=params.localObj.r || (params.localObj.r=/]:{"(.+?)":(.+)}$/);
 const m=r.exec(params.msg.payloadString);
 let o={};
@@ -309,7 +309,7 @@ if(m!==null){
     fn(m[1],v,o,map);
 }
 return o;
-"##;
+"#;
 
 fn js_frame_conversion_function(js_value_map: &str) -> String {
     if js_value_map.is_empty() {
@@ -683,7 +683,7 @@ impl CanPlugin {
             if let Some(short_name) = &channel.short_name {
                 let channel_map = channels_frame_ref_map
                     .entry(short_name.to_string())
-                    .or_insert_with(HashMap::new);
+                    .or_default();
                 Self::insert_missing_frame_ref(channel_map, channel);
             }
         }

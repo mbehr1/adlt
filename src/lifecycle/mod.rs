@@ -524,7 +524,7 @@ where
 
         let msg_timestamp_us = msg.timestamp_us();
 
-        let ecu_lcs = ecu_map.entry(msg.ecu).or_insert_with(Vec::new);
+        let ecu_lcs = ecu_map.entry(msg.ecu).or_default();
 
         let ecu_lcs_len = ecu_lcs.len();
         if ecu_lcs_len > 0 {

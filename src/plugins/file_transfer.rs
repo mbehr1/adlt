@@ -722,7 +722,7 @@ impl FileTransferPlugin {
                 let mut transfers_by_name = self
                     .transfers
                     .iter()
-                    .zip(transfers_by_occurrence.clone().into_iter())
+                    .zip(transfers_by_occurrence.clone())
                     .collect::<Vec<_>>();
                 transfers_by_name.sort_by(|a, b| a.0.file_name.cmp(&b.0.file_name));
                 let transfers_by_name = transfers_by_name

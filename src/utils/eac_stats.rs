@@ -116,12 +116,12 @@ impl EcuStats {
     ///
     /// *Warning:* if the description exists already it does not get overwritten!
     pub fn add_desc(&mut self, desc: &str, apid: &DltChar4, ctid: Option<&DltChar4>) {
-        let apid = self.apids.entry(*apid).or_insert_with(ApidStats::new);
+        let apid = self.apids.entry(*apid).or_default();
         if let Some(ctid) = ctid {
             let ctid = apid
                 .ctids
                 .entry(*ctid) // if apid is avail, ctid is avail as well
-                .or_insert_with(CtidStats::new);
+                .or_default();
             if ctid.desc.is_none() {
                 ctid.desc = Some(desc.to_owned());
             }
@@ -174,15 +174,15 @@ impl EacStats {
         EacStats { ecu_map }
     }
     pub fn add_msg(&mut self, msg: &DltMessage) {
-        let ecu_stat = self.ecu_map.entry(msg.ecu).or_insert_with(EcuStats::new);
+        let ecu_stat = self.ecu_map.entry(msg.ecu).or_default();
         ecu_stat.nr_msgs += 1;
 
         if let Some(m_apid) = msg.apid() {
-            let apid = ecu_stat.apids.entry(*m_apid).or_insert_with(ApidStats::new);
+            let apid = ecu_stat.apids.entry(*m_apid).or_default();
             let ctid = apid
                 .ctids
                 .entry(*msg.ctid().unwrap()) // if apid is avail, ctid is avail as well
-                .or_insert_with(CtidStats::new);
+                .or_default();
             ctid.nr_msgs += 1;
 
             // is SERVICE_ID_GET_LOG_INFO message?
@@ -262,7 +262,7 @@ impl EacStats {
         apid: &DltChar4,
         ctid: Option<&DltChar4>,
     ) {
-        let ecu = self.ecu_map.entry(*ecu).or_insert_with(EcuStats::new);
+        let ecu = self.ecu_map.entry(*ecu).or_default();
         ecu.add_desc(desc, apid, ctid);
     }
 }
