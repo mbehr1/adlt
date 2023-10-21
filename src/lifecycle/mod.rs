@@ -138,6 +138,23 @@ impl Lifecycle {
         }
     }
 
+    /// returns the start time with a special handling for cases
+    /// where the start time of the resume lifecycle is earlier
+    /// than the start time of the resumed one. In this case the
+    /// start time of the resumed one is used + 1us.
+    ///
+    /// This leads to a more logical sorting of lifecycles for cases
+    /// where resumes are e.g. detected due to a small log gap
+    pub fn resume_start_time(&self) -> u64 {
+        if let Some(resume_lc) = &self.resume_lc {
+            if self.start_time <= resume_lc.start_time {
+                // we enforce that the start time of a resume lifecycle is always later than from the resumed one
+                return resume_lc.start_time + 1;
+            }
+        }
+        self.start_time
+    }
+
     /// returns the suspend duration of this lifecycle in us.
     /// If no resume was detected this is 0.
     /// Gets calculated by the distance of the calculated start times
@@ -769,7 +786,21 @@ where
             lc
         })
         .collect();
-    sorted_lcs.sort_by(|a, b| a.start_time.cmp(&b.start_time));
+    sorted_lcs.sort_by(|a, b| {
+        if let Some(b_resume_lc) = &b.resume_lc {
+            if b_resume_lc.id == a.id {
+                // b is a resume of a so a must be earlier
+                return std::cmp::Ordering::Less;
+            }
+        }
+        if let Some(a_resume_lc) = &a.resume_lc {
+            if a_resume_lc.id == b.id {
+                // a is a resume of b so b must be earlier
+                return std::cmp::Ordering::Greater;
+            }
+        }
+        a.start_time.cmp(&b.start_time)
+    });
     sorted_lcs
 }
 
@@ -1671,7 +1702,7 @@ mod tests {
         assert_eq!(lc.sw_version.unwrap(), "SW 2");
     }
 
-    fn nr_lcs_for_file(file_name: &str) -> (DltMessageIndexType, usize) {
+    fn lcs_for_file(file_name: &str) -> (DltMessageIndexType, Vec<Lifecycle>) {
         let (tx_for_parse_thread, rx_from_parse_thread) = channel();
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
@@ -1706,14 +1737,19 @@ mod tests {
         // wait for the threads
         junk_thread.join().unwrap();
         let _lcs_w = lc_thread.join().unwrap();
-        let nr_lcs = if let Some(a) = lcs_r.read() {
+        let lcs = if let Some(a) = lcs_r.read() {
             let sorted_lcs = get_sorted_lifecycles_as_vec(&a);
-            sorted_lcs.len()
+            sorted_lcs.iter().map(|&l| l.clone()).collect()
         } else {
-            0
+            [].to_vec()
         };
 
-        (messages_processed, nr_lcs)
+        (messages_processed, lcs)
+    }
+
+    fn nr_lcs_for_file(file_name: &str) -> (DltMessageIndexType, usize) {
+        let (messages_processed, nr_lcs) = lcs_for_file(file_name);
+        (messages_processed, nr_lcs.len())
     }
 
     fn get_tests_filename(file_name: &str) -> std::path::PathBuf {
@@ -1750,5 +1786,20 @@ mod tests {
             nr_lcs_for_file(&get_tests_filename("lc_ex003.dlt").to_string_lossy()),
             (8045, 1)
         );
+    }
+
+    #[test]
+    fn lc_ex004() {
+        // an example with a RESUME detected even though it seems just to be a stuck output
+        // so the RESUME lifecycle later one even gets an earlier start time_stamp.
+        // check that get_get_sorted_lifecycles_as_vec sorts the resumed after the resumed from
+        let (messages_processed, lcs) =
+            lcs_for_file(&get_tests_filename("lc_ex004.dlt").to_string_lossy());
+        assert_eq!(messages_processed, 52451);
+        assert_eq!(lcs.len(), 2);
+        assert!(!lcs[0].is_resume());
+        // we dont enforce that! assert!(nr_lcs[1].is_resume());
+        // that's not the case! assert!(nr_lcs[0].start_time < nr_lcs[1].start_time);
+        assert!(lcs[0].resume_start_time() < lcs[1].resume_start_time());
     }
 }
