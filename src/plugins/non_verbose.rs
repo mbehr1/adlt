@@ -399,6 +399,7 @@ impl NonVerbosePlugin {
         let files = get_all_fibex_in_dir(Path::new(&fibex_dir), false)?; // todo or recursive
         let mut fibex_map_by_ecu: HashMap<DltChar4, Vec<(String, NonVerboseFibexData)>> =
             HashMap::new();
+        let files_len = files.len();
         for file in files {
             let mut fd = FibexData::new();
             if let Err(e) = fd.load_fibex_file(&file) {
@@ -504,31 +505,40 @@ impl NonVerbosePlugin {
                 }
             }
         }
+        if files_len == 0 {
+            warnings.push(format!("No fibex files found in directory: {}", fibex_dir));
+        } else if fibex_map_by_ecu.is_empty() {
+            warnings.push(format!(
+                "No fibex data parsed from fibex files found in directory: {}",
+                fibex_dir
+            ));
+        }
         // update state:
         state.value = serde_json::json!({"name":name, "treeItems":[
-            if !warnings.is_empty() {
-                serde_json::json!({
-                    "label": format!("Warnings #{}", warnings.len()),
-                    "iconPath":"warning",
-                    "children": warnings.iter().map(|w|{serde_json::json!({"label":w})}).collect::<Vec<serde_json::Value>>()
-                })
-            } else {
-                serde_json::json!(null)
-            },
-            {"label": format!("ECUs #{}", fibex_map_by_ecu.len()),
-            "children":
-                fibex_map_by_ecu.iter().map(|(ecu, versions)|{serde_json::json!(
-                    {"label":format!("ECU '{}', SW-versions #{}",ecu, versions.len()),
-                    "children": versions.iter().map(|(v, nfd)|{serde_json::json!(
-                        {"label":format!("SW: '{}', frames #{}", v, nfd.frames_map_by_id.len()),
-                        "children":nfd.frames_map_by_id.iter().map(|(id,frame)|{serde_json::json!(
-                            {"label":format!("ID_{}: {}", id, if let Some(exth) = &frame.ext_header {format!("apid: {}, ctid: {}", exth.apid, exth.ctid)}else{"<no apid/ctid>".to_owned()})}
-                        )}).collect::<Vec<serde_json::Value>>()
-                    })}).collect::<Vec<serde_json::Value>>()
-                })})
-                .collect::<Vec<serde_json::Value>>()
-            }
-        ]});
+                if !warnings.is_empty() {
+                    serde_json::json!({
+                        "label": format!("Warnings #{}", warnings.len()),
+                        "iconPath":"warning",
+                        "children": warnings.iter().map(|w|{serde_json::json!({"label":w})}).collect::<Vec<serde_json::Value>>()
+                    })
+                } else {
+                    serde_json::json!(null)
+                },
+                {"label": format!("ECUs #{}", fibex_map_by_ecu.len()),
+                "children":
+                    fibex_map_by_ecu.iter().map(|(ecu, versions)|{serde_json::json!(
+                        {"label":format!("ECU '{}', SW-versions #{}",ecu, versions.len()),
+                        "children": versions.iter().map(|(v, nfd)|{serde_json::json!(
+                            {"label":format!("SW: '{}', frames #{}", v, nfd.frames_map_by_id.len()),
+                            "children":nfd.frames_map_by_id.iter().map(|(id,frame)|{serde_json::json!(
+                                {"label":format!("ID_{}: {}", id, if let Some(exth) = &frame.ext_header {format!("apid: {}, ctid: {}", exth.apid, exth.ctid)}else{"<no apid/ctid>".to_owned()})}
+                            )}).collect::<Vec<serde_json::Value>>()
+                        })}).collect::<Vec<serde_json::Value>>()
+                    })})
+                    .collect::<Vec<serde_json::Value>>()
+                }
+            ],
+        "warnings":warnings});
         state.generation += 1;
 
         Ok(NonVerbosePlugin {

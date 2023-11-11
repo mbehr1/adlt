@@ -13,11 +13,14 @@ use adlt::{
     dlt::{DltChar4, DLT_MAX_STORAGE_MSG_SIZE},
     filter::functions::{filters_from_convert_format, filters_from_dlf},
     plugins::{
-        anonymize::AnonymizePlugin, file_transfer::FileTransferPlugin, plugin::Plugin,
-        plugins_process_msgs,
+        anonymize::AnonymizePlugin, can::CanPlugin, file_transfer::FileTransferPlugin,
+        non_verbose::NonVerbosePlugin, plugin::Plugin, plugins_process_msgs,
+        rewrite::RewritePlugin, someip::SomeipPlugin,
     },
     utils::{
-        buf_as_hex_to_io_write, get_dlt_message_iterator, get_new_namespace,
+        buf_as_hex_to_io_write,
+        eac_stats::EacStats,
+        get_dlt_message_iterator, get_new_namespace,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
         DltFileInfos, LowMarkBufReader,
     },
@@ -141,6 +144,27 @@ pub fn add_subcommand(app: Command) -> Command {
                 .num_args(1)
                 .help("CTID used for file transfers. E.g. FILE. Providing a ctid speeds up the file transfer extraction significantly!")
             ).arg(
+                Arg::new("nonverbose_path")
+                .long("nonverbose_path")
+                .num_args(1)
+                .help("Path to directory with the FIBEX files for the Non-Verbose plugin. If not provided the Non-Verbose plugin is deactivated.")
+            ).arg(
+                Arg::new("someip_path")
+                .long("someip_path")
+                .num_args(1)
+                .help("Path to directory with the FIBEX files for the SOME/IP plugin. If not provided the SOME/IP plugin is deactivated.")
+            ).arg(
+                Arg::new("rewrite_path")
+                .long("rewrite_path")
+                .num_args(1)
+                .help("Path to json config with the Rewrite plugin config with '{name, rewrites:[...]}'. If not provided the Rewrite plugin is deactivated.")
+            ).arg(
+                Arg::new("can_path")
+                .long("can_path")
+                .num_args(1)
+                .help("Path to directory with the FIBEX files for the CAN plugin. If not provided the CAN plugin is deactivated.")
+            )
+            .arg(
                 Arg::new("debug_verify_sort")
                 .long("debug_verify_sort")
                 .num_args(0)
@@ -188,6 +212,15 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let do_anonimize = sub_m.get_flag("anon");
 
     let do_file_transfer = sub_m.get_many::<String>("file_transfer").is_some();
+
+    let someip_path = sub_m.get_one::<String>("someip_path").map(|s| s.to_owned());
+    let nonverbose_path = sub_m
+        .get_one::<String>("nonverbose_path")
+        .map(|s| s.to_owned());
+    let rewrite_path = sub_m
+        .get_one::<String>("rewrite_path")
+        .map(|s| s.to_owned());
+    let can_path = sub_m.get_one::<String>("can_path").map(|s| s.to_owned());
 
     let index_first: adlt::dlt::DltMessageIndexType =
         match sub_m.get_one::<adlt::dlt::DltMessageIndexType>("index_first") {
@@ -403,6 +436,76 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             }
         }else{
             warn!(log, "file_transfer failed to parse config");
+        }
+    }
+    if let Some(nonverbose_path) = &nonverbose_path {
+        if let Some(np_config) =
+            serde_json::json!({"name":"NonVerbose","fibexDir":nonverbose_path}).as_object()
+        {
+            let mut eac_stats = EacStats::new(); // we dont use them now. todo!
+            match NonVerbosePlugin::from_json(np_config, &mut eac_stats) {
+                Ok(plugin) => {
+                    debug!(log, "Non-Verbose plugin used: {}", plugin.name());
+                    plugins_active.push(Box::new(plugin));
+                }
+                Err(e) => warn!(log, "Non-Verbose plugin failed with err: {:?}", e),
+            }
+        }
+    }
+    if let Some(someip_path) = &someip_path {
+        if let Some(sp_config) =
+            serde_json::json!({"name":"SomeIp","fibexDir":someip_path}).as_object()
+        {
+            match SomeipPlugin::from_json(sp_config) {
+                Ok(plugin) => {
+                    debug!(log, "SomeIp plugin used: {}", plugin.name());
+                    plugins_active.push(Box::new(plugin));
+                }
+                Err(e) => warn!(log, "SomeIp plugin failed with err: {:?}", e),
+            }
+        }
+    }
+    if let Some(rewrite_path) = &rewrite_path {
+        match std::fs::read_to_string(rewrite_path) {
+            Ok(rewrite_config_str) => {
+                match serde_json::from_str::<serde_json::Value>(&rewrite_config_str) {
+                    Ok(json) => {
+                        if let Some(sp_config) = json.as_object() {
+                            match RewritePlugin::from_json(sp_config) {
+                                Ok(plugin) => {
+                                    debug!(log, "Rewrite plugin used: {}", plugin.name());
+                                    plugins_active.push(Box::new(plugin));
+                                }
+                                Err(e) => warn!(log, "Rewrite plugin failed with err: {:?}", e),
+                            }
+                        }
+                    }
+                    Err(e) => warn!(
+                        log,
+                        "Failed to parse config file {} for Rewrite plugin with err: {:?}",
+                        rewrite_path,
+                        e
+                    ),
+                }
+            }
+            Err(e) => warn!(
+                log,
+                "Failed to to read config file {} for Rewrite plugin with err: {:?}",
+                rewrite_path,
+                e
+            ),
+        }
+    }
+
+    if let Some(can_path) = &can_path {
+        if let Some(sp_config) = serde_json::json!({"name":"CAN","fibexDir":can_path}).as_object() {
+            match CanPlugin::from_json(sp_config) {
+                Ok(plugin) => {
+                    debug!(log, "CAN plugin used: {}", plugin.name());
+                    plugins_active.push(Box::new(plugin));
+                }
+                Err(e) => warn!(log, "CAN plugin failed with err: {:?}", e),
+            }
         }
     }
 
@@ -734,9 +837,33 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 }
             }
             for plugin in plugins_active {
+                let plugin_state = plugin.state();
+                let state = plugin_state.read().unwrap();
+                // output any warnings
+                if let Some(warnings) = state.value["warnings"].as_array() {
+                    if !warnings.is_empty() {
+                        writeln!(
+                            writer_screen,
+                            "Plugin {} generated {} warning{}:",
+                            plugin.name(),
+                            warnings.len(),
+                            if warnings.len() > 1 { "s" } else { "" }
+                        )?;
+                    }
+                    for warning in warnings {
+                        writeln!(
+                            writer_screen,
+                            " {}",
+                            if let Some(warn) = warning.as_str() {
+                                warn
+                            } else {
+                                "<unknown type of warning!>"
+                            }
+                        )?;
+                    }
+                }
+
                 if plugin.name() == "file_transfer" {
-                    let plugin_state = plugin.state();
-                    let state = plugin_state.read().unwrap();
                     debug!(log, "file_transfer.state.value={:?}", state.value);
                     // output the files detected:
                     if let Some(tree_items) = state.value["treeItems"].as_array() {
@@ -1366,5 +1493,78 @@ mod tests {
         assert!(s.contains("have 1 file transfer"));
 
         assert!(file.close().is_ok());
+    }
+
+    /// A Writer based on a Vec<u8> that can be used to log to and compare output
+    #[derive(Clone)]
+    struct TestWriter {
+        storage: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl TestWriter {
+        fn new() -> Self {
+            TestWriter {
+                storage: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn into_string(self) -> String {
+            String::from_utf8(self.storage.lock().unwrap().to_vec()).unwrap()
+        }
+    }
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.storage.lock().unwrap().write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.storage.lock().unwrap().flush()
+        }
+    }
+
+    #[test]
+    fn file_plugins() {
+        let log_output = TestWriter::new();
+        {
+            let decorator = slog_term::PlainSyncDecorator::new(log_output.clone());
+            let drain = slog_term::FullFormat::new(decorator).build().fuse();
+            let logger = Logger::root(drain, o!());
+
+            let arg_vec = vec![
+                "t",
+                "convert",
+                "--nonverbose_path",
+                "tests/",
+                "--someip_path",
+                "./",
+                "--rewrite_path",
+                "tests/rewrite.cfg",
+                "--can_path",
+                "tests/",
+                "tests/lc_ex002.dlt",
+            ];
+            let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+            let (_c, sub_m) = sub_c.subcommand().unwrap();
+
+            let output_buf = Vec::new();
+            let output = std::io::BufWriter::new(output_buf);
+
+            let r = convert(&logger, sub_m, output).unwrap();
+            assert_eq!(0, r.messages_output);
+
+            let output_buf = r.writer_screen.unwrap().into_inner().unwrap();
+            assert!(!output_buf.is_empty());
+            let s = String::from_utf8(output_buf).unwrap();
+            assert!(
+                s.contains("Plugin SomeIp generated 1 warning:"),
+                "s='\n{}\n'",
+                s
+            );
+        }
+        let s = log_output.into_string();
+        assert!(s.contains("Non-Verbose plugin used:"), "{}", s);
+        assert!(s.contains("SomeIp plugin used:"), "{}", s);
+        assert!(s.contains("Rewrite plugin used:"), "{}", s);
+        assert!(s.contains("CAN plugin used:"), "{}", s);
     }
 }

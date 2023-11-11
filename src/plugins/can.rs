@@ -665,7 +665,7 @@ impl CanPlugin {
         };
 
         let mut state: PluginState = Default::default();
-        let warnings: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
 
         let ctid = Some(DltChar4::from_buf(b"TC\0\0"));
 
@@ -693,6 +693,15 @@ impl CanPlugin {
             .map(|c| c.0.to_owned())
             .collect::<Vec<_>>();
         channels_by_name.sort_unstable();
+
+        if files.is_empty() {
+            warnings.push(format!("No fibex files found in directory: {}", fibex_dir));
+        } else if channels_by_name.is_empty() {
+            warnings.push(format!(
+                "No channels parsed from fibex files found in directory: {}",
+                fibex_dir
+            ));
+        }
 
         state.value = json!({"name":name, "treeItems":[
             if !warnings.is_empty() {
@@ -723,7 +732,7 @@ impl CanPlugin {
 
             {"label":format!("Signals #{}", fibex_data.elements.signals_map_by_id.len())},
             {"label":format!("Codings #{}", fibex_data.pi.codings.len())},
-        ]});
+        ], "warnings":warnings});
         state.generation += 1;
 
         Ok(CanPlugin {

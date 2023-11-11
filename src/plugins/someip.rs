@@ -614,12 +614,21 @@ impl SomeipPlugin {
         };
 
         let mut state: PluginState = Default::default();
-        let warnings: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
 
         let ctid = Some(DltChar4::from_buf(b"TC\0\0"));
 
         let files = get_all_fibex_in_dir(Path::new(&fibex_dir), false)?; // todo or recursive
         let fibex_data = load_all_fibex(&files)?;
+
+        if files.is_empty() {
+            warnings.push(format!("No fibex files found in directory: {}", fibex_dir));
+        } else if fibex_data.projects.is_empty() {
+            warnings.push(format!(
+                "No fibex projects parsed from fibex files found in directory: {}",
+                fibex_dir
+            ));
+        }
 
         // update state:
         let mut services_by_name = fibex_data
@@ -650,7 +659,8 @@ impl SomeipPlugin {
             },
             {"label":format!("Datatypes #{}", fibex_data.elements.datatypes_map_by_id.len())},
             {"label":format!("Codings #{}", fibex_data.pi.codings.len())},
-        ]});
+        ],
+        "warnings":warnings});
         state.generation += 1;
 
         Ok(SomeipPlugin {
