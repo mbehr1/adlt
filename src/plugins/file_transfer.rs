@@ -1141,7 +1141,7 @@ mod tests {
         let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
 
         let payload = payload_from_args(
-            &vec![
+            &[
                 (DLT_TYPE_INFO_STRG, b"FLST\0" as &[u8]),
                 (
                     DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
@@ -1174,7 +1174,7 @@ mod tests {
         let mut m_flst = DltMessage::get_testmsg_with_payload(false, 8, &payload);
 
         let payload = payload_from_args(
-            &vec![
+            &[
                 (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
                 (
                     DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
@@ -1274,7 +1274,7 @@ mod tests {
         let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
 
         let payload = payload_from_args(
-            &vec![
+            &[
                 (DLT_TYPE_INFO_STRG, b"FLST\0" as &[u8]),
                 (
                     DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
@@ -1307,7 +1307,7 @@ mod tests {
         let mut m_flst = DltMessage::get_testmsg_with_payload(false, 8, &payload);
 
         let payload = payload_from_args(
-            &vec![
+            &[
                 (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
                 (
                     DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
