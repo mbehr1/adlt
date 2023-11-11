@@ -12,13 +12,13 @@ use adlt::utils::*;
 
 pub fn eac_stats1(c: &mut Criterion) {
     let persisted_msgs: adlt::dlt::DltMessageIndexType = 1_000_000;
-    let ecus = vec![
+    let ecus = [
         DltChar4::from_buf(b"ECU1"),
         DltChar4::from_buf(b"AECU"),
         DltChar4::from_buf(b"ZEC2"),
     ];
 
-    let apids = vec![
+    let apids = [
         DltChar4::from_buf(b"api1"),
         DltChar4::from_buf(b"api2"),
         DltChar4::from_buf(b"api3"),
@@ -26,11 +26,9 @@ pub fn eac_stats1(c: &mut Criterion) {
         DltChar4::from_buf(b"api5"),
         DltChar4::from_buf(b"api6"),
         DltChar4::from_buf(b"api7"),
-        //DltChar4::from_buf(b"api8"),
-        //DltChar4::from_buf(b"api9"),
     ];
 
-    let ctids = vec![
+    let ctids = [
         DltChar4::from_buf(b"cti1"),
         DltChar4::from_buf(b"cti2"),
         DltChar4::from_buf(b"cti3"),

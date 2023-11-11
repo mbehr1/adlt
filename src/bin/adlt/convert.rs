@@ -1281,7 +1281,7 @@ mod tests {
         let file_path = String::from(file.path().to_str().unwrap());
 
         let payload = payload_from_args(
-            &vec![
+            &[
                 (DLT_TYPE_INFO_STRG, b"FLST\0" as &[u8]),
                 (
                     DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
@@ -1317,7 +1317,7 @@ mod tests {
 
         m_flst.to_write(&mut file).unwrap();
         let payload = payload_from_args(
-            &vec![
+            &[
                 (DLT_TYPE_INFO_STRG, b"FLDA\0" as &[u8]),
                 (
                     DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,

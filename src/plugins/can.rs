@@ -796,7 +796,7 @@ mod tests {
             }],
         }];
         let r = js_for_compu_methods(&cm);
-        assert_eq!(r, r##"new Map([[1,"foo"]])"##);
+        assert_eq!(r, r#"new Map([[1,"foo"]])"#);
 
         let v2: XsDouble = XsDouble::I64(2_i64);
         let cm = vec![CompuMethod {
@@ -817,7 +817,7 @@ mod tests {
             ],
         }];
         let r = js_for_compu_methods(&cm);
-        assert_eq!(r, r##"[[1,1,"mask1"],[2,2,"mask2"]]"##);
+        assert_eq!(r, r#"[[1,1,"mask1"],[2,2,"mask2"]]"#);
 
         // todo think about BigInt support...
     }

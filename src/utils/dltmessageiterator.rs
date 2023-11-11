@@ -72,7 +72,7 @@ mod tests {
         let file_path = String::from(file.path().to_str().unwrap());
 
         let persisted_msgs: DltMessageIndexType = 10;
-        let ecus = vec![
+        let ecus = [
             DltChar4::from_buf(b"ECU1"),
             DltChar4::from_buf(b"ECU2"),
             DltChar4::from_buf(b"ECU3"),
