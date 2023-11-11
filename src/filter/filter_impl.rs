@@ -1,7 +1,9 @@
+use crate::dlt;
 use crate::dlt::DltChar4;
 use crate::dlt::DltMessage;
 use crate::dlt::Error; // todo??? or in crate::?
 use crate::dlt::ErrorKind;
+use crate::utils::contains_regex_chars;
 use fancy_regex::Regex;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json::Value;
@@ -55,6 +57,71 @@ impl<T: Default> std::ops::IndexMut<FilterKind> for FilterKindContainer<T> {
 }
 
 #[derive(Debug)]
+/// An enum representing either a 4-character (ascii) string/DltChar4 or a regular expression (non utf8!).
+///
+pub enum Char4OrRegex {
+    DltChar4(DltChar4),
+    Regex(regex::bytes::Regex),
+}
+
+impl Char4OrRegex {
+    pub fn from_str(s: &str, is_regex: bool) -> Result<Self, dlt::Error> {
+        if is_regex {
+            regex::bytes::Regex::new(s)
+                .map(Char4OrRegex::Regex)
+                .map_err(|e| {
+                    Error::new(ErrorKind::InvalidData(format!(
+                        "Char4OrRegex failed regex with {:?}",
+                        e
+                    )))
+                })
+        } else {
+            DltChar4::from_str(s)
+                .map(Char4OrRegex::DltChar4)
+                .map_err(|e| {
+                    Error::new(ErrorKind::InvalidData(format!(
+                        "Char4OrRegex failed non regex with {:?}",
+                        e
+                    )))
+                })
+        }
+    }
+
+    pub fn from_buf(buf: &[u8]) -> Result<Self, dlt::Error> {
+        if buf.len() == 4 {
+            Ok(Char4OrRegex::DltChar4(DltChar4::from_buf(buf)))
+        } else {
+            Err(Error::new(ErrorKind::InvalidData(format!(
+                "buf len {:?} != 4",
+                buf.len()
+            ))))
+        }
+    }
+}
+
+impl From<DltChar4> for Char4OrRegex {
+    fn from(d: DltChar4) -> Self {
+        Char4OrRegex::DltChar4(d)
+    }
+}
+
+impl From<regex::bytes::Regex> for Char4OrRegex {
+    fn from(r: regex::bytes::Regex) -> Self {
+        Char4OrRegex::Regex(r)
+    }
+}
+
+impl PartialEq for Char4OrRegex {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Char4OrRegex::DltChar4(d1), Char4OrRegex::DltChar4(d2)) => d1 == d2,
+            (Char4OrRegex::Regex(r1), Char4OrRegex::Regex(r2)) => r1.as_str() == r2.as_str(),
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Filter {
     pub kind: FilterKind,
     pub enabled: bool, // defaults to true
@@ -64,9 +131,9 @@ pub struct Filter {
     // filter values
     // if multiple are set, all have to match
     // if none are set, it matches
-    pub ecu: Option<DltChar4>,
-    pub apid: Option<DltChar4>,
-    pub ctid: Option<DltChar4>,
+    pub ecu: Option<Char4OrRegex>,
+    pub apid: Option<Char4OrRegex>,
+    pub ctid: Option<Char4OrRegex>,
     /// match for verb_mstp_mtin with a mask
     /// the from_json contains a logic to set an ignore for mtin if mtin is 0
     /// can match for mstp and all mtins (mtin part 0) or specific mtin (mtin !=0)
@@ -85,6 +152,40 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// parse a filter from the json resprentation
+    ///
+    /// # Supported json format
+    /// object with the following fields:
+    /// * type: number (0=positive, 1=negative, 2=marker, 3=event)
+    /// * enabled: bool (optional, defaults to true)
+    /// * not: bool (optional, defaults to false)
+    /// * atLoadTime: bool (optional, defaults to false)
+    /// * ecu: string (optional, defaults to no filter for ecu)
+    /// * ecuIsRegex: bool (optional, default handling see below)
+    ///
+    ///   if true ecu is interpreted as a regex (e.g. 'ECU' matches all ecus containing 'ECU'). Regex for ecu/apic/ctid are ascii and not utf-8 based!
+    ///
+    ///   Syntax supported is the one from crate regex::bytes see https://docs.rs/regex/1.10.2/regex/index.html
+    ///
+    ///   if false ecu is interpreted as a DltChar4 (e.g. 'ECU' matches 'ECU\0' so starting with and not 4th char)
+    ///
+    ///   if not provided an autodetection is done with the following rules:
+    ///
+    ///    * if any regex character like ^$*+?()[]{}|.-\=!<, is in the string it's interpreted as regex
+    ///
+    /// * apid: string (optional, defaults to no filter for apids / all apids)
+    /// * apidIsRegex: bool (optional, see ecuIsRegex)
+    /// * ctid: string (optional, defaults to no filter for ctids / all ctids)
+    /// * ctidIsRegex: bool (optional, see ecuIsRegex)
+    /// * verb_mstp_mtin: u8 (optional, defaults to all messages)
+    /// * payload: string (optional, defaults to all payloads)
+    /// * payloadRegex: string (optional, defaults to all payloads)
+    /// * ignoreCasePayload: bool (optional, defaults to false)
+    /// * logLevelMin: u8 (optional, defaults to all loglevels)
+    /// * logLevelMax: u8 (optional, defaults to all loglevels)
+    /// * lifecycles: array of u32 (optional, defaults to all lifecycles)
+    /// * verb_mstp_mtin: u8 (optional, defaults to all messages) or
+    /// * mstp: u8 (optional, defaults to all messages)
     pub fn from_json(json_str: &str) -> Result<Filter, Error> {
         // Parse the string of data into serde_json::Value.
         let v = serde_json::from_str(json_str);
@@ -124,19 +225,44 @@ impl Filter {
             at_load_time = b;
         }
 
-        let mut ecu = None;
+        let mut ecu: Option<Char4OrRegex> = None;
+
         if let Some(s) = v["ecu"].as_str() {
-            ecu = DltChar4::from_str(s).ok();
+            let ecu_is_regex = v["ecuIsRegex"]
+                .as_bool()
+                .unwrap_or_else(|| contains_regex_chars(s));
+            ecu = Some(Char4OrRegex::from_str(s, ecu_is_regex).map_err(|e| {
+                Error::new(ErrorKind::InvalidData(format!(
+                    "error parsing ecu '{}' ecuIsRegex={}:{:?}",
+                    s, ecu_is_regex, e
+                )))
+            })?)
         }
 
         let mut apid = None;
         if let Some(s) = v["apid"].as_str() {
-            apid = DltChar4::from_str(s).ok();
+            let apid_is_regex = v["apidIsRegex"]
+                .as_bool()
+                .unwrap_or_else(|| contains_regex_chars(s));
+            apid = Some(Char4OrRegex::from_str(s, apid_is_regex).map_err(|e| {
+                Error::new(ErrorKind::InvalidData(format!(
+                    "error parsing apid '{}' apidIsRegex={}:{:?}",
+                    s, apid_is_regex, e
+                )))
+            })?)
         }
 
         let mut ctid = None;
         if let Some(s) = v["ctid"].as_str() {
-            ctid = DltChar4::from_str(s).ok();
+            let ctid_is_regex = v["ctidIsRegex"]
+                .as_bool()
+                .unwrap_or_else(|| contains_regex_chars(s));
+            ctid = Some(Char4OrRegex::from_str(s, ctid_is_regex).map_err(|e| {
+                Error::new(ErrorKind::InvalidData(format!(
+                    "error parsing ctid '{}' ctidIsRegex={}:{:?}",
+                    s, ctid_is_regex, e
+                )))
+            })?)
         }
 
         let mut ignore_case_payload = false;
@@ -317,17 +443,29 @@ impl Filter {
         // todo name, headertext,
         if attrs.get("enableecuid") == Some(&"1".to_string()) {
             if let Some(s) = attrs.get("ecuid") {
-                filter.ecu = DltChar4::from_str(s).ok();
+                // enableRegexp_Ecu doesnt exist
+                // shall we autodetect?
+                filter.ecu = Char4OrRegex::from_str(s, false).ok(); // dlt-viewer supports no regex for ecu
             }
         }
         if attrs.get("enableapplicationid") == Some(&"1".to_string()) {
             if let Some(s) = attrs.get("applicationid") {
-                filter.apid = DltChar4::from_str(s).ok();
+                let apid_is_regex = if let Some(ir) = attrs.get("enableregexp_Appid") {
+                    ir == &"1".to_string()
+                } else {
+                    contains_regex_chars(s) // autodetect
+                };
+                filter.apid = Char4OrRegex::from_str(s, apid_is_regex).ok();
             }
         }
         if attrs.get("enablecontextid") == Some(&"1".to_string()) {
             if let Some(s) = attrs.get("contextid") {
-                filter.ctid = DltChar4::from_str(s).ok();
+                let ctid_is_regex = if let Some(ir) = attrs.get("enableregexp_Context") {
+                    ir == &"1".to_string()
+                } else {
+                    contains_regex_chars(s) // autodetect
+                };
+                filter.ctid = Char4OrRegex::from_str(s, ctid_is_regex).ok();
             }
         }
         if attrs.get("enablecontrolmsgs") == Some(&"1".to_string()) {
@@ -407,23 +545,47 @@ impl Filter {
         }
         let negated = self.negate_match;
 
-        if let Some(aecu) = &self.ecu {
-            if aecu != &msg.ecu {
+        // this seems to be fastest under the assumption that most of the times non regex is wanted
+        // faster than match &self.ecu and if let Some(ecu)=&self.ecu { match ...}
+        if let Some(Char4OrRegex::DltChar4(dltc4)) = &self.ecu {
+            if dltc4 != &msg.ecu {
+                return negated;
+            }
+        } else if let Some(Char4OrRegex::Regex(regex)) = &self.ecu {
+            if !regex.is_match(msg.ecu.as_buf()) {
                 return negated;
             }
         }
-        if let Some(aapid) = &self.apid {
+
+        if let Some(Char4OrRegex::DltChar4(dltc4)) = &self.apid {
             if let Some(mapid) = msg.apid() {
-                if aapid != mapid {
+                if dltc4 != mapid {
+                    return negated;
+                }
+            } else {
+                return negated;
+            }
+        } else if let Some(Char4OrRegex::Regex(regex)) = &self.apid {
+            if let Some(mapid) = msg.apid() {
+                if !regex.is_match(mapid.as_buf()) {
                     return negated;
                 }
             } else {
                 return negated;
             }
         }
-        if let Some(actid) = &self.ctid {
+
+        if let Some(Char4OrRegex::DltChar4(dltc4)) = &self.ctid {
             if let Some(mctid) = msg.ctid() {
-                if actid != mctid {
+                if dltc4 != mctid {
+                    return negated;
+                }
+            } else {
+                return negated;
+            }
+        } else if let Some(Char4OrRegex::Regex(regex)) = &self.ctid {
+            if let Some(mctid) = msg.ctid() {
+                if !regex.is_match(mctid.as_buf()) {
                     return negated;
                 }
             } else {
@@ -526,13 +688,40 @@ impl Serialize for Filter {
         }
 
         if let Some(s) = &self.ecu {
-            state.serialize_field("ecu", &s)?;
+            match s {
+                Char4OrRegex::DltChar4(dltc4) => {
+                    state.serialize_field("ecu", &dltc4)?;
+                    state.serialize_field("ecuIsRegex", &false)?;
+                }
+                Char4OrRegex::Regex(regex) => {
+                    state.serialize_field("ecu", &regex.as_str())?;
+                    state.serialize_field("ecuIsRegex", &true)?;
+                }
+            }
         }
         if let Some(s) = &self.apid {
-            state.serialize_field("apid", &s)?;
+            match s {
+                Char4OrRegex::DltChar4(dltc4) => {
+                    state.serialize_field("apid", &dltc4)?;
+                    state.serialize_field("apidIsRegex", &false)?;
+                }
+                Char4OrRegex::Regex(regex) => {
+                    state.serialize_field("apid", &regex.as_str())?;
+                    state.serialize_field("apidIsRegex", &true)?;
+                }
+            }
         }
         if let Some(s) = &self.ctid {
-            state.serialize_field("ctid", &s)?;
+            match s {
+                Char4OrRegex::DltChar4(dltc4) => {
+                    state.serialize_field("ctid", &dltc4)?;
+                    state.serialize_field("ctidIsRegex", &false)?;
+                }
+                Char4OrRegex::Regex(regex) => {
+                    state.serialize_field("ctid", &regex.as_str())?;
+                    state.serialize_field("ctidIsRegex", &true)?;
+                }
+            }
         }
         if let Some(s) = &self.payload_regex {
             if self.ignore_case_payload {
@@ -596,14 +785,78 @@ mod tests {
     fn match_ecu() {
         let mut f = Filter::new(FilterKind::Positive);
         let m = DltMessage::for_test();
-        f.ecu = Some(DltChar4::from_buf(b"ECU1"));
+        f.ecu = Char4OrRegex::from_buf(b"ECU1").ok();
         assert!(!f.matches(&m));
-        f.ecu = Some(m.ecu);
+        f.ecu = Some(m.ecu).map(Into::into);
         assert!(f.matches(&m));
         // and now negated:
         f.negate_match = true;
         assert!(!f.matches(&m));
-        f.ecu = Some(DltChar4::from_buf(b"ECU1"));
+        f.ecu = Char4OrRegex::from_buf(b"ECU1").ok();
+        assert!(f.matches(&m));
+    }
+
+    #[test]
+    fn match_ecu_regex() {
+        let mut f = Filter::new(FilterKind::Positive);
+        let m = DltMessage::for_test(); // ecu = TEST
+        f.ecu = Char4OrRegex::from_str("ECU1", false).ok();
+        assert!(!f.matches(&m));
+        f.ecu = Char4OrRegex::from_str("ECU1|TEST", true).ok();
+        assert!(f.matches(&m));
+        f.ecu = Char4OrRegex::from_str("ECU1|ECU2", true).ok();
+        assert!(!f.matches(&m));
+        f.ecu = Char4OrRegex::from_str("TES", false).ok();
+        assert!(!f.matches(&m));
+        f.ecu = Char4OrRegex::from_str("EST", false).ok();
+        assert!(!f.matches(&m));
+        f.ecu = Char4OrRegex::from_str("TES", true).ok();
+        assert!(f.matches(&m));
+        f.ecu = Char4OrRegex::from_str("EST", true).ok();
+        assert!(f.matches(&m));
+    }
+
+    #[test]
+    fn match_apid_regex() {
+        let mut f = Filter::new(FilterKind::Positive);
+        let m = DltMessage::get_testmsg_control(true, 0, &[]); // apid = DA1
+        f.apid = Char4OrRegex::from_str("APID", false).ok();
+        assert!(!f.matches(&m));
+        f.apid = Char4OrRegex::from_str("APID|DA1", true).ok();
+        assert!(f.matches(&m));
+        f.apid = Char4OrRegex::from_str("APID|DA2", true).ok();
+        assert!(!f.matches(&m));
+        f.apid = Char4OrRegex::from_str("DA", false).ok();
+        assert!(!f.matches(&m));
+        f.apid = Char4OrRegex::from_str("A1", false).ok();
+        assert!(!f.matches(&m));
+        f.apid = Char4OrRegex::from_str("DA", true).ok();
+        assert!(f.matches(&m));
+        f.apid = Char4OrRegex::from_str("A1", true).ok();
+        assert!(f.matches(&m));
+    }
+
+    #[test]
+    fn match_ctid_regex() {
+        let mut f = Filter::new(FilterKind::Positive);
+        let m = DltMessage::get_testmsg_control(true, 0, &[]); // ctid = DC1
+        f.ctid = Char4OrRegex::from_str("CTID", false).ok();
+        assert!(!f.matches(&m));
+        f.ctid = Char4OrRegex::from_str("CTID|DC1", true).ok();
+        assert!(f.matches(&m));
+        f.ctid = Char4OrRegex::from_str("CTID|DC2", true).ok();
+        assert!(!f.matches(&m));
+        f.ctid = Char4OrRegex::from_str("DC", false).ok();
+        assert!(!f.matches(&m));
+        f.ctid = Char4OrRegex::from_str("C1", false).ok();
+        assert!(!f.matches(&m));
+        f.ctid = Char4OrRegex::from_str("DC", true).ok();
+        assert!(f.matches(&m));
+        f.ctid = Char4OrRegex::from_str("C1", true).ok();
+        assert!(f.matches(&m));
+        f.ctid = Char4OrRegex::from_str("", true).ok();
+        assert!(f.matches(&m)); // empty regex matches!
+        f.ctid = Char4OrRegex::from_str(".", true).ok();
         assert!(f.matches(&m));
     }
 
@@ -611,11 +864,12 @@ mod tests {
     fn match_ecu_and_apid() {
         let mut f = Filter::new(FilterKind::Positive);
         let mut m = DltMessage::for_test();
-        f.ecu = Some(DltChar4::from_buf(b"ECU1"));
-        f.apid = Some(DltChar4::from_buf(b"APID"));
+        f.ecu = Char4OrRegex::from_buf(b"ECU1").ok();
+        assert!(f.ecu.is_some());
+        f.apid = Char4OrRegex::from_buf(b"APID").ok();
         // neither ecu nor apid match
         assert!(!f.matches(&m));
-        f.ecu = Some(m.ecu);
+        f.ecu = Some(m.ecu).map(Into::into);
         // now ecu matches but not apid
         assert!(!f.matches(&m));
         m.extended_header = Some(DltExtendedHeader {
@@ -626,7 +880,7 @@ mod tests {
         });
         // now both match:
         assert!(f.matches(&m));
-        f.ecu = Some(DltChar4::from_buf(b"ECU1"));
+        f.ecu = Some(DltChar4::from_buf(b"ECU1")).map(Into::into);
         // now apid matches but not ecu:
         assert!(!f.matches(&m));
     }
@@ -634,12 +888,12 @@ mod tests {
     fn match_ecu_and_apid_and_ctid() {
         let mut f = Filter::new(FilterKind::Positive);
         let mut m = DltMessage::for_test();
-        f.ecu = Some(DltChar4::from_buf(b"ECU1"));
-        f.apid = Some(DltChar4::from_buf(b"APID"));
-        f.ctid = Some(DltChar4::from_buf(b"CTID"));
+        f.ecu = Some(DltChar4::from_buf(b"ECU1")).map(Into::into);
+        f.apid = Some(DltChar4::from_buf(b"APID")).map(Into::into);
+        f.ctid = Some(DltChar4::from_buf(b"CTID")).map(Into::into);
         // neither ecu nor apid match
         assert!(!f.matches(&m));
-        f.ecu = Some(m.ecu);
+        f.ecu = Some(m.ecu).map(Into::into);
         // now ecu matches but not apid
         assert!(!f.matches(&m));
         m.extended_header = Some(DltExtendedHeader {
@@ -650,7 +904,7 @@ mod tests {
         });
         // now all match:
         assert!(f.matches(&m));
-        f.ctid = Some(DltChar4::from_buf(b"CTIF"));
+        f.ctid = Some(Char4OrRegex::from_buf(b"CTIF").unwrap());
         // now apid,ecu matches but not ctid:
         assert!(!f.matches(&m));
     }
@@ -894,12 +1148,74 @@ mod tests {
         // proper type and ecu
         let f = Filter::from_json(r#"{"type": 0, "ecu": "AbC"}"#).unwrap();
         assert_eq!(f.kind, FilterKind::Positive);
-        assert_eq!(f.ecu, Some(DltChar4::from_buf(b"AbC\0")));
+        assert_eq!(f.ecu, Char4OrRegex::from_buf(b"AbC\0").ok());
+
+        // proper type and ecu (but too long -> gets ignored)
+        let f = Filter::from_json(r#"{"type": 0, "ecu": "AbCde"}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.ecu, Char4OrRegex::from_str("AbCd", false).ok());
+
+        // proper type and ecu (but invalid regex)
+        let f = Filter::from_json(r#"{"type": 0, "ecu": "AbCd|\\"}"#);
+        assert!(f.is_err());
+
+        // proper type and ecu
+        let f = Filter::from_json(r#"{"type": 0, "ecu": "AbC", "ecuIsRegex":false}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.ecu, Char4OrRegex::from_buf(b"AbC\0").ok());
+
+        // proper type and ecu
+        let f = Filter::from_json(r#"{"type": 0, "ecu": "AbC", "ecuIsRegex":true}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.ecu, Char4OrRegex::from_str("AbC", true).ok());
 
         // proper type and ecu with lower ascii range... (json strings are in unicode / rfc7159)
         let f = Filter::from_json(r#"{"type": 0, "ecu": "A\u0001C"}"#).unwrap();
         assert_eq!(f.kind, FilterKind::Positive);
-        assert_eq!(f.ecu, Some(DltChar4::from_buf(&[0x41, 1, 0x43, 0])));
+        assert_eq!(
+            f.ecu,
+            Some(DltChar4::from_buf(&[0x41, 1, 0x43, 0])).map(Into::into)
+        );
+
+        // proper type and apid
+        let f = Filter::from_json(r#"{"type": 0, "apid": "AbC"}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.apid, Char4OrRegex::from_buf(b"AbC\0").ok());
+
+        // proper type and apid regex autodetect
+        let f = Filter::from_json(r#"{"type": 0, "apid": "AbC|def"}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.apid, Char4OrRegex::from_str("AbC|def", true).ok());
+
+        // proper type and apid regex
+        let f = Filter::from_json(r#"{"type": 0, "apid": "AbC", "apidIsRegex":true}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.apid, Char4OrRegex::from_str("AbC", true).ok());
+
+        // proper type and apid regex
+        let f = Filter::from_json(r#"{"type": 0, "apid": "AbC", "apidIsRegex":false}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.apid, Char4OrRegex::from_str("AbC", false).ok());
+
+        // proper type and ctid
+        let f = Filter::from_json(r#"{"type": 0, "ctid": "AbC"}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.ctid, Char4OrRegex::from_buf(b"AbC\0").ok());
+
+        // proper type and ctid regex autodetect
+        let f = Filter::from_json(r#"{"type": 0, "ctid": "AbC|def"}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.ctid, Char4OrRegex::from_str("AbC|def", true).ok());
+
+        // proper type and ctid regex
+        let f = Filter::from_json(r#"{"type": 0, "ctid": "AbC", "ctidIsRegex":true}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.ctid, Char4OrRegex::from_str("AbC", true).ok());
+
+        // proper type and ctid regex
+        let f = Filter::from_json(r#"{"type": 0, "ctid": "AbC", "ctidIsRegex":false}"#).unwrap();
+        assert_eq!(f.kind, FilterKind::Positive);
+        assert_eq!(f.ctid, Char4OrRegex::from_str("AbC", false).ok());
 
         // payload
         let f = Filter::from_json(r#"{"type": 0, "payload":"\\fOo"}"#).unwrap();
@@ -991,6 +1307,12 @@ mod tests {
         let f = Filter::from_json(r#"{"type": 0, "ecu":"ec1"}"#).unwrap();
         let s = f.to_json();
         assert!(s.contains(r#""ecu":"ec1""#), "ecu wrong in {}", &s);
+        assert!(s.contains(r#""ecuIsRegex":false"#), "ecu wrong in {}", &s);
+
+        let f = Filter::from_json(r#"{"type": 0, "ecu":"ec1|ec2"}"#).unwrap();
+        let s = f.to_json();
+        assert!(s.contains(r#""ecu":"ec1|ec2""#), "ecu wrong in {}", &s);
+        assert!(s.contains(r#""ecuIsRegex":true"#), "ecu wrong in {}", &s);
 
         // field apid
         let f = Filter::from_json(r#"{"type": 0, "apid":"ap1"}"#).unwrap();
@@ -1001,11 +1323,46 @@ mod tests {
             f,
             &s
         );
+        assert!(
+            s.contains(r#""apidIsRegex":false"#),
+            "apidIsRegex wrong in {:?} as {}",
+            f,
+            &s
+        );
+        // field apid with regex
+        let f = Filter::from_json(r#"{"type": 0, "apid":"ap1|ap2"}"#).unwrap();
+        let s = f.to_json();
+        assert!(
+            s.contains(r#""apid":"ap1|ap2""#),
+            "apid wrong in {:?} as {}",
+            f,
+            &s
+        );
+        assert!(
+            s.contains(r#""apidIsRegex":true"#),
+            "apidIsRegex wrong in {:?} as {}",
+            f,
+            &s
+        );
 
         // field ctid
         let f = Filter::from_json(r#"{"type": 0, "ctid":"CTID"}"#).unwrap();
         let s = f.to_json();
         assert!(s.contains(r#""ctid":"CTID""#), "ctid wrong in {}", &s);
+        assert!(
+            s.contains(r#""ctidIsRegex":false"#),
+            "ctidIsRegex wrong in {}",
+            &s
+        );
+
+        let f = Filter::from_json(r#"{"type": 0, "ctid":"CTID", "ctidIsRegex":true}"#).unwrap();
+        let s = f.to_json();
+        assert!(s.contains(r#""ctid":"CTID""#), "ctid wrong in {}", &s);
+        assert!(
+            s.contains(r#""ctidIsRegex":true"#),
+            "ctidIsRegex wrong in {}",
+            &s
+        );
 
         // field ecu with 5 chars (should lead to parser error? todo)
         let f = Filter::from_json(r#"{"type": 0, "ecu":"12345"}"#).unwrap();
@@ -1169,7 +1526,7 @@ mod tests {
                 r#"<filter><ecuid>fOo</ecuid><enableecuid>1</enableecuid></filter>"#,
             ))
             .unwrap();
-            assert_eq!(r.ecu, DltChar4::from_str("fOo").ok());
+            assert_eq!(r.ecu, DltChar4::from_str("fOo").ok().map(Into::into));
         }
         #[test]
         fn apid() {
@@ -1183,18 +1540,50 @@ mod tests {
             // apid set and enableapid
             let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
                 r#"<filter><applicationid>fOo</applicationid><enableapplicationid>1</enableapplicationid></filter>"#,
-            ))
-            .unwrap();
-            assert_eq!(r.apid, DltChar4::from_str("fOo").ok());
+            )).unwrap();
+            assert_eq!(r.apid, Char4OrRegex::from_str("fOo", false).ok());
+
+            // apid set and enableapid, regex autodetect
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><applicationid>fOo|bla</applicationid><enableapplicationid>1</enableapplicationid></filter>"#,
+            )).unwrap();
+            assert_eq!(r.apid, Char4OrRegex::from_str("fOo|bla", true).ok());
+
+            // apid set and enableapid regex
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><applicationid>fOo</applicationid><enableapplicationid>1</enableapplicationid><enableregexp_Appid>1</enableregexp_Appid></filter>"#,
+            )).unwrap();
+            assert_eq!(r.apid, Char4OrRegex::from_str("fOo", true).ok());
+            // apid set and enableapid regex
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><applicationid>fOo</applicationid><enableapplicationid>1</enableapplicationid><enableregexp_Appid>0</enableregexp_Appid></filter>"#,
+            )).unwrap();
+            assert_eq!(r.apid, Char4OrRegex::from_str("fOo", false).ok());
         }
         #[test]
         fn ctid() {
             // ctid set and enablectid
             let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
                 r#"<filter><contextid>fOo</contextid><enablecontextid>1</enablecontextid></filter>"#,
-            ))
-            .unwrap();
-            assert_eq!(r.ctid, DltChar4::from_str("fOo").ok());
+            )).unwrap();
+            assert_eq!(r.ctid, Char4OrRegex::from_str("fOo", false).ok());
+
+            // ctid set and enablectid regex autodetect
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><contextid>^fOo</contextid><enablecontextid>1</enablecontextid></filter>"#,
+            )).unwrap();
+            assert_eq!(r.ctid, Char4OrRegex::from_str("^fOo", true).ok());
+
+            // ctid set and enablectid regex
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><contextid>fOo</contextid><enablecontextid>1</enablecontextid><enableregexp_Context>1</enableregexp_Context></filter>"#,
+            )).unwrap();
+            assert_eq!(r.ctid, Char4OrRegex::from_str("fOo", true).ok());
+            // ctid set and enablectid regex
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><contextid>fOo</contextid><enablecontextid>1</enablecontextid><enableregexp_Context>0</enableregexp_Context></filter>"#,
+            )).unwrap();
+            assert_eq!(r.ctid, Char4OrRegex::from_str("fOo", false).ok());
         }
 
         #[test]

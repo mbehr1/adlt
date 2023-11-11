@@ -181,6 +181,49 @@ pub fn utc_time_from_us(time_us: u64) -> chrono::NaiveDateTime {
     .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
 }
 
+/// Checks if a string contains any regular expression special characters.
+///
+/// # Arguments
+///
+/// * `s` - A string slice to check for regex special characters.
+///
+/// # Returns
+///
+/// A boolean value indicating whether the string contains any regex special characters ^$*+?()[]{}|.-\=!<,
+///
+/// # Example
+///
+/// ```
+/// use adlt::utils::contains_regex_chars;
+///
+/// let has_special_chars = contains_regex_chars("hello.*");
+/// assert_eq!(has_special_chars, true);
+/// ```
+pub fn contains_regex_chars(s: &str) -> bool {
+    s.contains(|c| {
+        c == '^'
+            || c == '$'
+            || c == '*'
+            || c == '+'
+            || c == '?'
+            || c == '('
+            || c == ')'
+            || c == '['
+            || c == ']'
+            || c == '{'
+            || c == '}'
+            || c == '|'
+            || c == '.'
+            || c == '-'
+            || c == '\\'
+            || c == '='
+            || c == '!'
+            || c == '<'
+            || c == '>'
+            || c == ','
+    })
+}
+
 static U8_HEX_LOW: [u8; 16] = [
     b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f',
 ];
@@ -804,6 +847,21 @@ mod tests {
         assert_eq!(utc_time.date().day(), 1);
         assert_eq!(utc_time.date().month(), 1);
         assert_eq!(utc_time.date().year(), 1970);
+    }
+
+    #[test]
+    fn test_contains_regex_chars() {
+        assert!(!contains_regex_chars("ecu"));
+        assert!(contains_regex_chars("ecu.*"));
+        assert!(contains_regex_chars("ecu\\d+"));
+        assert!(contains_regex_chars("ecu1|ecu2"));
+        assert!(!contains_regex_chars("123"));
+        assert!(contains_regex_chars("[]"));
+        assert!(contains_regex_chars("()"));
+        assert!(contains_regex_chars("\\\\"));
+        assert!(contains_regex_chars("!="));
+        assert!(contains_regex_chars("<>"));
+        assert!(contains_regex_chars(","));
     }
 
     #[test]

@@ -227,7 +227,7 @@ impl RewritePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dlt::DltChar4;
+    use crate::filter::Char4OrRegex;
     use crate::filter::FilterKind;
     use serde_json::json;
 
@@ -238,7 +238,7 @@ mod tests {
         let p = RewriteConfig::from_json(&cfg).unwrap();
         assert!(p.filter.enabled);
         assert_eq!(p.filter.kind, FilterKind::Positive); // default to pos filter
-        assert_eq!(p.filter.apid, Some(DltChar4::from_buf(b"foo\0")));
+        assert_eq!(p.filter.apid, Char4OrRegex::from_buf(b"foo\0").ok());
         assert_eq!(
             p.payload_regex.as_str(),
             Regex::new("^foo").unwrap().as_str()

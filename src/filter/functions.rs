@@ -1,11 +1,10 @@
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 
-use crate::dlt::DltChar4;
 use crate::dlt::DltMessage;
 use crate::dlt::Error;
 use crate::dlt::ErrorKind;
-use crate::filter::{Filter, FilterKind};
+use crate::filter::{filter_impl::Char4OrRegex, Filter, FilterKind};
 
 pub fn filter_as_streams(
     filters: &[Filter],
@@ -135,7 +134,7 @@ pub fn filters_from_convert_format<B: std::io::BufRead>(
             char4_buf[char4_len] = buf[offset + char4_len];
             char4_len += 1;
         }
-        let apid = DltChar4::from_buf(&char4_buf);
+        let apid = Char4OrRegex::from_buf(&char4_buf).ok();
         offset += 5;
         let mut char4_buf = [0u8, 0, 0, 0];
         let mut char4_len = 0;
@@ -143,11 +142,11 @@ pub fn filters_from_convert_format<B: std::io::BufRead>(
             char4_buf[char4_len] = buf[offset + char4_len];
             char4_len += 1;
         }
-        let ctid = DltChar4::from_buf(&char4_buf);
+        let ctid = Char4OrRegex::from_buf(&char4_buf).ok();
         offset += 5;
         let mut f = Filter::new(FilterKind::Positive);
-        f.apid = Some(apid);
-        f.ctid = Some(ctid);
+        f.apid = apid;
+        f.ctid = ctid;
         filters.push(f);
     }
 
@@ -235,7 +234,6 @@ mod tests {
 
     mod filters_from_convert_format {
         use super::*;
-        use std::str::FromStr;
 
         #[test]
         fn empty() {
@@ -261,15 +259,15 @@ mod tests {
             // too short (we expect exactly 10 chars per pair/filter)
             let r = filters_from_convert_format(r#"APID CTID "#.as_bytes()).unwrap();
             assert_eq!(r.len(), 1);
-            assert_eq!(r[0].apid, DltChar4::from_str("APID").ok());
-            assert_eq!(r[0].ctid, DltChar4::from_str("CTID").ok());
+            assert_eq!(r[0].apid, Char4OrRegex::from_str("APID", false).ok());
+            assert_eq!(r[0].ctid, Char4OrRegex::from_str("CTID", false).ok());
 
             let r = filters_from_convert_format(r#"APID CTID SYS- JOUR "#.as_bytes()).unwrap();
             assert_eq!(r.len(), 2);
-            assert_eq!(r[0].apid, DltChar4::from_str("APID").ok());
-            assert_eq!(r[0].ctid, DltChar4::from_str("CTID").ok());
-            assert_eq!(r[1].apid, DltChar4::from_str("SYS").ok()); // this get's shortened! (- ignored)
-            assert_eq!(r[1].ctid, DltChar4::from_str("JOUR").ok());
+            assert_eq!(r[0].apid, Char4OrRegex::from_str("APID", false).ok());
+            assert_eq!(r[0].ctid, Char4OrRegex::from_str("CTID", false).ok());
+            assert_eq!(r[1].apid, Char4OrRegex::from_str("SYS", false).ok()); // this get's shortened! (- ignored)
+            assert_eq!(r[1].ctid, Char4OrRegex::from_str("JOUR", false).ok());
         }
     }
 
@@ -379,7 +377,7 @@ mod tests {
             drop(tx);
             // one pos. filter should not match
             let mut pos_filter = Filter::new(FilterKind::Positive);
-            pos_filter.ecu = Some(DltChar4::from_buf(b"ECU2"));
+            pos_filter.ecu = Some(DltChar4::from_buf(b"ECU2")).map(Into::into);
             let (passed, filtered) = filter_as_streams(&[pos_filter], &rx, &tx2).unwrap();
             // check return value:
             assert_eq!(passed, 0);
@@ -396,7 +394,7 @@ mod tests {
             drop(tx);
             // one neg. filter -> should stay
             let mut neg_filter = Filter::new(FilterKind::Negative);
-            neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2"));
+            neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2")).map(Into::into);
             let (passed, filtered) = filter_as_streams(&[neg_filter], &rx, &tx2).unwrap();
             // check return value:
             assert_eq!(passed, 1);
@@ -412,7 +410,7 @@ mod tests {
             // one pos. filter (but without any criteria -> should match)
             // one neg that does not match -> should stay
             let mut neg_filter = Filter::new(FilterKind::Negative);
-            neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2"));
+            neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2")).map(Into::into);
             let msg = DltMessage::for_test();
             assert!(!neg_filter.matches(&msg));
             tx.send(DltMessage::for_test()).unwrap();
