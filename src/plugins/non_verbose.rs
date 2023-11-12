@@ -102,13 +102,13 @@ impl NonVerboseFibexData {
                 } else if pdu.signal_instances.len() == 1 {
                     match pdu.signal_instances[0].signal_ref.as_str() {
                         "S_UINT64" => DLT_TYPE_INFO_UINT | DLT_TYLE_64BIT as u32,
-                        "S_SINT64" => DLT_TYPE_INFO_SINT | DLT_TYLE_64BIT as u32,
+                        "S_INT64" | "S_SINT64" => DLT_TYPE_INFO_SINT | DLT_TYLE_64BIT as u32,
                         "S_UINT32" => DLT_TYPE_INFO_UINT | DLT_TYLE_32BIT as u32,
-                        "S_SINT32" => DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
+                        "S_INT32" | "S_SINT32" => DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
                         "S_UINT16" => DLT_TYPE_INFO_UINT | DLT_TYLE_16BIT as u32,
-                        "S_SINT16" => DLT_TYPE_INFO_SINT | DLT_TYLE_16BIT as u32,
+                        "S_INT16" | "S_SINT16" => DLT_TYPE_INFO_SINT | DLT_TYLE_16BIT as u32,
                         "S_UINT8" => DLT_TYPE_INFO_UINT | DLT_TYLE_8BIT as u32,
-                        "S_SINT8" => DLT_TYPE_INFO_SINT | DLT_TYLE_8BIT as u32,
+                        "S_INT8" | "S_SINT8" => DLT_TYPE_INFO_SINT | DLT_TYLE_8BIT as u32,
                         "S_BOOL" => DLT_TYPE_INFO_BOOL | DLT_TYLE_8BIT as u32,
                         "S_FLOA16" => DLT_TYPE_INFO_FLOA | DLT_TYLE_16BIT as u32, // todo???
                         "S_FLOA32" => DLT_TYPE_INFO_FLOA | DLT_TYLE_32BIT as u32,
