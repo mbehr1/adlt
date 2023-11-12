@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.44.1 - 2023-11-12
+#### Bug Fixes
+- **(nonverbose)** add S_INTxy as S_SINTxy - (66ef06e) - Matthias Behr
+- - -
+
 ## v0.44.0 - 2023-11-12
 #### Features
 - **(convert)** add plugins nonverbose, someip, rewrite, can - (60db247) - Matthias Behr
