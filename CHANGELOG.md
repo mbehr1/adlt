@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.44.0 - 2023-11-12
+#### Features
+- **(convert)** add plugins nonverbose, someip, rewrite, can - (60db247) - Matthias Behr
+#### Miscellaneous Chores
+- clippy fixes - (642be06) - Matthias Behr
+- - -
+
 ## v0.43.0 - 2023-11-11
 #### Features
 - support regex for ecu, apid, ctid - (4953492) - Matthias Behr
