@@ -1,4 +1,5 @@
 # adlt README
+
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC_BY--NC--SA_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 [![codecov](https://codecov.io/gh/mbehr1/adlt/branch/main/graph/badge.svg?[token=IXSFCJO277)](https://codecov.io/gh/mbehr1/adlt)
 [![Build&Test](https://github.com/mbehr1/adlt/actions/workflows/rust.yml/badge.svg)](https://github.com/mbehr1/adlt/actions?query=workflow%3ARust)
@@ -15,25 +16,30 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 - **Filter**...
 
 - **remote** server support: serve requests via wss. E.g. used with [DLT-Logs Visual Studio Code Extension](https://marketplace.visualstudio.com/items?itemName=mbehr1.dlt-logs).
-- builtin **plugins** e.g. for 
-  - non-verbose message decoding (remote only)
-  - SOME/IP payload decoding (remote only),
-  - **rewrite**ing of message timestamp or payload text (remote only),
-  - **file transfer** extraction/detection (remote & console).
+- builtin **plugins** e.g. for
+  - non-verbose message decoding
+  - SOME/IP payload decoding,
+  - **rewrite**ing of message timestamp or payload text,
+  - **file transfer** extraction/detection.
 
 ## Usage examples
 
 ### command line tool
 
 Show help for convert command:
+
 ```sh
 adlt convert -h
 ```
+
 Print ascii representation of a DLT file:
+
 ```sh
 adlt convert -a <dlt_file>
 ```
+
 Show all lifecycles (ecu, time range, number of messages and SW verion) of a DLT file:
+
 ```
 adlt convert <dlt_file>
 ...
@@ -42,12 +48,16 @@ LC#  1: ECU1 2021/06/24 08:50:58.529663 - 08:53:51 #   26523 <sw version if cont
 LC#  2: ECU1 2021/06/24 08:54:29 RESUME - 08:55:08 #  181337 <sw version>
 LC#  3: DLOG 2021/06/24 08:54:44.945600 - 08:54:44 #       1
 ```
+
 Output/extract a specific lifecycle into file sorted by timestamps per lifecycle:
+
 ```sh
 adlt convert <dlt_file> # to see the lifecycle ids. here e.g. LC#  1: ... and LC#  2: ...
 adlt convert -l 1 2 -o <new_file> --sort <dlt_file> # export LC #1 and #2 sorted into new_file
 ```
+
 Output only messages fitting to a filter into a new file:
+
 ```sh
 # filter_file can be in dlt-convert format as a list of APID CTIDs. E.g. echo "API1 CTI1  API2 CTI2 " > filter_file
 # or it can be in dlt-viewer dlf format (xml file with <?xml...><dltfilter><filter>... )
@@ -56,24 +66,27 @@ adlt convert -f <filter_file> -o <new_file> <dlt_file> # export all messages fit
 ```
 
 Show lifecycles and embedded file transfers:
+
 ```sh
 adlt convert --file_transfer=true --file_transfer_apid SYS --file_transfer_ctid FILE <dlt_file>
 ```
 
 Export all core dumps to directory 'dumps' from a set of DLT files:
+
 ```sh
 adlt convert --file_transfer='core*.gz' --file_transfer_path dumps --file_transfer_apid SYS --file_transfer_ctid FILE '**/*.dlt'
 ```
+
 ```
 ...
-LC# 35: ECU1 2020/12/19 10:29:22.158128 - 10:29:39 #   15115 
+LC# 35: ECU1 2020/12/19 10:29:22.158128 - 10:29:39 #   15115
 have 6 file transfers:
-LC# 12: 'context.1584997735.controller.812.txt', 60kb 
+LC# 12: 'context.1584997735.controller.812.txt', 60kb
 LC# 12: 'core.1584997735.controller.812.gz', 115kb , saved as: 'dumps/core.1584997735.controller.812.gz'
-LC# 20: 'context.1585074417.controller.802.txt', 60kb 
+LC# 20: 'context.1585074417.controller.802.txt', 60kb
 LC# 20: 'core.1585074417.controller.802.gz', 115kb , saved as: 'dumps/core.1585074417.controller.802.gz'
-LC# 35: 'screenshot_20741013-092935_KOMBI.png', 7kb 
-LC# 35: 'screenshot_20741013-092935_HUD.png', 1kb 
+LC# 35: 'screenshot_20741013-092935_KOMBI.png', 7kb
+LC# 35: 'screenshot_20741013-092935_HUD.png', 1kb
 ```
 
 ## Known Issues
@@ -98,6 +111,7 @@ See CI generated code coverage results here:
 [![codecov](https://codecov.io/gh/mbehr1/adlt/branch/main/graph/badge.svg?token=IXSFCJO277)](https://codecov.io/gh/mbehr1/adlt)
 
 To install grcov support:
+
 ```
 cargo install grcov
 rustup install nightly
@@ -106,10 +120,11 @@ rustup component add llvm-tools-preview
 ```
 
 To generate coverage:
+
 ```
-rm -rf ./target *.prof* 
+rm -rf ./target *.prof*
 export RUSTFLAGS="-Zinstrument-coverage"
-export LLVM_PROFILE_FILE="your_name-%p-%m.profraw" 
+export LLVM_PROFILE_FILE="your_name-%p-%m.profraw"
 cargo +nightly build
 cargo +nightly test
 grcov . --binary-path ./target/debug/ -s . -t html --branch --ignore-not-existing -o ./coverage/
@@ -121,37 +136,44 @@ open ./index.html
 
 Benchmark tests are using criterion and cargo-criterion.
 To install:
+
 ```
 cargo install cargo-criterion
 ```
 
 To run:
+
 ```
 cargo criterion
 or
 cargo bench
 ```
-The results will be printed on the console and an html report is created at 
+
+The results will be printed on the console and an html report is created at
 
 target/criterion/reports/index.html or
 target/criterion/report/index.html.
 
 To save a baseline use:
+
 ```
 cargo bench --bench dlt_benches -- --save-baseline <name>
 ```
 
 To compare against a saved baseline:
+
 ```
 cargo bench --bench dlt_benches -- --baseline <saved_baseline_name>
 ```
 
 ### perform a release
+
 ```
 cog bump --auto
 ```
 
 ### check commit messages
+
 ```
 cog check -l
 ```
