@@ -291,9 +291,18 @@ impl Lifecycle {
         let msg_lc_start = msg.reception_time_us - msg_timestamp_us;
         let cur_end_time = self.end_time();
 
-        let is_part_of_cur_lc = msg_lc_start <= cur_end_time
-            || msg_lc_start <= self.last_reception_time
-            || !msg.standard_header.has_timestamp() /*(msg_timestamp_us == 0 && self.max_timestamp_us == 0)*/;
+        // check for lc_ex005 use case:
+        // the msg lc start time is "slightly overlapping" if msg_lc_start is within the last 2s of the current lifecycle and the current lifecycle
+        // is at least 10s long.
+        // We should check here as well that the msg has a smaller timestamp than the last msg from same apid/ctid (TODO!)
+
+        let is_msg_lc_start_slightly_overlapping = msg_lc_start <= cur_end_time
+            && (msg_lc_start + (US_PER_SEC * 2)) > cur_end_time
+            && cur_end_time > (self.start_time + (US_PER_SEC * 10));
+
+        let is_part_of_cur_lc = (!is_msg_lc_start_slightly_overlapping
+            && (msg_lc_start <= cur_end_time || msg_lc_start <= self.last_reception_time))
+            || !msg.standard_header.has_timestamp();
 
         // resume (e.g. from Android STR) detection:
         // - a gap of >MIN_RESUME_RECEPTION_TIME_GAP s in reception time
@@ -1816,5 +1825,17 @@ mod tests {
         // we dont enforce that! assert!(nr_lcs[1].is_resume());
         // that's not the case! assert!(nr_lcs[0].start_time < nr_lcs[1].start_time);
         assert!(lcs[0].resume_start_time() < lcs[1].resume_start_time());
+    }
+
+    #[test]
+    fn lc_ex005() {
+        // an example from the ECU internally recording its own logs.
+        // Here the problem is that is has no realtime clock. So it persists the "realtime" at shutdown
+        // and loads that value at startup as new realtime. This leads to the realtime clock slightly
+        // getting stuck (i.e. the new lifecycle starts a bit before the old one ends)
+        assert_eq!(
+            nr_lcs_for_files(&[&get_tests_filename("lc_ex005.dlt").to_string_lossy()]),
+            (40285, 2)
+        );
     }
 }
