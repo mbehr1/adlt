@@ -3,7 +3,7 @@ use clap::{Arg, Command};
 use glob::{glob_with, MatchOptions};
 use slog::{debug, error, info, warn};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{prelude::*, BufWriter},
     sync::mpsc::channel,
@@ -169,6 +169,11 @@ pub fn add_subcommand(app: Command) -> Command {
                 .long("debug_verify_sort")
                 .num_args(0)
                 .help("Verify the sort order in the output (for --sort) per ECU and per ECU/APID. This is slow! Use it only for debugging!")
+            ).arg(
+                Arg::new("debug_verify_lcs")
+                .long("debug_verify_lcs")
+                .num_args(0)
+                .help("Verify that within each lifecycle the timestamps for msgs from an apid/ctid are ascending (+/-0.1s). This is slow! Use it only for debugging!")
             ),
     )
 }
@@ -208,6 +213,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     let sort_by_time = sub_m.get_flag("sort");
     let debug_verify_sort = sub_m.get_flag("debug_verify_sort");
+    let debug_verify_lcs = sub_m.get_flag("debug_verify_lcs");
 
     let do_anonimize = sub_m.get_flag("anon");
 
@@ -586,7 +592,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             let mut writer_screen_flush_pending = false;
 
             // debug function: verify sort order
-            let mut last_timestamp_by_lc_map= std::collections::BTreeMap::<adlt::lifecycle::LifecycleId, (u32, std::collections::HashMap::<DltChar4,(u32,adlt::dlt::DltMessageIndexType)>)>::new();
+            let mut last_timestamp_by_lc_map= BTreeMap::<adlt::lifecycle::LifecycleId, (u32, HashMap::<DltChar4,(u32,adlt::dlt::DltMessageIndexType)>)>::new();
+            // debug function: verify lcs timestamp
+            let mut last_lc_timestamp_by_ecu_apid_ctid_map = BTreeMap::<(u32, u32, u32), (u32, u32)>::new();
 
             for msg in t4_input {
 
@@ -623,6 +631,19 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                                     }
                                 }
                                 *last_apid_tmsp = (msg.timestamp_dms, msg.index);
+                            }
+                        }
+                    }
+                    if debug_verify_lcs {
+                        // we can verify only per apid/ctid so we do need msgs with ext header
+                        if let Some(ext_header) = &msg.extended_header {
+                            if !msg.is_ctrl_request() && !msg.is_ctrl_response() {
+                                let last_lc_timestamp = last_lc_timestamp_by_ecu_apid_ctid_map.entry((msg.ecu.as_u32le(), ext_header.apid.as_u32le(), ext_header.ctid.as_u32le())).or_insert((msg.lifecycle, msg.timestamp_dms));
+                                if msg.lifecycle == last_lc_timestamp.0 && msg.timestamp_dms < last_lc_timestamp.1 && last_lc_timestamp.1 - msg.timestamp_dms > 1000 {
+                                    // we warn only for >0.1s and no control responses (requests neither)
+                                    warn!(log, "lifecycle check: wrong timestamp order (>0.1s) for ecu {} at idx {} {:?}:{:?} lc {} got {} prev {}",msg.ecu, msg.index, msg.apid() , msg.ctid(), msg.lifecycle, msg.timestamp_dms, last_lc_timestamp.1);
+                                }
+                                *last_lc_timestamp = (msg.lifecycle, msg.timestamp_dms);
                             }
                         }
                     }
