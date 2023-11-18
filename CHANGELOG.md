@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.44.2 - 2023-11-18
+#### Bug Fixes
+- **(lifecycle)** detect overlapping lc start as sep lc - (cf9c85b) - Matthias Behr
+#### Documentation
+- update readme - (8650f8e) - Matthias Behr
+#### Miscellaneous Chores
+- prepare lc test for multiple files - (9dd0e8e) - Matthias Behr
+#### Tests
+- add debug_verify_lcs option - (579bc29) - Matthias Behr
+- add script to determine nr of lcs per folder - (d85c1e6) - Matthias Behr
+- - -
+
 ## v0.44.1 - 2023-11-12
 #### Bug Fixes
 - **(nonverbose)** add S_INTxy as S_SINTxy - (66ef06e) - Matthias Behr
