@@ -811,6 +811,7 @@ mod tests {
     use crate::lifecycle::*;
     use crate::utils::get_dlt_message_iterator;
     use crate::utils::get_new_namespace;
+    use crate::utils::sorting_multi_readeriterator::SequentialMultiIterator;
     use crate::utils::LowMarkBufReader;
     use ntest::timeout;
     use std::fs::File;
@@ -1702,7 +1703,26 @@ mod tests {
         assert_eq!(lc.sw_version.unwrap(), "SW 2");
     }
 
-    fn lcs_for_file(file_name: &str) -> (DltMessageIndexType, Vec<Lifecycle>) {
+    fn get_file_iterator(file_name: &str, namespace: u32) -> Box<dyn Iterator<Item = DltMessage>> {
+        let fi = File::open(file_name).unwrap();
+        const BUFREADER_CAPACITY: usize = 512 * 1024;
+        let buf_reader = LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
+        let it = get_dlt_message_iterator(
+            std::path::Path::new(file_name)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or(""),
+            0,
+            buf_reader,
+            namespace,
+            None,
+            None,
+            None,
+        );
+        it
+    }
+
+    fn lcs_for_files(file_names: &[&str]) -> (DltMessageIndexType, Vec<Lifecycle>) {
         let (tx_for_parse_thread, rx_from_parse_thread) = channel();
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
@@ -1712,22 +1732,12 @@ mod tests {
         });
         let junk_thread = std::thread::spawn(move || for _msg in rx_from_lc_thread {});
 
-        let fi = File::open(file_name).unwrap();
-        const BUFREADER_CAPACITY: usize = 512 * 1024;
+        let namespace = get_new_namespace();
+        let its = file_names
+            .iter()
+            .map(|file_name| get_file_iterator(file_name, namespace));
+        let mut it = SequentialMultiIterator::new_or_single_it(0, its);
         let mut messages_processed: DltMessageIndexType = 0;
-        let buf_reader = LowMarkBufReader::new(fi, BUFREADER_CAPACITY, DLT_MAX_STORAGE_MSG_SIZE);
-        let mut it = get_dlt_message_iterator(
-            std::path::Path::new(file_name)
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or(""),
-            messages_processed,
-            buf_reader,
-            get_new_namespace(),
-            None,
-            None,
-            None,
-        );
         for msg in it.by_ref() {
             messages_processed += 1;
             tx_for_parse_thread.send(msg).unwrap(); // todo handle error
@@ -1748,7 +1758,12 @@ mod tests {
     }
 
     fn nr_lcs_for_file(file_name: &str) -> (DltMessageIndexType, usize) {
-        let (messages_processed, nr_lcs) = lcs_for_file(file_name);
+        let (messages_processed, nr_lcs) = lcs_for_files(&[file_name]);
+        (messages_processed, nr_lcs.len())
+    }
+
+    fn nr_lcs_for_files(file_names: &[&str]) -> (DltMessageIndexType, usize) {
+        let (messages_processed, nr_lcs) = lcs_for_files(file_names);
         (messages_processed, nr_lcs.len())
     }
 
@@ -1794,7 +1809,7 @@ mod tests {
         // so the RESUME lifecycle later one even gets an earlier start time_stamp.
         // check that get_get_sorted_lifecycles_as_vec sorts the resumed after the resumed from
         let (messages_processed, lcs) =
-            lcs_for_file(&get_tests_filename("lc_ex004.dlt").to_string_lossy());
+            lcs_for_files(&[&get_tests_filename("lc_ex004.dlt").to_string_lossy()]);
         assert_eq!(messages_processed, 52451);
         assert_eq!(lcs.len(), 2);
         assert!(!lcs[0].is_resume());
