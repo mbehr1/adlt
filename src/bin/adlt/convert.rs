@@ -14,7 +14,7 @@ use adlt::{
     filter::functions::{filters_from_convert_format, filters_from_dlf},
     plugins::{
         anonymize::AnonymizePlugin, can::CanPlugin, file_transfer::FileTransferPlugin,
-        non_verbose::NonVerbosePlugin, plugin::Plugin, plugins_process_msgs,
+        muniic::MuniicPlugin, non_verbose::NonVerbosePlugin, plugin::Plugin, plugins_process_msgs,
         rewrite::RewritePlugin, someip::SomeipPlugin,
     },
     utils::{
@@ -163,6 +163,11 @@ pub fn add_subcommand(app: Command) -> Command {
                 .long("can_path")
                 .num_args(1)
                 .help("Path to directory with the FIBEX files for the CAN plugin. If not provided the CAN plugin is deactivated.")
+            ).arg(
+                Arg::new("muniic_path")
+                .long("muniic_path")
+                .num_args(1)
+                .help("Path to directory with the json files for the Muniic plugin. If not provided the Muniic plugin is deactivated.")
             )
             .arg(
                 Arg::new("debug_verify_sort")
@@ -227,6 +232,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         .get_one::<String>("rewrite_path")
         .map(|s| s.to_owned());
     let can_path = sub_m.get_one::<String>("can_path").map(|s| s.to_owned());
+    let muniic_path = sub_m.get_one::<String>("muniic_path").map(|s| s.to_owned());
 
     let index_first: adlt::dlt::DltMessageIndexType =
         match sub_m.get_one::<adlt::dlt::DltMessageIndexType>("index_first") {
@@ -511,6 +517,19 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     plugins_active.push(Box::new(plugin));
                 }
                 Err(e) => warn!(log, "CAN plugin failed with err: {:?}", e),
+            }
+        }
+    }
+    if let Some(muniic_path) = &muniic_path {
+        if let Some(sp_config) =
+            serde_json::json!({"name":"Muniic","jsonDir":muniic_path}).as_object()
+        {
+            match MuniicPlugin::from_json(sp_config) {
+                Ok(plugin) => {
+                    debug!(log, "Muniic plugin used: {}", plugin.name());
+                    plugins_active.push(Box::new(plugin));
+                }
+                Err(e) => warn!(log, "Muniic plugin failed with err: {:?}", e),
             }
         }
     }

@@ -1,0 +1,29 @@
+{
+  "map": {
+    "1228779599": {
+      "2944352002": "30bd25090b7a2a064b71ebcbf30882130cc68ed7",
+      "2874425776": "30bd25090b7a2a064b71ebcbf30882130cc68ed7"
+    }
+  },
+  "interfaces": {
+    "30bd25090b7a2a064b71ebcbf30882130cc68ed7": {
+      "name": "InitialData",
+      "id": 1228779599,
+      "integrity_protected": false,
+      "attributes": [
+        {
+          "name": "InitialDataApp1",
+          "id": 3478824001,
+          "type": "struct",
+          "elements": [
+            {
+              "name": "DataReady",
+              "type": "Boolean"
+            }
+          ]
+        }
+      ],
+      "methods": []
+    }
+  }
+}

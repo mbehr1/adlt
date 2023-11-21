@@ -1,10 +1,31 @@
 use std::{
     any::Any,
+    error::Error,
     fmt,
     sync::{Arc, RwLock},
 };
 
 use crate::dlt::DltMessage;
+
+#[derive(Debug)]
+pub struct PluginError {
+    msg: String,
+}
+
+impl PluginError {
+    pub fn new(msg: &str) -> Self {
+        PluginError {
+            msg: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for PluginError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", &self.msg)
+    }
+}
+impl Error for PluginError {}
 
 pub trait Plugin {
     fn name(&self) -> &str;

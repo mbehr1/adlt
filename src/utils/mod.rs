@@ -4,6 +4,7 @@ use crate::dlt::{
 use std::{
     collections::HashSet,
     io::{BufRead, BufReader, Read},
+    path::{Path, PathBuf},
     sync::{
         atomic::AtomicU32,
         mpsc::{Receiver, Sender},
@@ -692,6 +693,49 @@ pub fn payload_from_args<'a>(args: &'a [DltArg<'a>]) -> Vec<u8> {
     } else {
         vec![]
     }
+}
+
+/// get all files with a given extension in a directory
+///
+/// # Arguments
+/// * `dir` - the directory to search in
+/// * `extensions` - the extensions to search for
+/// * `recursive` - whether to recurse into sub directories
+///
+/// # Returns
+/// A vector with all the files found
+///
+/// todo refactor get_all_fibex_in_dir by this function call
+pub fn get_all_files_with_ext_in_dir(
+    dir: &Path,
+    extensions: &[&str],
+    recursive: bool,
+) -> Result<Vec<PathBuf>, std::io::Error> {
+    let entries = dir.read_dir()?;
+    let mut res = Vec::new();
+    for entry in entries.flatten() {
+        if entry.path().is_dir() {
+            if recursive && !entry.path().is_symlink() {
+                // dont recurse into symlinks
+                let sub = get_all_files_with_ext_in_dir(&entry.path(), extensions, true);
+                if let Ok(sub) = sub {
+                    for p in sub {
+                        res.push(p);
+                    }
+                } // we ignore errs from sub dirs.
+            }
+        } else if entry.path().is_file() {
+            if let Some(ext) = entry.path().extension() {
+                for e in extensions {
+                    if ext.eq_ignore_ascii_case(e) {
+                        res.push(entry.path().clone());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(res)
 }
 
 #[cfg(test)]
