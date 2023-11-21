@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.45.0 - 2023-11-21
+#### Features
+- add new plugin muniic - (830d63b) - Matthias Behr
+- - -
+
 ## v0.44.2 - 2023-11-18
 #### Bug Fixes
 - **(lifecycle)** detect overlapping lc start as sep lc - (cf9c85b) - Matthias Behr
