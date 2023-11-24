@@ -1,11 +1,11 @@
 use crate::{
     dlt::{DltArg, DltChar4, DltMessage, DLT_TYPE_INFO_UINT},
-    plugins::plugin::{Plugin, PluginError, PluginState},
+    plugins::plugin::{Plugin, PluginError, PluginState, TreeItem},
     utils::get_all_files_with_ext_in_dir,
 };
 
 use lazy_static::lazy_static;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 
 use std::{
@@ -42,7 +42,8 @@ pub struct MuniicPlugin {
     config_ctid: DltChar4,
     config_regex: regex::Regex,
     json_config: MuniicJsonConfig,
-    config_data_per_ecu: HashMap<DltChar4, ConfigPerEcu>,
+    config_data_per_ecu:
+        HashMap<DltChar4, ConfigPerEcu, nohash_hasher::BuildNoHashHasher<DltChar4>>,
 }
 
 impl Plugin for MuniicPlugin {
@@ -246,10 +247,7 @@ impl MuniicPlugin {
           } else {
               json!(null)
           },
-          /*{"label":format!("Services #{}, sorted by name", fibex_data.elements.services_map_by_sid_major.len()),
-          "children":services_by_name.iter().map(tree_item_for_service).collect::<Vec<serde_json::Value>>(),
-          },*/
-          {"label":format!("Interfaces #{}", cfg.interfaces.len())},
+          TreeItem { label: format!("Interfaces #{}, sorted by name", cfg.map.len()),children: { let mut vec=cfg.map.iter().map(|c|tree_item_for_interface(&cfg, c.0, c.1)).collect::<Vec<TreeItem>>(); vec.sort_by(|a,b|a.label.cmp(&b.label)); vec},..Default::default()},
       ],
       "warnings":warnings});
         state.generation += 1;
@@ -262,7 +260,7 @@ impl MuniicPlugin {
             config_regex: regex::Regex::new(r"Version: (\d+.\d+), git: (\w+), model hash: (\d+)")
                 .unwrap(),
             json_config: cfg,
-            config_data_per_ecu: HashMap::new(),
+            config_data_per_ecu: HashMap::default(),
         })
     }
 
@@ -306,6 +304,60 @@ impl MuniicPlugin {
                 payload_text.err(),
                 msg
             );
+        }
+    }
+}
+
+fn tree_item_for_interface(
+    cfg: &MuniicJsonConfig,
+    interface_id: &u32,
+    map_entry: &HashMap<String, String>,
+) -> TreeItem {
+    if !map_entry.is_empty() {
+        let interface_hash = map_entry
+            .get("0")
+            .or_else(|| Some(map_entry.values().next().unwrap()))
+            .unwrap(); // map_entry has at least 1 entry (either "0" or the first entry)
+        if let Some(interface) = cfg.interfaces.get(interface_hash) {
+            TreeItem {
+                label: format!("{} #{}", interface.name, interface.id),
+                tooltip: Some(format!("Versions #{}", map_entry.len())),
+                filter_frag: Some(
+                    json!({"ctid":"MMSG", "payloadRegex":format!(".* {} .*", interface.id)}),
+                ),
+                children: {
+                    let mut vec = interface
+                        .methods
+                        .iter()
+                        .map(|m| TreeItem {
+                            label: format!("Method {} #{}", m.1.name, m.1.id),
+                            filter_frag: Some(json!({"ctid":"MMSG", "payloadRegex":format!(".* {} {} .*", interface.id, m.1.id)})),
+                            ..Default::default()
+                        })
+                        .collect::<Vec<TreeItem>>();
+                    vec.extend(interface.attributes.iter().map(|a| TreeItem {
+                        label: format!("Attr. {} #{}", a.1.name, a.1.id),
+                        filter_frag: Some(json!({"ctid":"MMSG", "payloadRegex":format!(".* {} {} .*", interface.id, a.1.id)})),
+                        ..Default::default()
+                    }));
+                    vec.sort_by(|a, b| a.label.cmp(&b.label));
+                    vec
+                },
+                ..Default::default()
+            }
+        } else {
+            TreeItem {
+                label: format!(
+                    "<no interface with hash {}> #{}",
+                    interface_hash, interface_id
+                ),
+                ..Default::default()
+            }
+        }
+    } else {
+        TreeItem {
+            label: format!("<no versions> #{}", interface_id),
+            ..Default::default()
         }
     }
 }
@@ -534,11 +586,10 @@ fn decode_attribute<'a>(
                             processed_payload += 1;
                             let val = payload[0];
                             if let Some(values) = &attribute.values {
-                                for (name, value) in values {
-                                    if *value == val as i64 {
+                                if let Some(name) = values.get(&(val as i64)) {
                                         text += name;
-                                        break;
-                                    }
+                                } else {
+                                    //text += format!("({})", val).as_str();
                                 }
                             } else {
                                 text += format!("{}", val).as_str();
@@ -552,11 +603,10 @@ fn decode_attribute<'a>(
                             processed_payload += 2;
                             let val = u16::from_be_bytes([payload[0], payload[1]]);
                             if let Some(values) = &attribute.values {
-                                for (name, value) in values {
-                                    if *value == val as i64 {
+                                if let Some(name) = values.get(&(val as i64)) {
                                         text += name;
-                                        break;
-                                    }
+                                } else {
+                                    // text += format!("({})", val).as_str();
                                 }
                             } else {
                                 text += format!("{}", val).as_str();
@@ -572,11 +622,10 @@ fn decode_attribute<'a>(
                                 payload[0], payload[1], payload[2], payload[3],
                             ]);
                             if let Some(values) = &attribute.values {
-                                for (name, value) in values {
-                                    if *value == val as i64 {
+                                if let Some(name) = values.get(&(val as i64)) {
                                         text += name;
-                                        break;
-                                    }
+                                } else {
+                                    //text += format!("({})", val).as_str();
                                 }
                             } else {
                                 text += format!("{}", val).as_str();
@@ -602,32 +651,41 @@ fn decode_attribute<'a>(
     Some((text, &payload[processed_payload..]))
 }
 
+/// get interface for interface_id and version_hash
+///
+/// if version_hash is not found, "0" is used as fallback
 fn get_interface<'a>(
     cfg: &'a MuniicJsonConfig,
     if_version_hash: &str,
     interface_id: u32,
 ) -> Option<&'a MuniicInterface> {
-    let interface_hash = cfg.map.get(&interface_id)?.get(if_version_hash)?;
+    if let Some(interface_hash_map) = cfg.map.get(&interface_id) {
+        let interface_hash = interface_hash_map
+            .get(if_version_hash)
+            .or_else(|| interface_hash_map.get("0"))?;
     cfg.interfaces.get(interface_hash)
+    } else {
+        None
+    }
 }
 
 fn get_method_or_attribute(interface: &MuniicInterface, id: u32) -> Option<MethodOrAttribute> {
-    // todo change to hashmap!
-    for method in &interface.methods {
-        if method.id == id {
-            return Some(MethodOrAttribute::Method(method));
-        }
-    }
-    for attribute in &interface.attributes {
-        if attribute.id == id {
-            return Some(MethodOrAttribute::Attribute(attribute));
-        }
-    }
-    None
+    interface
+        .methods
+        .get(&id)
+        .map(MethodOrAttribute::Method)
+        .or_else(|| {
+            interface
+                .attributes
+                .get(&id)
+                .map(MethodOrAttribute::Attribute)
+        })
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
+type ValuesHashMap = HashMap<i64, String, nohash_hasher::BuildNoHashHasher<i64>>;
+
+#[derive(Deserialize, Debug)]
+// #[serde(deny_unknown_fields)]
 struct MuniicAttribute {
     name: String,
     #[serde(default)]
@@ -638,34 +696,87 @@ struct MuniicAttribute {
     size: u32,
     #[serde(default)]
     elements: Vec<MuniicAttribute>,
-    #[serde(rename = "enumType")]
-    enum_type: Option<String>,
+    // #[serde(rename = "enumType")]
+    // enum_type: Option<String>, // seems to be always "enum"
     #[serde(rename = "baseType")]
     base_type: Option<String>,
-    values: Option<HashMap<String, i64>>, // todo serialize as HashMap<Value, String>...
+    #[serde(default)]
+    #[serde(deserialize_with = "deserializer_values")]
+    values: Option<ValuesHashMap>,
     array_type: Option<Box<MuniicAttribute>>,
     max_size: Option<u32>,
-    #[serde(default)] // todo could skip as well
-    cdc_id: Option<u32>,
+    // #[serde(default)] // todo could skip as well
+    // cdc_id: Option<u32>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+fn deserializer_values<'de, D>(deserializer: D) -> Result<Option<ValuesHashMap>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<HashMap<String, i64>>::deserialize(deserializer) {
+        Ok(vec) => {
+            if let Some(vec) = vec {
+                Ok(Some(vec.into_iter().map(|x| (x.1, x.0)).collect::<HashMap<
+                    _,
+                    _,
+                    nohash_hasher::BuildNoHashHasher<i64>,
+                >>(
+                )))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+#[derive(Deserialize, Debug)]
+// #[serde(deny_unknown_fields)]
 struct MuniicMethod {
     name: String,
     id: u32,
+    // cdc_id: Option<u32>,
     in_args: Vec<MuniicAttribute>,
     out_args: Vec<MuniicAttribute>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
+// #[serde(deny_unknown_fields)]
 struct MuniicInterface {
     name: String,
     id: u32,
+    // channel: Option<String>,
+    // #[serde(default)]
+    // integrity_protected: bool,
+    #[serde(deserialize_with = "vec_with_id_deserializer_attr")]
+    attributes: HashMap<u32, MuniicAttribute, nohash_hasher::BuildNoHashHasher<u32>>,
     #[serde(default)]
-    integrity_protected: bool,
-    attributes: Vec<MuniicAttribute>,
-    #[serde(default)]
-    methods: Vec<MuniicMethod>,
+    #[serde(deserialize_with = "vec_with_id_deserializer_method")]
+    methods: HashMap<u32, MuniicMethod, nohash_hasher::BuildNoHashHasher<u32>>,
+}
+
+fn vec_with_id_deserializer_attr<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<u32, MuniicAttribute, nohash_hasher::BuildNoHashHasher<u32>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let vec = Vec::<MuniicAttribute>::deserialize(deserializer)?;
+    let map: HashMap<_, _, nohash_hasher::BuildNoHashHasher<u32>> =
+        vec.into_iter().map(|x| (x.id, x)).collect();
+    Ok(map)
+}
+
+fn vec_with_id_deserializer_method<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<u32, MuniicMethod, nohash_hasher::BuildNoHashHasher<u32>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let vec = Vec::<MuniicMethod>::deserialize(deserializer)?;
+    let map: HashMap<_, _, nohash_hasher::BuildNoHashHasher<u32>> =
+        vec.into_iter().map(|x| (x.id, x)).collect();
+    Ok(map)
 }
 
 enum MethodOrAttribute<'a> {
@@ -673,10 +784,11 @@ enum MethodOrAttribute<'a> {
     Attribute(&'a MuniicAttribute),
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Deserialize, Default, Debug)]
+// #[serde(deny_unknown_fields)]
 struct MuniicJsonConfig {
     /// map of interface id to object of hash/version to interface hash
-    map: HashMap<u32, HashMap<String, String>>,
+    map: HashMap<u32, HashMap<String, String>, nohash_hasher::BuildNoHashHasher<u32>>,
     /// map of interface hash to interface object
     interfaces: HashMap<String, MuniicInterface>,
 }
@@ -714,7 +826,8 @@ mod tests {
               "map":{
                 "1228779599": {
                   "2944352002": "30bd25090b7a2a064b71ebcbf30882130cc68ed7",
-                  "2874425776": "30bd25090b7a2a064b71ebcbf30882130cc68ed7"
+                  "2874425776": "30bd25090b7a2a064b71ebcbf30882130cc68ed7",
+                  "0": "30bd25090b7a2a064b71ebcbf30882130cc68ed7"
                 }
               },
               "interfaces":{
@@ -743,6 +856,61 @@ mod tests {
         let cfg: Result<MuniicJsonConfig, _> =
             serde_json::from_str(r#"{"map":{}, "interface":{}}"#);
         assert!(cfg.is_err());
+    }
+
+    #[test]
+    fn parse_min_json() {
+        // parse all.json file:
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("muniic");
+        test_dir.push("min.json");
+        let cfg: Result<MuniicJsonConfig, _> =
+            serde_json::from_str(&std::fs::read_to_string(test_dir).unwrap());
+        assert!(cfg.is_ok(), "{:?}", cfg.err());
+
+        // get an interface
+        let cfg = cfg.unwrap();
+        let interfaces = cfg.map.get(&1228779599).unwrap();
+        let interface_hash = interfaces.get("0"); // interface for default version/hash?
+                                                  // println!("{:?}", interface_hash);
+        let _interface = cfg.interfaces.get(interface_hash.unwrap());
+        // println!("{:?}", interface);
+
+        let interface = get_interface(&cfg, "0", 1228779599);
+        assert!(interface.is_some());
+        let interface = interface.unwrap();
+        assert_eq!(interface.id, 1228779599);
+
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("muniic");
+        let config = json!({"name":"Muniic", "enabled":true, "jsonDir":test_dir});
+        let plugin = MuniicPlugin::from_json(config.as_object().unwrap()).unwrap();
+
+        let state = plugin.state.read().unwrap();
+        assert_eq!(state.generation, 1);
+        let state_value = &state.value;
+        assert!(state_value.is_object());
+        let state_obj = state_value.as_object().unwrap();
+        assert!(state_obj.contains_key("name"));
+        assert!(state_obj.contains_key("treeItems"));
+        assert!(state_obj.contains_key("warnings"));
+
+        let tree_items = state_obj.get("treeItems").unwrap();
+        assert!(tree_items.is_array());
+        let tree_items = tree_items.as_array().unwrap();
+        // println!("tree_items: {:?}", tree_items);
+        assert_eq!(tree_items.len(), 2); // warnings and regular items
+                                         // check tree items:
+        let non_null_tree_items = tree_items
+            .iter()
+            .filter(|ti| !ti.is_null())
+            .collect::<Vec<&serde_json::Value>>();
+        assert_eq!(non_null_tree_items.len(), 1); // only regular items
+        let item1: TreeItem = serde_json::from_value(non_null_tree_items[0].clone()).unwrap();
+        let re = regex::Regex::new(r"Interfaces .*, sorted by name").unwrap();
+        assert!(re.is_match(&item1.label));
     }
 
 }
