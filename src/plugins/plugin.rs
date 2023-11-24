@@ -5,6 +5,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use serde::{Deserialize, Serialize};
+
 use crate::dlt::DltMessage;
 
 #[derive(Debug)]
@@ -105,4 +107,30 @@ impl Default for PluginState {
             internal_data: None,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(deny_unknown_fields)]
+/// Represents a tree item for the dlt-logs plugin tree view
+pub struct TreeItem {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    #[serde(rename = "filterFrag")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_frag: Option<serde_json::Value>,
+    #[serde(rename = "iconPath")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_path: Option<String>,
+    #[serde(rename = "contextValue")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_value: Option<String>,
+    #[serde(rename = "cmdCtx")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cmd_ctx: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub children: Vec<TreeItem>,
 }
