@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.45.1 - 2023-11-24
+#### Bug Fixes
+- **(muniic)** default hash, perf, treeItems - (ac05ed3) - Matthias Behr
+- - -
+
 ## v0.45.0 - 2023-11-21
 #### Features
 - add new plugin muniic - (830d63b) - Matthias Behr
