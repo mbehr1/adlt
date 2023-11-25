@@ -44,6 +44,7 @@ pub struct MuniicPlugin {
     json_config: MuniicJsonConfig,
     config_data_per_ecu:
         HashMap<DltChar4, ConfigPerEcu, nohash_hasher::BuildNoHashHasher<DltChar4>>,
+    warnings: Vec<String>,
 }
 
 impl Plugin for MuniicPlugin {
@@ -239,18 +240,21 @@ impl MuniicPlugin {
 
         state.value = json!({"name":name, "treeItems":[
           if !warnings.is_empty() {
-              json!({
-                  "label": format!("Warnings #{}", warnings.len()),
-                  "iconPath":"warning",
-                  "children": warnings.iter().map(|w|{json!({"label":w})}).collect::<Vec<serde_json::Value>>()
+                Some(TreeItem{
+                    label: format!("Warnings #{}", warnings.len()),
+                    icon_path:Some("warning".to_owned()),
+                    children: warnings.iter().map(|w|{TreeItem{label:w.to_owned(), ..Default::default() }}).collect::<Vec<TreeItem>>(),
+                    ..Default::default()
               })
           } else {
-              json!(null)
+                None
           },
           TreeItem { label: format!("Interfaces #{}, sorted by name", cfg.map.len()),children: { let mut vec=cfg.map.iter().map(|c|tree_item_for_interface(&cfg, c.0, c.1)).collect::<Vec<TreeItem>>(); vec.sort_by(|a,b|a.label.cmp(&b.label)); vec},..Default::default()},
+            TreeItem { label: format!("Configs received per ECU #{}", 0),children: Vec::new(),..Default::default()},
       ],
       "warnings":warnings});
         state.generation += 1;
+
         Ok(MuniicPlugin {
             name: name.unwrap(),
             enabled,
@@ -261,7 +265,63 @@ impl MuniicPlugin {
                 .unwrap(),
             json_config: cfg,
             config_data_per_ecu: HashMap::default(),
+            warnings,
         })
+    }
+
+    fn update_state(&mut self, reason: UpdateReason) {
+        if let Ok(mut state) = self.state.write() {
+            if let Some(tree_items) = state.value["treeItems"].as_array_mut() {
+                if tree_items.len() < 3 {
+                    // todo error?
+                    return;
+                }
+                match reason {
+                    UpdateReason::Warnings => {
+                        // and first item of treeItems:
+                        tree_items[0] = json!(if !self.warnings.is_empty() {
+                            Some(TreeItem {
+                                label: format!("Warnings #{}", self.warnings.len()),
+                                icon_path: Some("warning".to_owned()),
+                                children: self
+                                    .warnings
+                                    .iter()
+                                    .map(|w| TreeItem {
+                                        label: w.to_owned(),
+                                        ..Default::default()
+                                    })
+                                    .collect::<Vec<TreeItem>>(),
+                                ..Default::default()
+                            })
+                        } else {
+                            None
+                        });
+                        state.value["warnings"] = json!(self.warnings);
+                    }
+                    UpdateReason::ConfigPerEcu => {
+                        tree_items[2] = json!(Some(TreeItem {
+                            label: format!(
+                                "Configs received per ECU #{}",
+                                self.config_data_per_ecu.len()
+                            ),
+                            children: self
+                                .config_data_per_ecu
+                                .iter()
+                                .map(|c| TreeItem {
+                                    label: format!(
+                                        "{}: version:{}, git:{}, model_hash:{}",
+                                        c.0, c.1.version, c.1.git, c.1.model_hash
+                                    ),
+                                    ..Default::default()
+                                })
+                                .collect::<Vec<TreeItem>>(),
+                            ..Default::default()
+                        }));
+                    }
+                }
+                state.generation += 1;
+            }
+        }
     }
 
     fn process_cfg_msg(&mut self, msg: &mut DltMessage) {
@@ -274,25 +334,32 @@ impl MuniicPlugin {
             );*/
             let captures = self.config_regex.captures(&payload_text);
             if let Some(captures) = captures {
-                // todo or update only existing? avoid to_string()...
-                // todo if it changes update state
-
-                let version = captures.get(1).unwrap().as_str().to_string();
-                let git = captures.get(2).unwrap().as_str().to_string();
-                let model_hash = captures.get(3).unwrap().as_str().to_string();
-                /*println!(
-                    "MuniicPlugin: ecu {:?} got config msg version {} git {} model_hash {}",
-                    msg.ecu, version, git, model_hash
-                );*/
+                let version = captures.get(1).unwrap().as_str();
+                let git = captures.get(2).unwrap().as_str();
+                let model_hash = captures.get(3).unwrap().as_str();
+                if let Some(config) = self.config_data_per_ecu.get_mut(&msg.ecu) {
+                    if config.version != version
+                        || config.git != git
+                        || config.model_hash != model_hash
+                    {
+                        config.version = version.to_string();
+                        config.git = git.to_string();
+                        config.model_hash = model_hash.to_string();
+                        self.update_state(UpdateReason::ConfigPerEcu);
+                    }
+                } else {
                 self.config_data_per_ecu.insert(
                     msg.ecu, // todo store per ecu and apid?
                     ConfigPerEcu {
-                        version,
-                        git,
-                        model_hash,
+                            version: version.to_owned(),
+                            git: git.to_owned(),
+                            model_hash: model_hash.to_owned(),
                     },
                 );
+                    self.update_state(UpdateReason::ConfigPerEcu);
+                }
             } else {
+                // todo warning?
                 println!(
                     "MuniicPlugin: got config msg without regex match, msg={:?}",
                     msg
@@ -306,6 +373,10 @@ impl MuniicPlugin {
             );
         }
     }
+}
+enum UpdateReason {
+    Warnings,
+    ConfigPerEcu,
 }
 
 fn tree_item_for_interface(
@@ -901,13 +972,13 @@ mod tests {
         assert!(tree_items.is_array());
         let tree_items = tree_items.as_array().unwrap();
         // println!("tree_items: {:?}", tree_items);
-        assert_eq!(tree_items.len(), 2); // warnings and regular items
+        assert_eq!(tree_items.len(), 3); // warnings and regular items
                                          // check tree items:
         let non_null_tree_items = tree_items
             .iter()
             .filter(|ti| !ti.is_null())
             .collect::<Vec<&serde_json::Value>>();
-        assert_eq!(non_null_tree_items.len(), 1); // only regular items
+        assert_eq!(non_null_tree_items.len(), 2); // only regular items
         let item1: TreeItem = serde_json::from_value(non_null_tree_items[0].clone()).unwrap();
         let re = regex::Regex::new(r"Interfaces .*, sorted by name").unwrap();
         assert!(re.is_match(&item1.label));
