@@ -4,7 +4,6 @@ use crate::{
     utils::get_all_files_with_ext_in_dir,
 };
 
-use lazy_static::lazy_static;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -15,25 +14,27 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-#[derive(Debug)]
+// #[derive(Debug)]
+#[derive(Clone)]
 struct ConfigPerEcu {
-    #[allow(dead_code)]
     version: String,
-    #[allow(dead_code)]
     git: String,
     model_hash: String,
+    method_or_attribute_map:
+        HashMap<u64, Option<MethodOrAttribute>, nohash_hasher::BuildNoHashHasher<u64>>,
 }
 
-// static Default Config:
-lazy_static! {
-    static ref DEFAULT_CONFIG_PER_ECU: ConfigPerEcu = ConfigPerEcu {
+impl Default for ConfigPerEcu {
+    fn default() -> Self {
+        ConfigPerEcu {
         version: String::from("20.48"),
         git: String::from(""),
         model_hash: String::from("0"),
-    };
+            method_or_attribute_map: HashMap::default(),
+        }
+    }
 }
 
-#[derive(Debug)]
 pub struct MuniicPlugin {
     name: String,
     enabled: bool,
@@ -44,7 +45,18 @@ pub struct MuniicPlugin {
     json_config: MuniicJsonConfig,
     config_data_per_ecu:
         HashMap<DltChar4, ConfigPerEcu, nohash_hasher::BuildNoHashHasher<DltChar4>>,
+    default_config_per_ecu: ConfigPerEcu,
     warnings: Vec<String>,
+}
+
+impl std::fmt::Debug for MuniicPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MuniicPlugin")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("warnings", &self.warnings)
+            .finish()
+    }
 }
 
 impl Plugin for MuniicPlugin {
@@ -67,8 +79,8 @@ impl Plugin for MuniicPlugin {
                         // get config for this ecu:
                         let config = self
                             .config_data_per_ecu
-                            .get(&msg.ecu)
-                            .unwrap_or(&DEFAULT_CONFIG_PER_ECU);
+                            .get_mut(&msg.ecu)
+                            .unwrap_or(&mut self.default_config_per_ecu);
                         // parse arguments:
                         // 7 = interface id
                         // 8 = message id
@@ -98,37 +110,29 @@ impl Plugin for MuniicPlugin {
                                 }
                                 12 => {
                                     if let Some(interface_id) = interface_id {
-                                        if let Some(interface) = get_interface(
-                                            &self.json_config,
-                                            &config.model_hash,
-                                            interface_id,
-                                        ) {
-                                            /*println!(
-                                                "MuniicPlugin: got msg with interface_id {} interface={:?}",
-                                                interface_id, interface
-                                            );*/
                                             if let Some(message_id) = message_id {
                                                 if let Some(method_or_attribute) =
-                                                    get_method_or_attribute(interface, message_id)
+                                                get_method_or_attribute(
+                                                    &self.json_config,
+                                                    config,
+                                                    interface_id,
+                                                    message_id,
+                                                )
                                                 {
                                                     match method_or_attribute {
                                                         MethodOrAttribute::Method(method) => {
-                                                            //println!("MuniicPlugin: got msg with interface_id {} message_id {} method={:?}", interface_id, message_id, method);
                                                             new_payload_text =
                                                                 decode_method(method, &arg);
                                                         }
                                                         MethodOrAttribute::Attribute(attribute) => {
-                                                            //println!("MuniicPlugin: got msg with interface_id {} message_id {} attribute={:?}", interface_id, message_id, attribute);
-                                                            if let Some((
-                                                                payload_text,
-                                                                rem_payload,
-                                                            )) = decode_attribute(
+                                                        if let Some((payload_text, rem_payload)) =
+                                                            decode_attribute(
                                                                 attribute,
                                                                 arg.payload_raw,
                                                                 None,
-                                                            ) {
-                                                                new_payload_text =
-                                                                    Some(payload_text);
+                                                            )
+                                                        {
+                                                            new_payload_text = Some(payload_text);
                                                                 if !rem_payload.is_empty() {
                                                                     // println!("MuniicPlugin: got msg with interface_id {} message_id {} attribute={:?} but payload not empty: {:?}", interface_id, message_id, attribute, rem_payload);
                                                                     // todo add to warnings (just once for each interface_id/message_id)
@@ -144,13 +148,10 @@ impl Plugin for MuniicPlugin {
                                                 "MuniicPlugin: got msg with no message_id msg={:?}",
                                                 msg
                                             )
-                                            }
-                                        } else {
-                                            println!("MuniicPlugin: got msg with interface_id {} but no interface found", interface_id);
                                         }
                                     } else {
                                         println!(
-                                            "MuniicPlugin: got msg with no interval_id msg={:?}",
+                                            "MuniicPlugin: got msg with no interface_id msg={:?}",
                                             msg
                                         )
                                     }
@@ -265,6 +266,7 @@ impl MuniicPlugin {
                 .unwrap(),
             json_config: cfg,
             config_data_per_ecu: HashMap::default(),
+            default_config_per_ecu: ConfigPerEcu::default(),
             warnings,
         })
     }
@@ -337,6 +339,17 @@ impl MuniicPlugin {
                 let version = captures.get(1).unwrap().as_str();
                 let git = captures.get(2).unwrap().as_str();
                 let model_hash = captures.get(3).unwrap().as_str();
+                let check_model_hash = |warnings: &mut Vec<String>| {
+                    if !cfg_includes_model_hash(&self.json_config, model_hash) {
+                        let warn_msg = format!("unknown model_hash {} for ecu:{:?} received. Consider updating all.json!", model_hash, msg.ecu);
+                        if !warnings.contains(&warn_msg) {
+                            warnings.push(warn_msg);
+                            return true;
+                        }
+                    }
+                    false
+                };
+
                 if let Some(config) = self.config_data_per_ecu.get_mut(&msg.ecu) {
                     if config.version != version
                         || config.git != git
@@ -344,16 +357,29 @@ impl MuniicPlugin {
                     {
                         config.version = version.to_string();
                         config.git = git.to_string();
+                        if config.model_hash != model_hash {
+                            let warn_msg = format!("config msg with different model_hash for ecu:{:?} received, old:{}, new:{}", msg.ecu, config.model_hash, model_hash);
+                            config.method_or_attribute_map.clear();
                         config.model_hash = model_hash.to_string();
+                            if !self.warnings.contains(&warn_msg) {
+                                self.warnings.push(warn_msg);
+                                check_model_hash(&mut self.warnings);
+                                self.update_state(UpdateReason::Warnings);
+                        }
+                        }
                         self.update_state(UpdateReason::ConfigPerEcu);
                     }
                 } else {
+                    if check_model_hash(&mut self.warnings) {
+                        self.update_state(UpdateReason::Warnings);
+                    }
                 self.config_data_per_ecu.insert(
                     msg.ecu, // todo store per ecu and apid?
                     ConfigPerEcu {
                             version: version.to_owned(),
                             git: git.to_owned(),
                             model_hash: model_hash.to_owned(),
+                            method_or_attribute_map: HashMap::default(),
                     },
                 );
                     self.update_state(UpdateReason::ConfigPerEcu);
@@ -722,35 +748,49 @@ fn decode_attribute<'a>(
     Some((text, &payload[processed_payload..]))
 }
 
-/// get interface for interface_id and version_hash
-///
-/// if version_hash is not found, "0" is used as fallback
-fn get_interface<'a>(
-    cfg: &'a MuniicJsonConfig,
-    if_version_hash: &str,
+fn get_method_or_attribute<'a>(
+    json_config: &'a MuniicJsonConfig,
+    config: &'a mut ConfigPerEcu,
     interface_id: u32,
-) -> Option<&'a MuniicInterface> {
-    if let Some(interface_hash_map) = cfg.map.get(&interface_id) {
+    id: u32,
+) -> Option<&'a MethodOrAttribute> {
+    config
+        .method_or_attribute_map
+        .entry((interface_id as u64) << 32 | (id as u64))
+        .or_insert_with(|| {
+            let interface = if let Some(interface_hash_map) = json_config.map.get(&interface_id) {
         let interface_hash = interface_hash_map
-            .get(if_version_hash)
+                    .get(&config.model_hash)
             .or_else(|| interface_hash_map.get("0"))?;
-    cfg.interfaces.get(interface_hash)
+                json_config.interfaces.get(interface_hash)
     } else {
         None
-    }
-}
+            };
 
-fn get_method_or_attribute(interface: &MuniicInterface, id: u32) -> Option<MethodOrAttribute> {
-    interface
+            if let Some(interface) = interface {
+                let a = interface
         .methods
         .get(&id)
-        .map(MethodOrAttribute::Method)
+                    .map(|m| MethodOrAttribute::Method(m.clone()))
         .or_else(|| {
             interface
                 .attributes
                 .get(&id)
-                .map(MethodOrAttribute::Attribute)
+                            .map(|a| MethodOrAttribute::Attribute(a.clone()))
+                    });
+                a
+            } else {
+                None
+            }
         })
+        .as_ref()
+}
+
+/// check if config contains model_hash
+///
+/// returns whether there is at least one interface that includes the model_hash
+fn cfg_includes_model_hash(cfg: &MuniicJsonConfig, model_hash: &str) -> bool {
+    cfg.map.values().any(|v| v.contains_key(model_hash))
 }
 
 type ValuesHashMap = HashMap<i64, String, nohash_hasher::BuildNoHashHasher<i64>>;
@@ -820,39 +860,40 @@ struct MuniicInterface {
     // #[serde(default)]
     // integrity_protected: bool,
     #[serde(deserialize_with = "vec_with_id_deserializer_attr")]
-    attributes: HashMap<u32, MuniicAttribute, nohash_hasher::BuildNoHashHasher<u32>>,
+    attributes: HashMap<u32, Arc<MuniicAttribute>, nohash_hasher::BuildNoHashHasher<u32>>,
     #[serde(default)]
     #[serde(deserialize_with = "vec_with_id_deserializer_method")]
-    methods: HashMap<u32, MuniicMethod, nohash_hasher::BuildNoHashHasher<u32>>,
+    methods: HashMap<u32, Arc<MuniicMethod>, nohash_hasher::BuildNoHashHasher<u32>>,
 }
 
 fn vec_with_id_deserializer_attr<'de, D>(
     deserializer: D,
-) -> Result<HashMap<u32, MuniicAttribute, nohash_hasher::BuildNoHashHasher<u32>>, D::Error>
+) -> Result<HashMap<u32, Arc<MuniicAttribute>, nohash_hasher::BuildNoHashHasher<u32>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let vec = Vec::<MuniicAttribute>::deserialize(deserializer)?;
     let map: HashMap<_, _, nohash_hasher::BuildNoHashHasher<u32>> =
-        vec.into_iter().map(|x| (x.id, x)).collect();
+        vec.into_iter().map(|x| (x.id, Arc::new(x))).collect();
     Ok(map)
 }
 
 fn vec_with_id_deserializer_method<'de, D>(
     deserializer: D,
-) -> Result<HashMap<u32, MuniicMethod, nohash_hasher::BuildNoHashHasher<u32>>, D::Error>
+) -> Result<HashMap<u32, Arc<MuniicMethod>, nohash_hasher::BuildNoHashHasher<u32>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let vec = Vec::<MuniicMethod>::deserialize(deserializer)?;
     let map: HashMap<_, _, nohash_hasher::BuildNoHashHasher<u32>> =
-        vec.into_iter().map(|x| (x.id, x)).collect();
+        vec.into_iter().map(|x| (x.id, Arc::new(x))).collect();
     Ok(map)
 }
 
-enum MethodOrAttribute<'a> {
-    Method(&'a MuniicMethod),
-    Attribute(&'a MuniicAttribute),
+#[derive(Clone)]
+enum MethodOrAttribute {
+    Method(Arc<MuniicMethod>),
+    Attribute(Arc<MuniicAttribute>),
 }
 
 #[derive(Deserialize, Default, Debug)]
@@ -876,6 +917,24 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+
+    /// get interface for interface_id and version_hash
+    ///
+    /// if version_hash is not found, "0" is used as fallback
+    fn get_interface<'a>(
+        json_config: &'a MuniicJsonConfig,
+        config: &'a mut ConfigPerEcu,
+        interface_id: u32,
+    ) -> Option<&'a MuniicInterface> {
+        if let Some(interface_hash_map) = json_config.map.get(&interface_id) {
+            let interface_hash = interface_hash_map
+                .get(&config.model_hash)
+                .or_else(|| interface_hash_map.get("0"))?;
+            json_config.interfaces.get(interface_hash)
+        } else {
+            None
+        }
+    }
 
     #[test]
     fn init_plugin() {
@@ -948,7 +1007,11 @@ mod tests {
         let _interface = cfg.interfaces.get(interface_hash.unwrap());
         // println!("{:?}", interface);
 
-        let interface = get_interface(&cfg, "0", 1228779599);
+        assert!(cfg_includes_model_hash(&cfg, "2874425776"));
+        assert!(!cfg_includes_model_hash(&cfg, "2874425775"));
+
+        let mut config_per_ecu = ConfigPerEcu::default();
+        let interface = get_interface(&cfg, &mut config_per_ecu, 1228779599);
         assert!(interface.is_some());
         let interface = interface.unwrap();
         assert_eq!(interface.id, 1228779599);
