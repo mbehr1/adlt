@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.46.0 - 2023-11-28
+#### Bug Fixes
+- **(muniic)** more warnings, some perf - (a7913b0) - Matthias Behr
+- **(muniic)** add config to treeview - (298e20d) - Matthias Behr
+#### Features
+- **(serde)** add serializer for verbose payload - (5293dca) - Matthias Behr
+#### Tests
+- **(muniic)** add first content test - (1db7281) - Matthias Behr
+- - -
+
 ## v0.45.1 - 2023-11-24
 #### Bug Fixes
 - **(muniic)** default hash, perf, treeItems - (ac05ed3) - Matthias Behr
