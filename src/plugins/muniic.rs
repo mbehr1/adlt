@@ -27,9 +27,9 @@ struct ConfigPerEcu {
 impl Default for ConfigPerEcu {
     fn default() -> Self {
         ConfigPerEcu {
-        version: String::from("20.48"),
-        git: String::from(""),
-        model_hash: String::from("0"),
+            version: String::from("20.48"),
+            git: String::from(""),
+            model_hash: String::from("0"),
             method_or_attribute_map: HashMap::default(),
         }
     }
@@ -110,21 +110,21 @@ impl Plugin for MuniicPlugin {
                                 }
                                 12 => {
                                     if let Some(interface_id) = interface_id {
-                                            if let Some(message_id) = message_id {
-                                                if let Some(method_or_attribute) =
+                                        if let Some(message_id) = message_id {
+                                            if let Some(method_or_attribute) =
                                                 get_method_or_attribute(
                                                     &self.json_config,
                                                     config,
                                                     interface_id,
                                                     message_id,
                                                 )
-                                                {
-                                                    match method_or_attribute {
-                                                        MethodOrAttribute::Method(method) => {
-                                                            new_payload_text =
-                                                                decode_method(method, &arg);
-                                                        }
-                                                        MethodOrAttribute::Attribute(attribute) => {
+                                            {
+                                                match method_or_attribute {
+                                                    MethodOrAttribute::Method(method) => {
+                                                        new_payload_text =
+                                                            decode_method(method, &arg);
+                                                    }
+                                                    MethodOrAttribute::Attribute(attribute) => {
                                                         if let Some((payload_text, rem_payload)) =
                                                             decode_attribute(
                                                                 attribute,
@@ -133,18 +133,18 @@ impl Plugin for MuniicPlugin {
                                                             )
                                                         {
                                                             new_payload_text = Some(payload_text);
-                                                                if !rem_payload.is_empty() {
-                                                                    // println!("MuniicPlugin: got msg with interface_id {} message_id {} attribute={:?} but payload not empty: {:?}", interface_id, message_id, attribute, rem_payload);
-                                                                    // todo add to warnings (just once for each interface_id/message_id)
-                                                                }
+                                                            if !rem_payload.is_empty() {
+                                                                // println!("MuniicPlugin: got msg with interface_id {} message_id {} attribute={:?} but payload not empty: {:?}", interface_id, message_id, attribute, rem_payload);
+                                                                // todo add to warnings (just once for each interface_id/message_id)
                                                             }
                                                         }
                                                     }
-                                                } else {
-                                                    // println!("MuniicPlugin: got msg with interface_id {} but no method or attribute found", interface_id);
                                                 }
                                             } else {
-                                                println!(
+                                                // println!("MuniicPlugin: got msg with interface_id {} but no method or attribute found", interface_id);
+                                            }
+                                        } else {
+                                            println!(
                                                 "MuniicPlugin: got msg with no message_id msg={:?}",
                                                 msg
                                             )
@@ -360,12 +360,12 @@ impl MuniicPlugin {
                         if config.model_hash != model_hash {
                             let warn_msg = format!("config msg with different model_hash for ecu:{:?} received, old:{}, new:{}", msg.ecu, config.model_hash, model_hash);
                             config.method_or_attribute_map.clear();
-                        config.model_hash = model_hash.to_string();
+                            config.model_hash = model_hash.to_string();
                             if !self.warnings.contains(&warn_msg) {
                                 self.warnings.push(warn_msg);
                                 check_model_hash(&mut self.warnings);
                                 self.update_state(UpdateReason::Warnings);
-                        }
+                            }
                         }
                         self.update_state(UpdateReason::ConfigPerEcu);
                     }
@@ -373,15 +373,15 @@ impl MuniicPlugin {
                     if check_model_hash(&mut self.warnings) {
                         self.update_state(UpdateReason::Warnings);
                     }
-                self.config_data_per_ecu.insert(
-                    msg.ecu, // todo store per ecu and apid?
-                    ConfigPerEcu {
+                    self.config_data_per_ecu.insert(
+                        msg.ecu, // todo store per ecu and apid?
+                        ConfigPerEcu {
                             version: version.to_owned(),
                             git: git.to_owned(),
                             model_hash: model_hash.to_owned(),
                             method_or_attribute_map: HashMap::default(),
-                    },
-                );
+                        },
+                    );
                     self.update_state(UpdateReason::ConfigPerEcu);
                 }
             } else {
@@ -684,7 +684,7 @@ fn decode_attribute<'a>(
                             let val = payload[0];
                             if let Some(values) = &attribute.values {
                                 if let Some(name) = values.get(&(val as i64)) {
-                                        text += name;
+                                    text += name;
                                 } else {
                                     //text += format!("({})", val).as_str();
                                 }
@@ -701,7 +701,7 @@ fn decode_attribute<'a>(
                             let val = u16::from_be_bytes([payload[0], payload[1]]);
                             if let Some(values) = &attribute.values {
                                 if let Some(name) = values.get(&(val as i64)) {
-                                        text += name;
+                                    text += name;
                                 } else {
                                     // text += format!("({})", val).as_str();
                                 }
@@ -720,7 +720,7 @@ fn decode_attribute<'a>(
                             ]);
                             if let Some(values) = &attribute.values {
                                 if let Some(name) = values.get(&(val as i64)) {
-                                        text += name;
+                                    text += name;
                                 } else {
                                     //text += format!("({})", val).as_str();
                                 }
@@ -759,23 +759,23 @@ fn get_method_or_attribute<'a>(
         .entry((interface_id as u64) << 32 | (id as u64))
         .or_insert_with(|| {
             let interface = if let Some(interface_hash_map) = json_config.map.get(&interface_id) {
-        let interface_hash = interface_hash_map
+                let interface_hash = interface_hash_map
                     .get(&config.model_hash)
-            .or_else(|| interface_hash_map.get("0"))?;
+                    .or_else(|| interface_hash_map.get("0"))?;
                 json_config.interfaces.get(interface_hash)
-    } else {
-        None
+            } else {
+                None
             };
 
             if let Some(interface) = interface {
                 let a = interface
-        .methods
-        .get(&id)
+                    .methods
+                    .get(&id)
                     .map(|m| MethodOrAttribute::Method(m.clone()))
-        .or_else(|| {
-            interface
-                .attributes
-                .get(&id)
+                    .or_else(|| {
+                        interface
+                            .attributes
+                            .get(&id)
                             .map(|a| MethodOrAttribute::Attribute(a.clone()))
                     });
                 a
@@ -907,15 +907,12 @@ struct MuniicJsonConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-
-    use crate::{
-        dlt::{DltMessageIndexType, DLT_MAX_STORAGE_MSG_SIZE},
-        utils::sorting_multi_readeriterator::SequentialMultiIterator,
-        utils::{get_dlt_message_iterator, LowMarkBufReader},
-    };
 
     use super::*;
+    use crate::{
+        dlt::{DltExtendedHeader, DltStandardHeader, DLT_STD_HDR_BIG_ENDIAN, DLT_STD_HDR_VERSION},
+        dlt_args,
+    };
     use serde_json::json;
 
     /// get interface for interface_id and version_hash
@@ -945,8 +942,14 @@ mod tests {
         let plugin = MuniicPlugin::from_json(config.as_object().unwrap());
         assert!(plugin.is_ok());
         let plugin = plugin.unwrap();
-        assert_eq!(plugin.name, "Muniic");
-        assert!(plugin.enabled);
+        assert_eq!(plugin.name(), "Muniic");
+        assert!(plugin.enabled());
+        assert!(
+            format!("{:?}", plugin).contains("enabled: true"),
+            "{:?}",
+            plugin
+        );
+        println!("plugin: {:?}", plugin);
     }
 
     #[test]
@@ -1047,4 +1050,107 @@ mod tests {
         assert!(re.is_match(&item1.label));
     }
 
+    fn get_mmsg(ctid: DltChar4, payload: (u8, Vec<u8>)) -> DltMessage {
+        let is_big_endian = cfg!(target_endian = "big");
+        DltMessage {
+            index: 0,
+            reception_time_us: 1,
+            ecu: DltChar4::from_buf(b"ECU1"),
+            timestamp_dms: 2,
+            standard_header: DltStandardHeader {
+                htyp: if is_big_endian {
+                    DLT_STD_HDR_VERSION | DLT_STD_HDR_BIG_ENDIAN
+                } else {
+                    DLT_STD_HDR_VERSION
+                },
+                len: 1024,
+                mcnt: 0,
+            },
+            extended_header: Some(DltExtendedHeader {
+                verb_mstp_mtin: 1,
+                noar: payload.0,
+                apid: DltChar4::from_buf(b"APID"),
+                ctid,
+            }),
+            payload: payload.1,
+            payload_text: None,
+            lifecycle: 1,
+        }
+    }
+
+    #[test]
+    fn example_msg_min() {
+        let mut msg = get_mmsg(
+            DltChar4::from_buf(b"MMSG"),
+            dlt_args!(
+                "HmiP",
+                5711u32,
+                83029u32,
+                7u32,
+                0u32,
+                "InitialData...",
+                "[Hmi]",
+                1228779599u32,
+                3478824001u32,
+                "C/LC:",
+                2u8,
+                0u8,
+                serde_bytes::Bytes::new(&[1u8])
+            )
+            .unwrap(),
+        );
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("muniic");
+        let config = json!({"name":"Muniic", "enabled":true, "jsonDir":test_dir});
+        let mut plugin = MuniicPlugin::from_json(config.as_object().unwrap()).unwrap();
+
+        {
+            let state = plugin.state();
+            let state = state.read().unwrap();
+            assert_eq!(state.generation, 1);
+        }
+
+        // parse MMSG before any MDLT config msg is received. Should use default hash:
+        plugin.process_msg(&mut msg);
+        assert_eq!(
+            msg.payload_text,
+            Some("HmiP 5711 83029 7 0 InitialData... [Hmi] 1228779599 3478824001 C/LC: 2 0 InitialDataApp1(struct) = [DataReady(Boolean) = 1]".to_owned())
+        );
+
+        // process a MDLT msg:
+        let mut msg2 = get_mmsg(
+            DltChar4::from_buf(b"MDLT"),
+            dlt_args!("Version: 20.48, git: 123, model hash: 2874425776").unwrap(),
+        );
+        plugin.process_msg(&mut msg2);
+        {
+            // check that state generation is increased:
+            let state = plugin.state.read().unwrap();
+            assert_eq!(state.generation, 2);
+            assert!(state.value["warnings"].as_array().unwrap().is_empty());
+        }
+
+        msg.payload_text = None;
+        // parse MMSG after MDLT config msg is received. Should use proper hash:
+        plugin.process_msg(&mut msg);
+        assert_eq!(
+             msg.payload_text,
+             Some("HmiP 5711 83029 7 0 InitialData... [Hmi] 1228779599 3478824001 C/LC: 2 0 InitialDataApp1(struct) = [DataReady(Boolean) = 1]".to_owned())
+         );
+
+        // process a MDLT msg with unknown hash:
+        let mut msg2 = get_mmsg(
+            DltChar4::from_buf(b"MDLT"),
+            dlt_args!("Version: 20.48, git: 123, model hash: 2874425775").unwrap(),
+        );
+        plugin.process_msg(&mut msg2);
+        {
+            // check that state generation is increased:
+            let state = plugin.state.read().unwrap();
+            assert!(state.generation > 2);
+            // check that warnings are not empty:
+            assert!(!state.value["warnings"].as_array().unwrap().is_empty());
+        }
+    }
 }
