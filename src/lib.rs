@@ -4,6 +4,7 @@ pub mod dlt;
 pub mod filter;
 pub mod lifecycle;
 pub mod plugins;
+pub mod serde_verb_payload;
 pub mod utils;
 
 pub fn name() -> &'static str {
