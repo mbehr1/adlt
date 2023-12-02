@@ -2,6 +2,20 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.47.0 - 2023-12-02
+#### Bug Fixes
+- improve logic for corrupt serial msgs - (5a349ab) - Matthias Behr
+- add better log info for skipped bytes - (db7d50d) - Matthias Behr
+#### Documentation
+- update readme - (13c8c8b) - Matthias Behr
+#### Features
+- **(dls)** WIP/first basic support of reading serial dls - (9d346e4) - Matthias Behr
+#### Miscellaneous Chores
+- fmt and clippy fixes - (da41dff) - Matthias Behr
+#### Tests
+- add dls iterator test - (c3ab385) - Matthias Behr
+- - -
+
 ## v0.46.0 - 2023-11-28
 #### Bug Fixes
 - **(muniic)** more warnings, some perf - (a7913b0) - Matthias Behr
