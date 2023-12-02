@@ -22,6 +22,17 @@ This Rust crate provides a library and tools to help you to handle automotive DL
   - **rewrite**ing of message timestamp or payload text,
   - **file transfer** extraction/detection.
 
+## Supported file types
+
+You can open
+
+- DLT version 1 files
+- DLT serial header files
+- CAN "ASC" files with extension .asc
+- Android Logcat files with extension .txt
+
+Take care to not use `.txt`/`.asc` extension for DLT file. Files with those extensions will be parsed as CAN/Android Logcat files.
+
 ## Usage examples
 
 ### command line tool
