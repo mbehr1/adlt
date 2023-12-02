@@ -259,7 +259,7 @@ impl DltStandardHeader {
     /// changes the standard header (ignores) htyp to reflect
     /// whether ecu, session_id, timestamp is available!
     // todo example
-    fn to_write(
+    pub fn to_write(
         writer: &mut impl std::io::Write,
         std_hdr: &DltStandardHeader,
         ext_hdr: &Option<DltExtendedHeader>,
@@ -1689,7 +1689,7 @@ pub fn parse_dlt_with_serial_header(
                         Vec::from(&data[payload_offset..payload_offset + payload_size as usize]);
                     let sh = DltStorageHeader {
                         // todo... use start time? and header via config/parameter?
-                        secs: (2023 - 1970) * 365 * 24 * 60,
+                        secs: (2023 - 1970) * 365 * 24 * 60 * 60,
                         micros: 0,
                         ecu: DltChar4 {
                             char4: [b'D', b'L', b'S', 0],
