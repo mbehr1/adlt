@@ -1704,9 +1704,13 @@ pub fn parse_dlt_with_serial_header(
                     );
                     Ok((to_consume, msg))
                 } else {
-                    Err(Error::new(ErrorKind::NotEnoughData(
-                        stdh.len as usize - remaining,
-                    )))
+                    // we do return invalid data here as the stdh.len might be corrupt.
+                    // and we better search in the remaining data for a new serial header
+                    // than skipping the full range
+                    // todo consider this for DLT storage header as well?
+                    Err(Error::new(ErrorKind::InvalidData(String::from(
+                        "not enough data",
+                    ))))
                 }
             } else {
                 Err(Error::new(ErrorKind::InvalidData(String::from(
@@ -1727,6 +1731,8 @@ pub fn parse_dlt_with_serial_header(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
     use crate::{to_endian_vec, utils::*};
 
@@ -2888,5 +2894,76 @@ mod tests {
         assert!(matches!(r.err().unwrap().kind(), ErrorKind::InvalidData(_)));
         let (_res, m2) = parse_dlt_with_storage_header(1, &file[correct_msg_offset..]).unwrap();
         assert_eq!(m2.mcnt(), m.mcnt());
+    }
+
+    fn get_serial_msg_payload(mcnt: u8) -> Vec<u8> {
+        let mut file = Vec::new();
+
+        let standard_header = DltStandardHeader {
+            htyp: 1 << 5, // vers 1
+            mcnt,
+            len: 4,
+        };
+
+        let payload = vec![0x01u8];
+        let dls_pat = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
+
+        // DLS format = serial header patter, standard header, [ext header], payload
+        file.write_all(&dls_pat).unwrap();
+        //file.write_all(&b1).unwrap();
+
+        DltStandardHeader::to_write(
+            &mut file,
+            &standard_header,
+            &None,
+            None, // ecu already in storageheader
+            None, // session_id = None, todo
+            if standard_header.has_timestamp() {
+                Some(1000 + mcnt as u32)
+            } else {
+                None
+            },
+            &payload,
+        )
+        .unwrap();
+        file
+    }
+
+    #[test]
+    fn parse_serial() {
+        let vec_m1 = get_serial_msg_payload(1);
+        let vec_m2 = get_serial_msg_payload(2);
+
+        let file: Vec<_> = vec![vec_m1.clone(), vec_m2.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let (parsed, m1) = parse_dlt_with_serial_header(1, &file).unwrap();
+        assert_eq!(parsed, vec_m1.len());
+        assert_eq!(m1.mcnt(), 1);
+        let (parsed, m2) = parse_dlt_with_serial_header(1, &file[parsed..]).unwrap();
+        assert_eq!(parsed, vec_m2.len());
+        assert_eq!(m2.mcnt(), 2);
+    }
+
+    #[test]
+    fn parse_serial_corrupt() {
+        let vec_m1 = get_serial_msg_payload(1);
+        let vec_m2 = get_serial_msg_payload(2);
+
+        let mut file = Vec::new();
+        // first message has 1 byte lost
+        file.write_all(&vec_m1.as_slice()[0..vec_m1.len() - 1])
+            .unwrap();
+        // 2nd message is ok
+        file.write_all(&vec_m2).unwrap();
+
+        // we expect an error on the first message:
+        assert!(parse_dlt_with_serial_header(1, &file).is_err());
+        // so we do expect the 2nd message:
+        let (parsed, m2) = parse_dlt_with_serial_header(1, &file[vec_m1.len() - 1..]).unwrap();
+        assert_eq!(parsed, vec_m2.len());
+        assert_eq!(m2.mcnt(), 2);
     }
 }

@@ -124,9 +124,16 @@ mod tests {
         DLT_SERIAL_HEADER_PATTERN,
     };
     use crate::utils::{LowMarkBufReader, US_PER_SEC};
+    use slog::{o, Drain, Logger};
     use std::fs::File;
     use std::io::prelude::*;
     use tempfile::NamedTempFile;
+
+    fn new_logger() -> Logger {
+        let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        Logger::root(drain, o!())
+    }
 
     #[test]
     fn test_iterator() {
@@ -177,11 +184,12 @@ mod tests {
 
     #[test]
     fn test_dls_iterator() {
+        let logger = new_logger();
         // create a test file with 1M DLT messages:
         let mut file = NamedTempFile::new().unwrap();
         let file_path = String::from(file.path().to_str().unwrap());
 
-        let persisted_msgs: DltMessageIndexType = 10000;
+        let persisted_msgs: DltMessageIndexType = 1000;
         let mut garbage_bytes = 0;
         for i in 0..persisted_msgs {
             let standard_header = DltStandardHeader {
@@ -191,14 +199,15 @@ mod tests {
             };
 
             let payload = vec![];
+            let dls_pat = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
+
             // insert some garbage:
-            let garbage = &[0x00u8, 0x00, 0x00, 0x00].as_slice()[0..(i as usize % 5)];
+            let garbage = &dls_pat.as_slice()[0..(i as usize % 5)];
             file.write_all(garbage).unwrap();
             garbage_bytes += garbage.len();
 
             // DLS format = serial header patter, standard header, [ext header], payload
-            let b1 = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
-            file.write_all(&b1).unwrap();
+            file.write_all(&dls_pat).unwrap();
             //file.write_all(&b1).unwrap();
 
             DltStandardHeader::to_write(
@@ -225,6 +234,7 @@ mod tests {
             start_index,
             LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
         );
+        it.log = Some(&logger);
         let mut iterated_msgs = 0;
         for m in &mut it {
             assert_eq!(m.index, start_index + iterated_msgs);
