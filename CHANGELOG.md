@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.47.1 - 2023-12-10
+#### Bug Fixes
+- **(someip)** js conv function captures wrong json - (f51952c) - Matthias Behr
+- - -
+
 ## v0.47.0 - 2023-12-02
 #### Bug Fixes
 - improve logic for corrupt serial msgs - (5a349ab) - Matthias Behr
