@@ -6,7 +6,7 @@
 
 use crate::{
     dlt::{DltChar4, DltMessage, DltMessageNwType, DltMessageType},
-    plugins::plugin::{Plugin, PluginState},
+    plugins::plugin::{Plugin, PluginState, TreeItem},
 };
 use afibex::fibex::{
     get_all_fibex_in_dir, load_all_fibex, FibexData, FibexError, MethodIdType, Service,
@@ -413,6 +413,35 @@ fn sorted_mids_by_type(methods: &HashMap<u16, MethodIdType>) -> Vec<(u16, Method
     v
 }
 
+/// create a tree item for a parameter of an event
+fn tree_item_for_event_parameter(
+    service: &Service,
+    event_name: &str,
+    p: &afibex::fibex::Parameter,
+) -> TreeItem {
+    let no_name = "<no shortname>";
+    let no_desc = "<no desc>";
+
+    TreeItem {
+        label: p.short_name.as_deref().unwrap_or(no_name).to_string(),
+        tooltip: Some(format!(
+            "datatype:\n{}{}\ndescription:\n{}",
+            p.datatype_ref, if p.mandatory {""} else {" optional"},
+            p.desc.as_deref().unwrap_or(no_desc)
+        )),
+        filter_frag: service.short_name.as_ref().map(|service_name| {
+            serde_json::json!({
+                    "ctid":"TC",
+                    "payloadRegex":format!("^\\* \\(....:....\\) {}\\(....\\)\\.{}{{", service_name, event_name),
+                    "reportOptions":{
+                        "conversionFunction": js_conv_fn_for_parameter(p.short_name.as_deref().unwrap_or(no_name))
+                    }
+            })
+        }),
+        ..Default::default()
+    }
+}
+
 fn tree_item_for_mid_types(
     mid: &u16,
     method: &MethodTreeType,
@@ -455,6 +484,7 @@ fn tree_item_for_mid_types(
             })}else{
                 serde_json::Value::Null
             },
+            "children":m.input_params.iter().map(|p|tree_item_for_event_parameter(service, event_name, p)).collect::<Vec<TreeItem>>(),
             })
         }
         MethodTreeType::Field {
@@ -489,7 +519,7 @@ fn tree_item_for_mid_types(
                 "filterFrag": if let Some(short_name)=service.short_name.as_ref() {
                     serde_json::json!({
                         "ctid":"TC",
-                        "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)\\.(?:changed|set|get)_{}_field", short_name, field_name), // todo use ctid var and better filter for payload_raw!
+                        "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)\\.(?:changed|set|get)_{}_field", short_name, field_name),
                         "reportOptions":{
                             "conversionFunction": JS_FIELD_CONVERSION_FUNCTION
                         }
@@ -562,6 +592,40 @@ if(m!==null){
 }
 return o;
 ";
+
+/// similar to the static JS_EVENT_CONVERSION_FUNCTION but with a parameter name
+/// that is used to extract the value from the json data
+///
+/// todo refactor into single functions or some better replacement mechanism
+fn js_conv_fn_for_parameter(parameter_name: &str) -> String {
+    const JS_EVENT_P_CONVERSION_FUNCTION: &str = r"
+const r=/\)\.(.+?)(?={)(.*)\[OK\]$/;
+const m=r.exec(params.msg.payloadString);
+let o={};
+if(m!==null){
+    const evName=m[1];
+    if (m[2].length>2){
+        const v=JSON5.parse(m[2]);
+        const fn=(p,v,o)=> {
+            switch(typeof v){
+                case 'number': o[p]=v;break;
+                case 'string': o[`STATE_${p}`]=v;break;
+                case 'object': Object.keys(v).forEach(vc=>{fn(`${p}.${vc}`, v[vc],o);}); break;
+            }
+        };
+        fn(`${evName}.${pname}`,v[pname],o);
+    }else{
+        o[`EVENT_${evName}`]=1.0; // map to 1.0
+    }
+}
+return o;
+";
+
+    format!(
+        "const pname='{}';{}",
+        parameter_name, JS_EVENT_P_CONVERSION_FUNCTION
+    )
+}
 
 fn tree_item_for_service(
     ((sid, major), service): &(&(u16, u8), &Vec<Service>),
