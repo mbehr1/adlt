@@ -536,9 +536,12 @@ return o;
 // * (0000:0000) VehicleInformation(0001).RelativeTime1{}[OK]
 // * (0000:0000) VehicleInformation(0001).RelativeTime2{"timeSecondCounterRelative":94198733}[OK]
 // * (0000:0000) VehicleInformation(0001).RelativeTime3{"timeSecondCounterRelative":94198733,"timeDayCounterAbsolute":8284}[OK]
+// * (0000:0000) VehicleInformation(0001).RelativeTime4{"timeSecondCounterRelative":94198733,"timeDayCounterAbsoluteO":{"valid":true}}}[OK]
+
+// todo add a try/catch around json.parse
 
 const JS_EVENT_CONVERSION_FUNCTION: &str = r"
-const r=/\)\.(.+)(?={)(.*)\[OK\]$/;
+const r=/\)\.(.+?)(?={)(.*)\[OK\]$/;
 const m=r.exec(params.msg.payloadString);
 let o={};
 if(m!==null){
