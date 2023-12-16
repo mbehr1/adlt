@@ -201,32 +201,28 @@ impl NonVerboseFibexData {
                             .and_then(|t| t.parse::<u32>().ok());
 
                         let ext_header = if let Some(apid) = apid {
-                            if let Some(ctid) = ctid {
-                                let message_info = frame
-                                    .manufacturer_extension
-                                    .as_ref()
-                                    .and_then(|e| e.child_by_name("MESSAGE_INFO"))
-                                    .and_then(|a| a.text.as_deref());
-                                let mtin = match message_info {
-                                    Some("DLT_LOG_ERROR") => 2u8,
-                                    Some("DLT_LOG_WARN") => 3,
-                                    Some("DLT_LOG_INFO") => 4,
-                                    Some("DLT_LOG_DEBUG") => 5,
-                                    Some("DLT_LOG_VERBOSE") => 6,
-                                    _ => 1, // default to FATAL
-                                };
-                                let mstp = 0u8; // todo match MESSAGE_TYPE
+                            let message_info = frame
+                                .manufacturer_extension
+                                .as_ref()
+                                .and_then(|e| e.child_by_name("MESSAGE_INFO"))
+                                .and_then(|a| a.text.as_deref());
+                            let mtin = match message_info {
+                                Some("DLT_LOG_ERROR") => 2u8,
+                                Some("DLT_LOG_WARN") => 3,
+                                Some("DLT_LOG_INFO") => 4,
+                                Some("DLT_LOG_DEBUG") => 5,
+                                Some("DLT_LOG_VERBOSE") => 6,
+                                _ => 1, // default to FATAL
+                            };
+                            let mstp = 0u8; // todo match MESSAGE_TYPE
 
-                                let verb_mstp_mtin = (mtin << 4) | (mstp << 1);
-                                Some(DltExtendedHeader {
-                                    verb_mstp_mtin,
-                                    noar: 0, // todo or to nr pdus?
-                                    apid,
-                                    ctid,
-                                })
-                            } else {
-                                None
-                            }
+                            let verb_mstp_mtin = (mtin << 4) | (mstp << 1);
+                            Some(DltExtendedHeader {
+                                verb_mstp_mtin,
+                                noar: 0, // todo or to nr pdus?
+                                apid,
+                                ctid: ctid.unwrap_or_else(|| DltChar4::from_buf(&[0, 0, 0, 0])),
+                            })
                         } else {
                             None
                         };
@@ -643,6 +639,22 @@ mod tests {
             m.payload_as_text(),
             Ok("DTC set but env data was not yet fetched, lldErrorStatus= 12345678 , lldStatus= -23456789 , lldBcklTemp= 4711 , lldVccVoltage= 42".to_owned())
         );
+
+        // message without CTID (issue #116)
+        let mut m = DltMessage::for_test();
+        assert!(!m.is_verbose());
+        assert!(!m.is_big_endian());
+        m.ecu = DltChar4::from_buf(b"Ecu1");
+        m.payload = 800000000u32.to_le_bytes().into();
+        assert!(p.process_msg(&mut m));
+        assert_eq!(
+            m.payload_as_text(),
+            Ok("FooStateMachine, msg with no context".to_owned())
+        );
+        // verify that mstp, APID, CTID are updated as well:
+        assert_eq!(m.mstp(), DltMessageType::Log(DltMessageLogType::Info));
+        assert_eq!(m.apid(), Some(&DltChar4::from_buf(b"SYST")));
+        assert_eq!(m.ctid(), Some(&DltChar4::from_buf(&[0, 0, 0, 0])));
     }
 
     #[test]

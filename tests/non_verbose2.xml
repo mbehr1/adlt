@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?xml-stylesheet href="dlt_messages.xsl" type="text/xsl" ?>
-<fx:FIBEX xmlns:ho="http://www.asam.net/xml" xmlns:fx="http://www.asam.net/xml/fbx">
+<fx:FIBEX xmlns:ho="http://www.asam.net/xml"
+    xmlns:fx="http://www.asam.net/xml/fbx">
     <fx:PROJECT ID="adlt-non-verbose-1">
         <ho:SHORT-NAME>adlt non verbose test fibex 1</ho:SHORT-NAME>
     </fx:PROJECT>
@@ -36,6 +37,12 @@
                 <fx:BYTE-LENGTH>0</fx:BYTE-LENGTH>
                 <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
             </fx:PDU>
+            <fx:PDU ID="PAYLOAD_800000000_0_DESCR">
+                <ho:SHORT-NAME>FooMain_FooStateMachine wo Context</ho:SHORT-NAME>
+                <ho:DESC>FooStateMachine, msg with no context</ho:DESC>
+                <fx:BYTE-LENGTH>0</fx:BYTE-LENGTH>
+                <fx:PDU-TYPE>OTHER</fx:PDU-TYPE>
+            </fx:PDU>
         </fx:PDUS>
         <fx:FRAMES>
             <fx:FRAME ID="ID_805312382">
@@ -57,7 +64,25 @@
                     <MESSAGE_LINE_NUMBER>111</MESSAGE_LINE_NUMBER>
                 </fx:MANUFACTURER-EXTENSION>
             </fx:FRAME>
-            
+            <fx:FRAME ID="ID_800000000">
+                <ho:SHORT-NAME>FooMain_FooStateMachine wo Context</ho:SHORT-NAME>
+                <fx:BYTE-LENGTH>0</fx:BYTE-LENGTH>
+                <fx:FRAME-TYPE>OTHER</fx:FRAME-TYPE>
+                <fx:PDU-INSTANCES>
+                    <fx:PDU-INSTANCE ID="PDU_800000000_0_DESCR">
+                        <fx:PDU-REF ID-REF="PAYLOAD_800000000_0_DESCR"/>
+                        <fx:SEQUENCE-NUMBER>0</fx:SEQUENCE-NUMBER>
+                    </fx:PDU-INSTANCE>
+                </fx:PDU-INSTANCES>
+                <fx:MANUFACTURER-EXTENSION>
+                    <MESSAGE_TYPE>DLT_TYPE_LOG</MESSAGE_TYPE>
+                    <MESSAGE_INFO>DLT_LOG_INFO</MESSAGE_INFO>
+                    <APPLICATION_ID>SYST</APPLICATION_ID>
+                    <CONTEXT_ID/>
+                    <MESSAGE_SOURCE_FILE>src/FooMain_Statemachines_wo_Context.c</MESSAGE_SOURCE_FILE>
+                    <MESSAGE_LINE_NUMBER>4711</MESSAGE_LINE_NUMBER>
+                </fx:MANUFACTURER-EXTENSION>
+            </fx:FRAME>
         </fx:FRAMES>
     </fx:ELEMENTS>
 </fx:FIBEX>
