@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.47.3 - 2023-12-16
+#### Bug Fixes
+- **(nonverbose)** Support msgs without CTID - (c41b1ee) - Matthias Behr
+- - -
+
 ## v0.47.2 - 2023-12-10
 #### Bug Fixes
 - **(someip)** support reports for event parameter - (edfdce0) - Matthias Behr
