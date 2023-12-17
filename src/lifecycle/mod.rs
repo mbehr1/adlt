@@ -285,6 +285,8 @@ impl Lifecycle {
         // or
         // 2) the reception_time - timestamp <= reception_time from last msg
         // rationale for 2): there must be at least a gap of timestamp_us to last message if the message is from a new lifecycle
+        //   todo we removed this 2) below for the idlt traces (internally recorded traces where the new lifecycle starts with a
+        //   persisted time and thus the calculated slightly overlaps (and even the real as after persisting some logs might still be generated))
         // 3) msg has no timestamp. This is for logs without a timestamp (e.g. from SER) where no lifecycle detection is possible.
         let msg_timestamp_us = msg.timestamp_us();
         let msg_reception_time_us = msg.reception_time_us;
@@ -301,7 +303,7 @@ impl Lifecycle {
             && cur_end_time > (self.start_time + (US_PER_SEC * 10));
 
         let is_part_of_cur_lc = (!is_msg_lc_start_slightly_overlapping
-            && (msg_lc_start <= cur_end_time || msg_lc_start <= self.last_reception_time))
+            && (msg_lc_start <= cur_end_time/*|| msg_lc_start <= self.last_reception_time disabled as part of fixing lc_ex006 (idlts)*/))
             || !msg.standard_header.has_timestamp();
 
         // resume (e.g. from Android STR) detection:
@@ -1838,4 +1840,22 @@ mod tests {
             (40285, 2)
         );
     }
+
+    #[test]
+    fn lc_ex006() {
+        // another example from the ECU internally recording its own logs.
+        // Here the problem is that is has no realtime clock. So it persists the "realtime" at shutdown
+        // and loads that value at startup as new realtime.
+        // If then messages get assigned to the prev. lifecycle there was a weird behaviour that the
+        // calculated lc end time was far lower than the reception time. But the new lifecycle start time was earlier
+        // than the last reception time thus the messages were assigned to the prev lifecycle as well.
+        assert_eq!(
+            nr_lcs_for_files(&[&get_tests_filename("lc_ex006.dlt").to_string_lossy()]),
+            (4226 + 5775, 2)
+        );
+    }
+
+    // todo add tests and workaround for the regression introduced with the above
+    //  lc_ex006 fix. Regressions seem to be in lifecycles with corrupts/inplausible (most of them too high) timestamps
+    //  from an ecu with serial recording  (logs/tecmp around index 19413 and following)
 }
