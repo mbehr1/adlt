@@ -131,12 +131,19 @@ impl AnonymizePlugin {
             // todo might exclude other than log as well (nw trace,...)
             if !msg.is_verbose() {
                 if msg.payload.len() >= 4 {
-                    // keep only the msg id
-                    msg.payload = msg.payload[0..4].to_owned();
+                    // keep only the msg id and add the reception time in ms as 64bit value
+                    msg.payload = vec![
+                        msg.payload[0..4].to_owned(),
+                        crate::to_endian_vec!(msg.reception_time_us / 1000, msg.is_big_endian()),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<u8>>();
                 }
             } else {
                 // insert sample string
-                let sample_payload = "--anon";
+                let sample_payload =
+                    format!("--anon,reception_time:{}ms", msg.reception_time_us / 1000);
                 let payload = vec![
                     crate::to_endian_vec!(
                         (DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8),
