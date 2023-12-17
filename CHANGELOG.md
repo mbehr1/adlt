@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.47.4 - 2023-12-17
+#### Bug Fixes
+- **(anonymize)** add reception time in ms to payload - (6e9523c) - Matthias Behr
+- **(lifecycle)** handle idlts better - (293046a) - Matthias Behr
+- - -
+
 ## v0.47.3 - 2023-12-16
 #### Bug Fixes
 - **(nonverbose)** Support msgs without CTID - (c41b1ee) - Matthias Behr
