@@ -743,72 +743,59 @@ fn process_incoming_text_message<T: Read + Write>(
                                         // binary search, i.e. return the first info for a search expr
                                         let stream = &fc.streams[pos];
 
-                                        // for now just support one search: ~time_ms=...
-                                        // that returns the index of the filtered_msgs that is closest to the time:
+                                        // for now two supported search: ~time_ms=... index=...
+                                        // that returns the index of the filtered_msgs that is closest to the time/msg.index:
                                         if params_splitted.len() > 1 {
                                             let search_text = params_splitted[1];
                                             let search = search_text.split_once('=');
                                             match search {
-                                                Some(("time_ms", what)) => {
-                                                    // binary search in all msgs:
-                                                    let time_us = 1000u64
-                                                        * what.parse::<u64>().unwrap_or_default();
-
-                                                    // map of all lc.id/lifecycle_start_times:
-                                                    let lc_id_map = if let Some(pt) =
-                                                        &fc.parsing_thread
-                                                    {
-                                                        let lcs_r = &pt.lcs_r;
-                                                        let mut lc_map =
-                                                            BTreeMap::<LifecycleId, u64>::new(); // todo could opt with capacity
-                                                        if let Some(map_read_ref) = lcs_r.read() {
-                                                            map_read_ref.iter().for_each(
-                                                                |(k, l)| {
-                                                                    if let Some(l) = l.get_one() {
-                                                                        lc_map.insert(
-                                                                            *k,
-                                                                            l.start_time,
-                                                                        );
-                                                                    }
-                                                                },
-                                                            );
-                                                        };
-                                                        lc_map
-                                                    } else {
-                                                        BTreeMap::<LifecycleId, u64>::new()
-                                                    };
-
-                                                    let all_msgs_idx = fc
-                                                        .all_msgs
-                                                        .binary_search_by(|m| {
-                                                            let m_time =
-                                                                if let Some(lc_start_time) =
-                                                                    lc_id_map.get(&m.lifecycle)
-                                                                {
-                                                                    lc_start_time + m.timestamp_us()
-                                                                } else {
-                                                                    m.reception_time_us
-                                                                };
-                                                            m_time.cmp(&time_us)
-                                                        })
-                                                        .unwrap_or_else(|e| e);
-
-                                                    let index = if stream.filters_active {
-                                                        // return the index that fits to that:
-                                                        stream
-                                                            .filtered_msgs
-                                                            .binary_search(&all_msgs_idx)
-                                                            .unwrap_or_else(|e| e)
-                                                    } else {
-                                                        all_msgs_idx
-                                                    };
-
-                                                    websocket
+                                                Some(("index", what)) => {
+                                                    match binary_search_by_msg_index(
+                                                        what.parse::<DltMessageIndexType>()
+                                                            .unwrap_or_default(),
+                                                        fc,
+                                                        stream,
+                                                    ) {
+                                                        Ok(filtered_msg_index) => {
+                                                            websocket
+                                                                .write_message(Message::Text(
+                                                                    format!(
+                                                        "ok: {} {}={{\"filtered_msg_index\":{}}}",
+                                                        command, id, filtered_msg_index,
+                                                    ),
+                                                                ))
+                                                                .unwrap(); // todo
+                                                        }
+                                                        Err(err_reason) => {
+                                                            websocket
                                                         .write_message(Message::Text(format!(
-                                                            "ok: {} {}={{\"filtered_msg_index\":{}}}",
-                                                            command, id, index,
+                                                            "err: {} failed. stream_id {}: all_msgs#={}, search='{:?}', reason={}",
+                                                            command,
+                                                            id,
+                                                            fc.all_msgs.len(),
+                                                            search,
+                                                            err_reason
                                                         )))
                                                         .unwrap(); // todo
+                                                        }
+                                                    }
+                                                }
+                                                Some(("time_ms", what)) => {
+                                                    let filtered_msg_index =
+                                                        binary_search_by_time_us(
+                                                            1000u64
+                                                                * what
+                                                                    .parse::<u64>()
+                                                                    .unwrap_or_default(),
+                                                            fc,
+                                                            stream,
+                                                        );
+                                                    websocket
+                                                        .write_message(Message::Text(format!(
+                                                        "ok: {} {}={{\"filtered_msg_index\":{}}}",
+                                                        command, id, filtered_msg_index,
+                                                    )))
+                                                        .unwrap();
                                                 }
                                                 _ => {
                                                     websocket
@@ -1030,6 +1017,137 @@ fn process_incoming_text_message<T: Read + Write>(
             websocket
                 .write_message(Message::Text(format!("unknown command '{}'!", t)))
                 .unwrap(); // todo
+        }
+    }
+}
+
+/// find the index of the msg within the stream that is closest/next to the time given
+///
+fn binary_search_by_time_us(time_us: u64, fc: &FileContext, stream: &StreamContext) -> usize {
+    let lc_id_map = if let Some(pt) = &fc.parsing_thread {
+        let lcs_r = &pt.lcs_r;
+        let mut lc_map = BTreeMap::<LifecycleId, u64>::new(); // todo could opt with capacity
+        if let Some(map_read_ref) = lcs_r.read() {
+            map_read_ref.iter().for_each(|(k, l)| {
+                if let Some(l) = l.get_one() {
+                    lc_map.insert(*k, l.start_time);
+                }
+            });
+        };
+        lc_map
+    } else {
+        BTreeMap::<LifecycleId, u64>::new()
+    };
+    let all_msgs_idx = fc
+        .all_msgs
+        .binary_search_by(|m| {
+            let m_time = if let Some(lc_start_time) = lc_id_map.get(&m.lifecycle) {
+                lc_start_time + m.timestamp_us()
+            } else {
+                m.reception_time_us
+            };
+            m_time.cmp(&time_us)
+        })
+        .unwrap_or_else(|e| e);
+    if stream.filters_active {
+        // return the index that fits to that:
+        // binary_search is ok as the filtered_msgs are sorted by all_msgs index! (not by msg index)
+        stream
+            .filtered_msgs
+            .binary_search(&all_msgs_idx)
+            .unwrap_or_else(|e| e)
+    } else {
+        all_msgs_idx
+    }
+}
+
+/// find the index of the msg within the stream that is closest/next to the msg.index given
+///
+/// Handles both the sort_by_time and sort_by_index case.
+/// For sort_by_time it does have O(n=number of all_msgs) complexity. (todo: think about optimizations!)
+/// For sort_by_index it does have O(log(n)) complexity.
+///
+fn binary_search_by_msg_index(
+    wanted_msg_idx: DltMessageIndexType,
+    fc: &FileContext,
+    stream: &StreamContext,
+) -> Result<usize, String> {
+    if fc.sort_by_time {
+        // find the msg with that index in all_msgs.
+        // start with naive (O(n) approach)
+        // todo think about optimizations!
+        let wanted_msg = fc
+            .all_msgs
+            .iter()
+            .enumerate()
+            .find(|(_all_msgs_idx, m)| m.index == wanted_msg_idx);
+
+        if let Some((all_msgs_idx, msg)) = wanted_msg {
+            let filtered_msg_index = if stream.filters_active {
+                // map of all lc.id/lifecycle_start_times:
+                let lc_id_map = if let Some(pt) = &fc.parsing_thread {
+                    let lcs_r = &pt.lcs_r;
+                    let mut lc_map = BTreeMap::<LifecycleId, u64>::new(); // todo could opt with capacity
+                    if let Some(map_read_ref) = lcs_r.read() {
+                        map_read_ref.iter().for_each(|(k, l)| {
+                            if let Some(l) = l.get_one() {
+                                lc_map.insert(*k, l.start_time);
+                            }
+                        });
+                    };
+                    lc_map
+                } else {
+                    BTreeMap::<LifecycleId, u64>::new()
+                };
+
+                // search in the filtered msgs for the time:
+                // todo: think whether as a first step a search whether the msg is directly included
+                // makes sense. but binary_search cannot be used as the filtered_msgs are not sorted by index!
+                let wanted_msg_time_us = if let Some(lc_start_time) = lc_id_map.get(&msg.lifecycle)
+                {
+                    lc_start_time + msg.timestamp_us()
+                } else {
+                    msg.reception_time_us
+                };
+                stream
+                    .filtered_msgs
+                    .binary_search_by(|f_idx| {
+                        let msg = fc.all_msgs.get(*f_idx).unwrap();
+                        let m_time = if let Some(lc_start_time) = lc_id_map.get(&msg.lifecycle) {
+                            lc_start_time + msg.timestamp_us()
+                        } else {
+                            msg.reception_time_us
+                        };
+                        m_time.cmp(&wanted_msg_time_us)
+                    })
+                    .unwrap_or_else(|e| e)
+            } else {
+                // !filters_active
+                all_msgs_idx
+            };
+            Ok(filtered_msg_index)
+        } else {
+            Err(format!("sort_by_time, index={} unknown", wanted_msg_idx))
+        }
+    } else {
+        // sort by index
+        // anyhow the assumption that msg.index === index within all_msgs is wrong
+        // as e.g. plugins (file_transfer, etc.) can remove msgs from all_msgs!
+        // but we can do a fast binary search:
+        let all_msgs_idx = fc
+            .all_msgs
+            .binary_search_by(|m| m.index.cmp(&wanted_msg_idx));
+        if let Ok(all_msgs_idx) = all_msgs_idx {
+            let filtered_msg_index = stream
+                .filtered_msgs
+                .binary_search(&all_msgs_idx)
+                .unwrap_or_else(|e| e);
+            Ok(filtered_msg_index)
+        } else {
+            Err(format!(
+                "sort_by_index, index={} not in all_msgs",
+                wanted_msg_idx
+            ))
         }
     }
 }
