@@ -152,8 +152,8 @@ pub fn remote(
                             if e.kind() == std::io::ErrorKind::WouldBlock
                                 || e.kind() == std::io::ErrorKind::TimedOut =>
                         {
-                            let all_msgs_len = if file_context.is_some() {
-                                file_context.as_ref().unwrap().all_msgs.len()
+                            let all_msgs_len = if let Some(ctx) = &file_context {
+                                ctx.all_msgs.len()
                             } else {
                                 0
                             };
