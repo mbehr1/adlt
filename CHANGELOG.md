@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.48.0 - 2024-01-02
+#### Features
+- **(remote)** add binary_search_by_msg_index - (6573a6b) - Matthias Behr
+#### Miscellaneous Chores
+- clippy fix - (6f7b266) - Matthias Behr
+- - -
+
 ## v0.47.4 - 2023-12-17
 #### Bug Fixes
 - **(anonymize)** add reception time in ms to payload - (6e9523c) - Matthias Behr
