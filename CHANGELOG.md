@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.49.0 - 2024-01-13
+#### Features
+- **(someip)** add reports for methods as well - (e0551df) - Matthias Behr
+- **(someip)** use backslash for fire&forget requests - (40d6f37) - Matthias Behr
+- - -
+
 ## v0.48.0 - 2024-01-02
 #### Features
 - **(remote)** add binary_search_by_msg_index - (6573a6b) - Matthias Behr
