@@ -461,7 +461,10 @@ fn tree_item_for_mid_types(
                 "filterFrag": if let Some(service_name)=service.short_name.as_ref() {
                     serde_json::json!({
                         "ctid":"TC",
-                        "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)\\.{}{{", service_name, method_name), // todo use ctid var and better filter for payload_raw!
+                        "payloadRegex":format!("^(.) \\((....:....)\\) ({})\\(....\\)\\.({}){{(.*?)}}\\[.*\\]$", service_name, method_name), // todo use ctid var and better filter for payload_raw!
+                        "reportOptions":{
+                            "conversionFunction": JS_METHOD_CONVERSION_FUNCTION
+                        }
                 })}else{
                     serde_json::Value::Null
                 },
@@ -530,6 +533,37 @@ fn tree_item_for_mid_types(
         }
     }
 }
+
+// todo check behaviour for overlapping calls (e.g. call1, call2, resp1, resp2 or call1, call2, resp2, resp1)
+// todo check err != [OK] and add different represenation
+const JS_METHOD_CONVERSION_FUNCTION: &str = r#"
+const isResp = matches[1]==='<'
+const isFireForget = matches[1]==='\\'
+const isCall = matches[1]==='>' || isFireForget
+const sName = matches[3]
+const sidReq = matches[2]
+const fnName = matches[4]
+const callParams = matches[5]
+const map = params.localObj.pendingCallsMap || (params.localObj.pendingCallsMap=new Map())
+
+let tl
+if (isCall){
+  tl = new uv0.TL(sName, fnName, `(${callParams})`, { tooltip: matches[0], color: isFireForget? 'GreenYellow':'red', tlEnds: isFireForget, lateEval:true})  
+  map.set(sidReq, tl)
+}else if (isResp){
+  tl = map.get(sidReq)
+  if (tl === undefined){
+    tl = new uv0.TL(sName, fnName, `=${callParams}`, { tooltip: matches[0], color: 'yellow', tlEnds: isResp })
+  }else{
+    tl.color='green'
+    tl.value = tl.value + '=' + callParams
+    tl.tooltip = tl.tooltip + '\n' + matches[0]
+    tl = new uv0.TL(sName, fnName, tl.value, { color: 'green', tlEnds: true })
+    map.delete(sidReq)
+  }
+}     
+return tl
+"#;
 
 // todo fix BigInt conversion "23n" -> BigInt("23n") ? (can report handle really big ints?)
 // todo map someip events to events (EVENT_) and someip fields to STATE_ or values ...
@@ -626,6 +660,9 @@ return o;
         parameter_name, JS_EVENT_P_CONVERSION_FUNCTION
     )
 }
+
+// todo add overview for methods as well
+// nicest way would be to be able to set an array of filterFrags... but that needs support in dlt-logs first!
 
 fn tree_item_for_service(
     ((sid, major), service): &(&(u16, u8), &Vec<Service>),
