@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.50.0 - 2024-01-14
+#### Features
+- **(someip)** add methods to tree items for services and fields - (c408275) - Matthias Behr
+- - -
+
 ## v0.49.0 - 2024-01-13
 #### Features
 - **(someip)** add reports for methods as well - (e0551df) - Matthias Behr
