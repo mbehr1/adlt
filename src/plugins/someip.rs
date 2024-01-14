@@ -520,14 +520,24 @@ fn tree_item_for_mid_types(
                         },
                     ),
                 "filterFrag": if let Some(short_name)=service.short_name.as_ref() {
-                    serde_json::json!({
+                    let mut filter_frags = vec![
+                        serde_json::json!({
                         "ctid":"TC",
                         "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)\\.(?:changed|set|get)_{}_field", short_name, field_name),
                         "reportOptions":{
                             "conversionFunction": JS_FIELD_CONVERSION_FUNCTION
-                        }
-                })}else{
-                    serde_json::Value::Null
+                        }})];
+                    if getter.is_some() || setter.is_some(){
+                        filter_frags.push(serde_json::json!({
+                            "ctid":"TC",
+                            "payloadRegex":format!("^(.) \\((....:....)\\) ({})\\(....\\)\\.((?:set|get)_{}_field){{(.*?)}}\\[.*\\]$", short_name, field_name),
+                            "reportOptions":{
+                                "conversionFunction": JS_METHOD_CONVERSION_FUNCTION
+                            }}));
+                    }
+                    filter_frags
+                }else{
+                    vec![]
                 },
             })
         }
@@ -671,15 +681,23 @@ fn tree_item_for_service(
         "label":format!("{} v{}.{}, service id: {:5} (0x{:04x})", service[0].short_name.as_ref().unwrap_or(&"".to_string()), major, service[0].api_version.1, sid, sid),
         "tooltip":service[0].desc,
         "filterFrag": if let Some(short_name)=service[0].short_name.as_ref() {
-            serde_json::json!({
-                "ctid":"TC",
-                "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)", short_name), // todo use ctid var and better filter for payload_raw!
-                "reportOptions":{ // todo add only (set to null) if fields (others than methods are available)
-                    "conversionFunction": JS_FIELD_CONVERSION_FUNCTION
-                }
-        })
+            vec![
+                serde_json::json!({
+                    "ctid":"TC",
+                    "payloadRegex":format!("^. \\(....:....\\) {}\\(....\\)", short_name), // todo use ctid var and better filter for payload_raw!
+                    "reportOptions":{ // todo add only (set to null) if fields (others than methods are available)
+                        "conversionFunction": JS_FIELD_CONVERSION_FUNCTION
+                    }
+                }),
+                serde_json::json!({
+                    "ctid":"TC",
+                    "payloadRegex":format!("^(.) \\((....:....)\\) ({})\\(....\\)\\.(.*?){{(.*?)}}\\[.*\\]$", short_name),
+                    "reportOptions":{
+                        "conversionFunction": JS_METHOD_CONVERSION_FUNCTION
+                    }
+                })]
         }else{
-            serde_json::Value::Null
+            vec![]
         },
         "children": sorted_mids_by_type (&service[0].methods_by_mid).iter().map(|(mid, method)|{tree_item_for_mid_types(mid, method, &service[0])}).collect::<Vec<serde_json::Value>>(),
     })
