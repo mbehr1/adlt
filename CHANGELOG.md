@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.51.0 - 2024-01-21
+#### Features
+- **(remote)** add "fs" command to support full remote use-cases - (5bd987a) - Matthias Behr
+#### Tests
+- add tests for remote fs command - (15d1886) - Matthias Behr
+
+- - -
+
 ## v0.50.0 - 2024-01-14
 #### Features
 - **(someip)** add methods to tree items for services and fields - (c408275) - Matthias Behr
