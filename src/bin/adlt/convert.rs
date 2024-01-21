@@ -117,7 +117,7 @@ pub fn add_subcommand(app: Command) -> Command {
                 Arg::new("anon")
                 .long("anon")
                 .num_args(0)
-                .help("Anonymize the output. Rewrite APID, CTIDs,sw_versiona and payload. Useful only for lifecycle detection tests.")
+                .help("Anonymize the output. Rewrite APID, CTIDs,sw_versions and payload. Useful only for lifecycle detection tests.")
             )
             .arg(
                 Arg::new("file_transfer")
