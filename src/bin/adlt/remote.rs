@@ -2322,4 +2322,89 @@ mod tests {
         assert!(r.is_ok());
         t.join().unwrap(); // we have to use the result to handle panics from the thread as test error
     }
+
+    #[test]
+    fn type_for_filetype1() {
+        let path = std::path::PathBuf::new().join("tests");
+        let metadata = path.metadata().unwrap();
+        assert_eq!(type_for_filetype(&metadata.file_type(), &path), "dir");
+
+        let path = std::path::PathBuf::new().join("tests").join("lc_ex002.dlt");
+        let metadata = path.metadata().unwrap();
+        assert_eq!(type_for_filetype(&metadata.file_type(), &path), "file");
+        // todo how to add locally a symlink? (could add to tests dir and then remove?)
+    }
+
+    #[test]
+    fn test_process_fs_cmd_wrong_args() {
+        let log = new_logger();
+        let res = process_fs_cmd(
+            &log,
+            serde_json::json!({"path":"tests"}).as_object().unwrap(),
+        );
+        assert!(res.is_err()); // cmd missing
+        let res = process_fs_cmd(
+            &log,
+            serde_json::json!({"cmd":"unknown"}).as_object().unwrap(),
+        );
+        assert!(res.is_err()); // path missing
+        let res = process_fs_cmd(
+            &log,
+            serde_json::json!({"cmd":"unknown","path":"tests"})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(res.is_err()); // unknown cmd
+    }
+
+    #[test]
+    fn test_process_fs_cmd_stat() {
+        let log = new_logger();
+        let res = process_fs_cmd(
+            &log,
+            serde_json::json!({"cmd":"stat", "path":"tests"})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        //println!("res={}", serde_json::to_string_pretty(&res).unwrap());
+        assert!(res.is_object());
+        let res = res.as_object().unwrap();
+        let stat = res.get("stat");
+        assert!(stat.is_some());
+        let stat = stat.unwrap();
+        assert!(stat.is_object());
+        let stat = stat.as_object().unwrap();
+        assert_eq!(stat.get("type").unwrap(), "dir");
+    }
+
+    #[test]
+    fn test_process_fs_cmd_read_dir() {
+        let log = new_logger();
+        let res = process_fs_cmd(
+            &log,
+            serde_json::json!({"cmd":"readDirectory", "path":"tests"})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        //println!("res={}", serde_json::to_string_pretty(&res).unwrap());
+        assert!(res.is_array());
+        let res = res.as_array().unwrap();
+        assert!(!res.is_empty());
+        let first = res.first().unwrap();
+        assert!(first.is_object());
+        let first = first.as_object().unwrap();
+        assert!(first.contains_key("name"));
+        assert!(first.contains_key("type"));
+        // check that all entries have a name and type
+        for entry in res {
+            assert!(entry.is_object());
+            let entry = entry.as_object().unwrap();
+            assert!(entry.contains_key("name"));
+            assert!(entry.contains_key("type"));
+        }
+    }
 }
