@@ -1013,11 +1013,180 @@ fn process_incoming_text_message<T: Read + Write>(
                 }
             }
         }
+        "fs" => {
+            let params = serde_json::from_str::<serde_json::Value>(params);
+            if let Ok(params) = params {
+                if let Some(params) = params.as_object() {
+                    match process_fs_cmd(log, params) {
+                        Ok(res) => {
+                            websocket
+                                .write_message(Message::Text(format!("ok: {}:{}", command, res)))
+                                .unwrap(); // todo
+                        }
+                        Err(err_reason) => {
+                            websocket
+                                .write_message(Message::Text(format!(
+                                    "err: {} {}",
+                                    command, err_reason
+                                )))
+                                .unwrap(); // todo
+                        }
+                    }
+                } else {
+                    websocket
+                        .write_message(Message::Text(format!(
+                            "err: {} params not an object!",
+                            command,
+                        )))
+                        .unwrap(); // todo
+                }
+            } else {
+                websocket
+                    .write_message(Message::Text(format!(
+                        "err: {} failed parsing params with '{}'!",
+                        command,
+                        params.err().unwrap()
+                    )))
+                    .unwrap(); // todo
+            }
+        }
         _ => {
             websocket
                 .write_message(Message::Text(format!("unknown command '{}'!", t)))
                 .unwrap(); // todo
         }
+    }
+}
+
+/// Determines the type of a file based on its `FileType`.
+///
+/// # Arguments
+///
+/// * `file_type` - A `std::fs::FileType` instance representing the type of the file.
+/// * `path` - A `std::path::PathBuf` instance representing the path to the file.
+///
+/// # Returns
+///
+/// * A `&str` representing the type of the file. Possible values are "dir", "file", "symlink_dir", "symlink_file", "symlink" and "unknown".
+/// For symlinks the type of the target is returned (symlink_dir, symlink_file or symlink).
+///
+/// # Example
+///
+/// ```
+/// use std::fs;
+///
+/// let file_path:PathBuf = "/path/to/file".into();
+/// let file_type = fs::symlink_metadata(file_path).unwrap().file_type();
+/// let file_type_str = type_for_filetype(file_type);
+///
+/// println!("The file type is: {}", file_type_str);
+/// assert_eq!(file_type_str, "unknown");
+/// ```
+fn type_for_filetype(filetype: &std::fs::FileType, path: &std::path::PathBuf) -> &'static str {
+    if filetype.is_dir() {
+        "dir"
+    } else if filetype.is_file() {
+        "file"
+    } else if filetype.is_symlink() {
+        let sl_metadata = std::fs::metadata(path);
+        match sl_metadata {
+            Ok(sl_metadata) => {
+                if sl_metadata.file_type().is_dir() {
+                    "symlink_dir"
+                } else if sl_metadata.file_type().is_file() {
+                    "symlink_file"
+                } else {
+                    "symlink"
+                }
+            }
+            Err(_) => {
+                // e.g. for links to unmounted volumes...
+                "symlink"
+            }
+        }
+    } else {
+        "unknown"
+    }
+}
+
+/// process "fs" command
+///
+/// # Arguments
+/// * `log` - A reference to a `slog::Logger` instance for logging.
+/// * `params` - A reference to a `serde_json::Map<String, serde_json::Value>` instance representing the parameters of the command.
+///
+/// The params expects an object with the following keys:
+/// * `cmd` - A string representing the command to execute. Possible values are "stat" and "readDirectory".
+/// * `path` - A string representing the path to the file or directory to execute the command on.
+///
+/// # Returns
+/// For cmd "stat":
+/// * A `serde_json::Value` object with keys:
+///     * `type` - A string representing the type of the file. Possible values are "dir", "file", "symlink_dir", "symlink_file", "symlink" and "unknown".
+///     * `size` - A u64 representing the size of the file in bytes.
+///     * `mtime` - A u64 representing the modification time of the file in milliseconds since the UNIX epoch.
+///     * `ctime` - A u64 representing the creation time of the file in milliseconds since the UNIX epoch.
+///
+/// For cmd "readDirectory":
+/// * A `serde_json::Value` object representing an array of objects with keys:
+///   * `name` - A string representing the name of the file or directory.
+///   * `type` - A string representing the type of the file. Possible values are "dir", "file", "symlink_dir", "symlink_file", "symlink" and "unknown".
+///
+fn process_fs_cmd(
+    log: &slog::Logger,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    if let (Some(cmd), Some(path)) = (
+        params.get("cmd").and_then(serde_json::Value::as_str),
+        params.get("path").and_then(serde_json::Value::as_str),
+    ) {
+        info!(log, "process_fs_cmd(cmd:'{}', path:'{}')", cmd, path,);
+        match cmd {
+            "stat" => match std::fs::symlink_metadata(path) {
+                // todo size/mtime/ctime for the traversed dest?)
+                Ok(attr) => Ok(serde_json::json!({"stat":{
+                    "type":type_for_filetype(&attr.file_type(), &path.into()),
+                    "size":attr.len(),
+                    "mtime":attr.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis(),
+                    "ctime":attr.created().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis(),
+                }})),
+                Err(e) => Ok(serde_json::json!({"err":format!("stat failed with '{}'", e)})),
+            },
+            "readDirectory" => match std::fs::read_dir(path) {
+                Ok(entries) => Ok(entries
+                    .filter_map(|e| {
+                        e.ok().and_then(|e| {
+                            if let Some(file_name) = e.path().file_name() {
+                                let file_type = e.file_type().ok(); // Convert the Result to an Option
+                                Some(serde_json::json!({
+                                    "name": file_name.to_str().unwrap_or_default(),
+                                    "type": match file_type {
+                                        Some(file_type) => type_for_filetype(&file_type, &e.path()),
+                                        _ => "unknown",
+                                    },
+                                }))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .collect()),
+                Err(e) => {
+                    Ok(serde_json::json!({"err":format!("readDirectory failed with '{}'", e)}))
+                }
+            },
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("cmd '{}' unknown", cmd),
+            )
+            .into()),
+        }
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "params misses cmd or path",
+        )
+        .into())
     }
 }
 
