@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.52.0 - 2024-01-22
+#### Features
+- **(remote)** allow to set listen addr - (cedaf84) - Matthias Behr
+
+- - -
+
 ## v0.51.0 - 2024-01-21
 #### Features
 - **(remote)** add "fs" command to support full remote use-cases - (5bd987a) - Matthias Behr
