@@ -16,7 +16,7 @@ use adlt::{
         DltFileInfos, LowMarkBufReader,
     },
 };
-use clap::{Arg, Command};
+use clap::{value_parser, Arg, Command};
 use slog::{debug, error, info, warn};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -54,6 +54,14 @@ pub fn add_subcommand(app: Command) -> Command {
                     .help("websocket port to use")
                     .default_value("6665")
                     .value_parser(clap::value_parser!(u16)),
+            )
+            .arg(
+                Arg::new("listen_address")
+                    .long("listen_address")
+                    .num_args(1)
+                    .help("websocket ipv4 address to listen/bind to")
+                    .default_value("127.0.0.1")
+                    .value_parser(value_parser!(std::net::Ipv4Addr)),
             ),
     )
 }
@@ -66,15 +74,18 @@ pub fn remote(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // we do use log only if for local websocket related issues
     // for the remote part we do use an own logger logging to the websocket itself todo
+    let ip_addr = sub_m
+        .get_one::<std::net::Ipv4Addr>("listen_address")
+        .unwrap();
     let port = sub_m.get_one::<u16>("port").unwrap();
     info!(log, "remote starting"; "port" => port);
 
-    let server_addr = format!("127.0.0.1:{}", port); // todo ipv6???
+    let server_addr = format!("{}:{}", ip_addr, port); // todo ipv6???
     let server = TcpListener::bind(server_addr)?;
     // server.set_nonblocking(true).expect("Cannot set non-blocking");
-    info!(log, "remote server listening on 127.0.0.1:{}", port; "port" => port);
+    info!(log, "remote server listening on {}:{}", ip_addr, port; "port" => port);
     // output on stdout as well to help identify a proper startup even with verbose options:
-    println!("remote server listening on 127.0.0.1:{}", port);
+    println!("remote server listening on {}:{}", ip_addr, port); // todo use server.local_addr() and exist in case of failure?
 
     let mut spawned_servers = vec![];
     let no_more_incoming_cons = just_one_connection;
