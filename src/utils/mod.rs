@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::AtomicU32,
-        mpsc::{Receiver, Sender},
+        mpsc::{Receiver, SendError, Sender},
     },
 };
 mod lowmarkbufreader;
@@ -452,7 +452,7 @@ pub fn buffer_sort_messages<M, S>(
     lcs_r: &evmap::ReadHandle<crate::lifecycle::LifecycleId, crate::lifecycle::LifecycleItem, M, S>,
     windows_size_secs: u8,
     min_buffer_delay_us: u64,
-) -> Result<(), std::sync::mpsc::SendError<crate::dlt::DltMessage>>
+) -> Result<(), SendError<crate::dlt::DltMessage>>
 where
     S: std::hash::BuildHasher + Clone,
     M: 'static + Clone,

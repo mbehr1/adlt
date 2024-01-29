@@ -548,7 +548,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     });
 
     let (plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
-        let (tx_for_plugin_thread, rx_from_plugin_thread) = std::sync::mpsc::channel();
+        let (tx_for_plugin_thread, rx_from_plugin_thread) = channel();
         (
             Some(std::thread::spawn(move || {
                 plugins_process_msgs(rx_from_lc_thread, tx_for_plugin_thread, plugins_active)

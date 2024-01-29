@@ -23,7 +23,10 @@ use std::{
     fs::File,
     io::prelude::*,
     net::TcpListener,
-    sync::{Arc, RwLock},
+    sync::{
+        mpsc::{channel, Receiver, SendError},
+        Arc, RwLock,
+    },
     time::Instant,
 };
 use tungstenite::{
@@ -1825,11 +1828,9 @@ struct ParserThreadType {
     lc_thread: std::thread::JoinHandle<
         evmap::WriteHandle<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>,
     >,
-    sort_thread: Option<
-        std::thread::JoinHandle<Result<(), std::sync::mpsc::SendError<adlt::dlt::DltMessage>>>,
-    >,
+    sort_thread: Option<std::thread::JoinHandle<Result<(), SendError<adlt::dlt::DltMessage>>>>,
     lcs_r: evmap::ReadHandle<adlt::lifecycle::LifecycleId, adlt::lifecycle::Lifecycle>,
-    rx: std::sync::mpsc::Receiver<adlt::dlt::DltMessage>,
+    rx: Receiver<adlt::dlt::DltMessage>,
 }
 
 /// create a parser thread including a channel
@@ -1844,8 +1845,8 @@ fn create_parser_thread(
     sort_by_time: bool,
     plugins_active: Vec<Box<dyn Plugin + Send>>,
 ) -> ParserThreadType {
-    let (tx_for_parse_thread, rx_from_parse_thread) = std::sync::mpsc::channel();
-    let (tx_for_lc_thread, rx_from_lc_thread) = std::sync::mpsc::channel();
+    let (tx_for_parse_thread, rx_from_parse_thread) = channel();
+    let (tx_for_lc_thread, rx_from_lc_thread) = channel();
     let (lcs_r, lcs_w) =
         evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
 
@@ -1861,7 +1862,7 @@ fn create_parser_thread(
     });
 
     let (_plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
-        let (tx_for_plugin_thread, rx_from_plugin_thread) = std::sync::mpsc::channel();
+        let (tx_for_plugin_thread, rx_from_plugin_thread) = channel();
         (
             Some(std::thread::spawn(move || {
                 plugins_process_msgs(rx_from_lc_thread, tx_for_plugin_thread, plugins_active)
@@ -1874,7 +1875,7 @@ fn create_parser_thread(
 
     let sort_thread_lcs_r = lcs_r.clone();
     let (sort_thread, rx_final) = if sort_by_time {
-        let (tx_for_sort_thread, rx_from_sort_thread) = std::sync::mpsc::channel();
+        let (tx_for_sort_thread, rx_from_sort_thread) = channel();
         (
             Some(std::thread::spawn(move || {
                 adlt::utils::buffer_sort_messages(
