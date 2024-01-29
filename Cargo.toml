@@ -16,6 +16,11 @@ categories = ["command-line-utilities", "development-tools", "encoding", "parsin
 [lib]
 name = "adlt"
 path = "src/lib.rs"
+bench = false
+
+[[bin]]
+name = "adlt"
+bench = false
 
 [[bench]]
 name = "dlt_benches"
@@ -29,9 +34,13 @@ harness = false
 name = "filter_benches"
 harness = false
 
+[[bench]]
+name = "muniic_benches"
+harness = false
+
 [dev-dependencies]
 ntest = "0.9"
-criterion = "0.4"
+criterion = "0.5"
 
 [dependencies]
 slog = "2.7.0"

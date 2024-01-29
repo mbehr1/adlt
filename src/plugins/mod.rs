@@ -11,14 +11,16 @@ pub mod someip;
 use crate::dlt::DltMessage;
 use plugin::Plugin;
 
+use std::sync::mpsc::{Receiver, SendError, Sender};
+
 /// read all msgs from inflow, have all plugins process the msg.
 /// if any plugin returns false processing of that msg is stopped and the msg
 /// is not forwarded to outflow. Otherwise msg is forwarded to outflow.
 pub fn plugins_process_msgs(
-    inflow: std::sync::mpsc::Receiver<DltMessage>,
-    outflow: std::sync::mpsc::Sender<DltMessage>,
+    inflow: Receiver<DltMessage>,
+    outflow: Sender<DltMessage>,
     mut plugins_active: Vec<Box<dyn Plugin + Send>>,
-) -> Result<Vec<Box<dyn Plugin + Send>>, std::sync::mpsc::SendError<DltMessage>> {
+) -> Result<Vec<Box<dyn Plugin + Send>>, SendError<DltMessage>> {
     for mut msg in inflow {
         // pass the message through the plugins (sequentially, not parallel)
         let mut forward_msg = true;
@@ -42,6 +44,7 @@ mod tests {
 
     use super::{factory::get_plugin, *};
     use serde_json::json;
+    use std::sync::mpsc::channel;
 
     #[test]
     fn end_and_return_plugins() {
@@ -54,8 +57,8 @@ mod tests {
 
         let plugins_active = vec![plugin];
 
-        let (to_fn, inflow) = std::sync::mpsc::channel();
-        let (outflow, _from_fn) = std::sync::mpsc::channel();
+        let (to_fn, inflow) = channel();
+        let (outflow, _from_fn) = channel();
 
         let t1 = std::thread::spawn(move || plugins_process_msgs(inflow, outflow, plugins_active));
         drop(to_fn);

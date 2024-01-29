@@ -1,5 +1,4 @@
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 
 use crate::dlt::DltMessage;
 use crate::dlt::Error;
@@ -157,7 +156,6 @@ pub fn filters_from_convert_format<B: std::io::BufRead>(
 mod tests {
     use super::*;
     use crate::dlt::DltChar4;
-    use std::sync::mpsc::channel;
 
     mod filters_from_dlt {
         use super::*;
@@ -272,6 +270,8 @@ mod tests {
     }
 
     mod filter_as_streams {
+        use std::sync::mpsc::channel;
+
         use super::*;
         use crate::dlt::DltMessage;
         #[test]
