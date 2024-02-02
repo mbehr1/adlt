@@ -583,7 +583,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         let (tx_filter, rx_filter) = channel();
         (
             Some(std::thread::spawn(move || {
-                adlt::filter::functions::filter_as_streams(&filters, &rx_final, &tx_filter)
+                adlt::filter::functions::filter_as_streams(&filters, &rx_final, &|m| {
+                    tx_filter.send(m)
+                })
             })),
             rx_filter,
         )
