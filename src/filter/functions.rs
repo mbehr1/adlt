@@ -4,10 +4,9 @@ use crate::dlt::DltMessage;
 use crate::dlt::Error;
 use crate::dlt::ErrorKind;
 use crate::filter::{filter_impl::Char4OrRegex, Filter, FilterKind};
+use crate::SendMsgFnReturnType;
 
-pub fn filter_as_streams<
-    F: Fn(DltMessage) -> Result<(), std::sync::mpsc::SendError<DltMessage>>,
->(
+pub fn filter_as_streams<F: Fn(DltMessage) -> SendMsgFnReturnType>(
     filters: &[Filter],
     input: &Receiver<DltMessage>,
     // we want to be able to use both channel and sync_channel... so need to pass &|m|channel.send(m)
@@ -382,7 +381,7 @@ mod tests {
             drop(tx);
             // one pos. filter should not match
             let mut pos_filter = Filter::new(FilterKind::Positive);
-            pos_filter.ecu = Some(DltChar4::from_buf(b"ECU2")).map(Into::into);
+            pos_filter.ecu = Some(Into::into(DltChar4::from_buf(b"ECU2")));
             let (passed, filtered) =
                 filter_as_streams(&[pos_filter], &rx, &|m| tx2.send(m)).unwrap();
             // check return value:
@@ -400,7 +399,7 @@ mod tests {
             drop(tx);
             // one neg. filter -> should stay
             let mut neg_filter = Filter::new(FilterKind::Negative);
-            neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2")).map(Into::into);
+            neg_filter.ecu = Some(Into::into(DltChar4::from_buf(b"ECU2")));
             let (passed, filtered) =
                 filter_as_streams(&[neg_filter], &rx, &|m| tx2.send(m)).unwrap();
             // check return value:
@@ -417,7 +416,7 @@ mod tests {
             // one pos. filter (but without any criteria -> should match)
             // one neg that does not match -> should stay
             let mut neg_filter = Filter::new(FilterKind::Negative);
-            neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2")).map(Into::into);
+            neg_filter.ecu = Some(Into::into(DltChar4::from_buf(b"ECU2")));
             let msg = DltMessage::for_test();
             assert!(!neg_filter.matches(&msg));
             tx.send(DltMessage::for_test()).unwrap();

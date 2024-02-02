@@ -787,7 +787,7 @@ mod tests {
         let m = DltMessage::for_test();
         f.ecu = Char4OrRegex::from_buf(b"ECU1").ok();
         assert!(!f.matches(&m));
-        f.ecu = Some(m.ecu).map(Into::into);
+        f.ecu = Some(Into::into(m.ecu));
         assert!(f.matches(&m));
         // and now negated:
         f.negate_match = true;
@@ -869,7 +869,7 @@ mod tests {
         f.apid = Char4OrRegex::from_buf(b"APID").ok();
         // neither ecu nor apid match
         assert!(!f.matches(&m));
-        f.ecu = Some(m.ecu).map(Into::into);
+        f.ecu = Some(Into::into(m.ecu));
         // now ecu matches but not apid
         assert!(!f.matches(&m));
         m.extended_header = Some(DltExtendedHeader {
@@ -880,7 +880,7 @@ mod tests {
         });
         // now both match:
         assert!(f.matches(&m));
-        f.ecu = Some(DltChar4::from_buf(b"ECU1")).map(Into::into);
+        f.ecu = Some(Into::into(DltChar4::from_buf(b"ECU1")));
         // now apid matches but not ecu:
         assert!(!f.matches(&m));
     }
@@ -888,12 +888,12 @@ mod tests {
     fn match_ecu_and_apid_and_ctid() {
         let mut f = Filter::new(FilterKind::Positive);
         let mut m = DltMessage::for_test();
-        f.ecu = Some(DltChar4::from_buf(b"ECU1")).map(Into::into);
-        f.apid = Some(DltChar4::from_buf(b"APID")).map(Into::into);
-        f.ctid = Some(DltChar4::from_buf(b"CTID")).map(Into::into);
+        f.ecu = Some(Into::into(DltChar4::from_buf(b"ECU1")));
+        f.apid = Some(Into::into(DltChar4::from_buf(b"APID")));
+        f.ctid = Some(Into::into(DltChar4::from_buf(b"CTID")));
         // neither ecu nor apid match
         assert!(!f.matches(&m));
-        f.ecu = Some(m.ecu).map(Into::into);
+        f.ecu = Some(Into::into(m.ecu));
         // now ecu matches but not apid
         assert!(!f.matches(&m));
         m.extended_header = Some(DltExtendedHeader {
@@ -1174,7 +1174,7 @@ mod tests {
         assert_eq!(f.kind, FilterKind::Positive);
         assert_eq!(
             f.ecu,
-            Some(DltChar4::from_buf(&[0x41, 1, 0x43, 0])).map(Into::into)
+            Some(Into::into(DltChar4::from_buf(&[0x41, 1, 0x43, 0])))
         );
 
         // proper type and apid

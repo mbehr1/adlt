@@ -1093,7 +1093,7 @@ mod tests {
 
         assert!(!p.transfers.is_empty());
         assert_eq!(p.transfers_idx.get(&(m.ecu, m.lifecycle, 42)), Some(&0));
-        let transfer = p.transfers.get(0).unwrap();
+        let transfer = p.transfers.first().unwrap();
         println!("transfer={:?}", transfer); // we can debug print it
         assert_eq!(transfer.state, FileTransferState::Complete);
 
@@ -1228,7 +1228,7 @@ mod tests {
             p.transfers_idx.get(&(m_flst.ecu, m_flst.lifecycle, 17)),
             Some(&0)
         );
-        let transfer = p.transfers.get(0).unwrap();
+        let transfer = p.transfers.first().unwrap();
         assert_eq!(transfer.state, FileTransferState::Complete);
 
         let state = p.state.read().unwrap();
@@ -1361,7 +1361,7 @@ mod tests {
             p.transfers_idx.get(&(m_flst.ecu, m_flst.lifecycle, 17)),
             Some(&0)
         );
-        let transfer = p.transfers.get(0).unwrap();
+        let transfer = p.transfers.first().unwrap();
         assert_eq!(
             transfer.state,
             FileTransferState::Complete,
