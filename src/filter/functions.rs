@@ -1,14 +1,17 @@
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 
 use crate::dlt::DltMessage;
 use crate::dlt::Error;
 use crate::dlt::ErrorKind;
 use crate::filter::{filter_impl::Char4OrRegex, Filter, FilterKind};
 
-pub fn filter_as_streams(
+pub fn filter_as_streams<
+    F: Fn(DltMessage) -> Result<(), std::sync::mpsc::SendError<DltMessage>>,
+>(
     filters: &[Filter],
     input: &Receiver<DltMessage>,
-    output: &Sender<DltMessage>,
+    // we want to be able to use both channel and sync_channel... so need to pass &|m|channel.send(m)
+    output: &F,
 ) -> Result<(usize, usize), Error> {
     let mut passed: usize = 0;
     let mut filtered: usize = 0;
@@ -43,7 +46,7 @@ pub fn filter_as_streams(
             found_after_neg_filters = !neg_filters.iter().any(|f| f.matches(&msg));
         }
         if found_after_neg_filters {
-            match output.send(msg) {
+            match output(msg) {
                 Err(msg2) => {
                     return Err(Error::new(ErrorKind::OtherFatal(format!(
                         "filter_as_stream: output.send failed sending msg {}",
@@ -281,7 +284,7 @@ mod tests {
             tx.send(DltMessage::for_test()).unwrap();
             drop(tx);
             // no filters means -> pass all msgs
-            let (passed, filtered) = filter_as_streams(&[], &rx, &tx2).unwrap();
+            let (passed, filtered) = filter_as_streams(&[], &rx, &|m| tx2.send(m)).unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
@@ -299,7 +302,8 @@ mod tests {
             // disabled filters dont count
             let mut pos_filter = Filter::new(FilterKind::Positive);
             pos_filter.enabled = false;
-            let (passed, filtered) = filter_as_streams(&[pos_filter], &rx, &tx2).unwrap();
+            let (passed, filtered) =
+                filter_as_streams(&[pos_filter], &rx, &|m| tx2.send(m)).unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
@@ -321,7 +325,7 @@ mod tests {
             neg_filter.enabled = false;
 
             let (passed, filtered) =
-                filter_as_streams(&[neg_filter, pos_filter], &rx, &tx2).unwrap();
+                filter_as_streams(&[neg_filter, pos_filter], &rx, &|m| tx2.send(m)).unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
@@ -337,7 +341,8 @@ mod tests {
             drop(tx);
             // one pos. filter (but without any criteria -> should match)
             let (passed, filtered) =
-                filter_as_streams(&[Filter::new(FilterKind::Positive)], &rx, &tx2).unwrap();
+                filter_as_streams(&[Filter::new(FilterKind::Positive)], &rx, &|m| tx2.send(m))
+                    .unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
@@ -359,7 +364,7 @@ mod tests {
                     Filter::new(FilterKind::Negative),
                 ],
                 &rx,
-                &tx2,
+                &|m| tx2.send(m),
             )
             .unwrap();
             // check return value:
@@ -378,7 +383,8 @@ mod tests {
             // one pos. filter should not match
             let mut pos_filter = Filter::new(FilterKind::Positive);
             pos_filter.ecu = Some(DltChar4::from_buf(b"ECU2")).map(Into::into);
-            let (passed, filtered) = filter_as_streams(&[pos_filter], &rx, &tx2).unwrap();
+            let (passed, filtered) =
+                filter_as_streams(&[pos_filter], &rx, &|m| tx2.send(m)).unwrap();
             // check return value:
             assert_eq!(passed, 0);
             assert_eq!(filtered, 1);
@@ -395,7 +401,8 @@ mod tests {
             // one neg. filter -> should stay
             let mut neg_filter = Filter::new(FilterKind::Negative);
             neg_filter.ecu = Some(DltChar4::from_buf(b"ECU2")).map(Into::into);
-            let (passed, filtered) = filter_as_streams(&[neg_filter], &rx, &tx2).unwrap();
+            let (passed, filtered) =
+                filter_as_streams(&[neg_filter], &rx, &|m| tx2.send(m)).unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
@@ -415,9 +422,12 @@ mod tests {
             assert!(!neg_filter.matches(&msg));
             tx.send(DltMessage::for_test()).unwrap();
             drop(tx);
-            let (passed, filtered) =
-                filter_as_streams(&[Filter::new(FilterKind::Positive), neg_filter], &rx, &tx2)
-                    .unwrap();
+            let (passed, filtered) = filter_as_streams(
+                &[Filter::new(FilterKind::Positive), neg_filter],
+                &rx,
+                &|m| tx2.send(m),
+            )
+            .unwrap();
             // check return value:
             assert_eq!(passed, 1);
             assert_eq!(filtered, 0);
