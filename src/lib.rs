@@ -21,6 +21,9 @@ pub fn version() -> (u32, u32, u32) {
     )
 }
 
+/// The return type of the function that sends a DltMessage to the next stage.
+type SendMsgFnReturnType = Result<(), std::sync::mpsc::SendError<dlt::DltMessage>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
