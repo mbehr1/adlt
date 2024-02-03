@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{prelude::*, BufWriter},
-    sync::mpsc::{channel, SendError},
+    sync::mpsc::{channel, sync_channel, SendError},
 };
 
 use adlt::{
@@ -540,8 +540,8 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     // The 10ms time is a bit arbitrary and we might need to find an algorithm to calculate the optimal time (e.g. 1/4 of the time it took to fill the buffer).
 
     // setup (thread) filter chain:
-    let (tx_for_parse_thread, rx_from_parse_thread) = std::sync::mpsc::sync_channel(1024 * 1024); // msg -> parse_lifecycles (t2)
-    let (tx_for_lc_thread, rx_from_lc_thread) = std::sync::mpsc::sync_channel(512 * 1024); // parse_lifecycles -> buffer_sort_messages (t3)
+    let (tx_for_parse_thread, rx_from_parse_thread) = sync_channel(1024 * 1024); // msg -> parse_lifecycles (t2)
+    let (tx_for_lc_thread, rx_from_lc_thread) = sync_channel(512 * 1024); // parse_lifecycles -> buffer_sort_messages (t3)
     let (lcs_r, lcs_w) =
         evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
     let lc_thread = std::thread::spawn(move || {
@@ -559,10 +559,21 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     });
 
     let (plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
-        let (tx_for_plugin_thread, rx_from_plugin_thread) = channel();
+        let (tx_for_plugin_thread, rx_from_plugin_thread) = sync_channel(512 * 1024);
         (
             Some(std::thread::spawn(move || {
-                plugins_process_msgs(rx_from_lc_thread, tx_for_plugin_thread, plugins_active)
+                plugins_process_msgs(
+                    rx_from_lc_thread,
+                    &|m| match tx_for_plugin_thread.try_send(m) {
+                        Ok(()) => Ok(()),
+                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
+                            std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
+                            tx_for_plugin_thread.send(m)
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
+                    },
+                    plugins_active,
+                )
             })),
             rx_from_plugin_thread,
         )

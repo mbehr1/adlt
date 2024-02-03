@@ -1863,7 +1863,11 @@ fn create_parser_thread(
         let (tx_for_plugin_thread, rx_from_plugin_thread) = channel();
         (
             Some(std::thread::spawn(move || {
-                plugins_process_msgs(rx_from_lc_thread, tx_for_plugin_thread, plugins_active)
+                plugins_process_msgs(
+                    rx_from_lc_thread,
+                    &|m| tx_for_plugin_thread.send(m),
+                    plugins_active,
+                )
             })),
             rx_from_plugin_thread,
         )
