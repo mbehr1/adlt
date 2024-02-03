@@ -422,6 +422,7 @@ impl std::cmp::PartialEq for SortedDltMessage {
     }
 }
 impl std::cmp::Ord for SortedDltMessage {
+    #[inline(always)]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // have to use the calculated time and not the own time
         if self.calculated_time_us == other.calculated_time_us {
@@ -432,6 +433,7 @@ impl std::cmp::Ord for SortedDltMessage {
     }
 }
 impl std::cmp::PartialOrd for SortedDltMessage {
+    #[inline(always)]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
@@ -460,7 +462,10 @@ where
     S: std::hash::BuildHasher + Clone,
     M: 'static + Clone,
 {
-    let mut buffer = std::collections::VecDeque::<SortedDltMessage>::new();
+    // we need a data structure that supports fast search (partition_point) and fast insert. VecDeque's insert is quite slow (needs memmove)
+    // BinaryHeap seems faster. Use as min_heap
+
+    let mut buffer = std::collections::binary_heap::BinaryHeap::with_capacity(1024 * 1024);
     // cache with lifecycle start times:
     // lets not use a vec which would work for most cases but for the lifecycle ids can be larger for longer runs (e.g. processing multiple files)
     let mut lc_map = std::collections::BTreeMap::<crate::lifecycle::LifecycleId, u64>::new();
@@ -636,22 +641,21 @@ where
             m,
             calculated_time_us,
         };
-        let idx = buffer.partition_point(|x| x < &sm);
-        buffer.insert(idx, sm);
+        buffer.push(std::cmp::Reverse(sm));
 
         // remove all messages from buffer that have a time more than max_buffer_time_us earlier
 
-        while let Some(sm) = buffer.front() {
-            if sm.calculated_time_us + max_buffer_time_us < msg_reception_time_us {
-                let sm2 = buffer.pop_front().unwrap();
-                outflow(sm2.m)?;
+        while let Some(sm) = buffer.peek() {
+            if sm.0.calculated_time_us + max_buffer_time_us < msg_reception_time_us {
+                let sm2 = buffer.pop().unwrap();
+                outflow(sm2.0.m)?;
             } else {
                 break; // msgs are sorted so we stop here and check after next msg
             }
         }
     }
-    for sm in buffer.into_iter() {
-        outflow(sm.m)?;
+    while let Some(sm) = buffer.pop() {
+        outflow(sm.0.m)?;
     }
     Ok(())
 }
