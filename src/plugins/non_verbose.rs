@@ -26,7 +26,8 @@ use std::{
 
 #[derive(Debug)]
 struct NonVerboseFibexData {
-    frames_map_by_id: HashMap<u32, NVFrame>,
+    frames_map_by_id:
+        HashMap<u32, NVFrame, std::hash::BuildHasherDefault<nohash_hasher::NoHashHasher<u32>>>,
 }
 
 /// a preprocessed frame with the data needed for the nonverbose plugin
@@ -260,7 +261,10 @@ impl NonVerboseFibexData {
     }
 
     fn from_fibex(fd: FibexData) -> NonVerboseFibexData {
-        let frames_map_by_id = HashMap::with_capacity(fd.elements.frames_map_by_id.len());
+        let frames_map_by_id = HashMap::with_capacity_and_hasher(
+            fd.elements.frames_map_by_id.len(),
+            nohash_hasher::BuildNoHashHasher::default(),
+        );
         let mut s = NonVerboseFibexData { frames_map_by_id };
         s.insert_frames(&fd, None);
         s
