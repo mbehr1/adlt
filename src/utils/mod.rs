@@ -1,5 +1,8 @@
-use crate::dlt::{
-    DltArg, DltChar4, DltMessage, DltMessageIndexType, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_STRG,
+use crate::{
+    dlt::{
+        DltArg, DltChar4, DltMessage, DltMessageIndexType, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_STRG,
+    },
+    SendMsgFnReturnType,
 };
 use std::{
     collections::HashSet,
@@ -446,13 +449,13 @@ impl std::cmp::Eq for SortedDltMessage {}
 /// buffers the messages for at least that timeframe.
 /// #### Note Make sure that the messages are not delayed/buffered longer than the `min_buffer_delay_us`. Otherwise the result will not be sorted correctly.
 /// #### Note The lifecycle start times are not changed during the processing but are cached with the first value. So if the times slightly change any messages from parallel lifecycles will be wrongly sorted.
-pub fn buffer_sort_messages<M, S>(
-    inflow: Receiver<crate::dlt::DltMessage>,
-    outflow: Sender<crate::dlt::DltMessage>,
+pub fn buffer_sort_messages<M, S, F: Fn(DltMessage) -> SendMsgFnReturnType>(
+    inflow: Receiver<DltMessage>,
+    outflow: &F,
     lcs_r: &evmap::ReadHandle<crate::lifecycle::LifecycleId, crate::lifecycle::LifecycleItem, M, S>,
     windows_size_secs: u8,
     min_buffer_delay_us: u64,
-) -> Result<(), SendError<crate::dlt::DltMessage>>
+) -> Result<(), SendError<DltMessage>>
 where
     S: std::hash::BuildHasher + Clone,
     M: 'static + Clone,
@@ -641,14 +644,14 @@ where
         while let Some(sm) = buffer.front() {
             if sm.calculated_time_us + max_buffer_time_us < msg_reception_time_us {
                 let sm2 = buffer.pop_front().unwrap();
-                outflow.send(sm2.m)?;
+                outflow(sm2.m)?;
             } else {
                 break; // msgs are sorted so we stop here and check after next msg
             }
         }
     }
     for sm in buffer.into_iter() {
-        outflow.send(sm.m)?;
+        outflow(sm.m)?;
     }
     Ok(())
 }
@@ -1206,7 +1209,7 @@ mod tests {
         assert_eq!(1, lcs_r.len(), "wrong number of lcs!");
         drop(parse_lc_out);
 
-        let res = buffer_sort_messages(sort_in, sort_out, &lcs_r, 3, 2_000_000);
+        let res = buffer_sort_messages(sort_in, &|m| sort_out.send(m), &lcs_r, 3, 2_000_000);
         assert!(res.is_ok());
         // check whether the messages are in same (= sorted by timestamp) order
         let mut last_timestamp = 0;
@@ -1235,7 +1238,7 @@ mod tests {
 
         let (lcs_r, _lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
-        let res = buffer_sort_messages(sort_in, sort_out, &lcs_r, 3, 2_000_000);
+        let res = buffer_sort_messages(sort_in, &|m| sort_out.send(m), &lcs_r, 3, 2_000_000);
         assert!(res.is_ok());
         // check whether the messages are in same (= sorted by timestamp) order
         let mut last_timestamp = 0;
@@ -1272,7 +1275,7 @@ mod tests {
         lcs_w.insert(lc.id(), lc);
         lcs_w.refresh();
 
-        let res = buffer_sort_messages(sort_in, sort_out, &lcs_r, 3, 2_000_000);
+        let res = buffer_sort_messages(sort_in, &|m| sort_out.send(m), &lcs_r, 3, 2_000_000);
         assert!(res.is_ok());
         // check whether the messages are in same (= sorted by timestamp) order
         let mut last_timestamp = 0;
