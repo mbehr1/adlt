@@ -1882,7 +1882,7 @@ fn create_parser_thread(
             Some(std::thread::spawn(move || {
                 adlt::utils::buffer_sort_messages(
                     rx_from_plugin_thread,
-                    tx_for_sort_thread,
+                    &|m| tx_for_sort_thread.send(m),
                     &sort_thread_lcs_r,
                     3,
                     20 * adlt::utils::US_PER_SEC, // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.

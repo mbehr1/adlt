@@ -583,12 +583,19 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     let sort_thread_lcs_r = lcs_r.clone();
     let (sort_thread, rx_final) = if sort_by_time {
-        let (tx_for_sort_thread, rx_from_sort_thread) = channel();
+        let (tx_for_sort_thread, rx_from_sort_thread) = sync_channel(512 * 1024);
         (
             Some(std::thread::spawn(move || {
                 adlt::utils::buffer_sort_messages(
                     rx_from_plugin_thread,
-                    tx_for_sort_thread,
+                    &|m| match tx_for_sort_thread.try_send(m) {
+                        Ok(()) => Ok(()),
+                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
+                            std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
+                            tx_for_sort_thread.send(m)
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
+                    },
                     &sort_thread_lcs_r,
                     3,                            // windows_size_secs for the buffer_delay_calc
                     20 * adlt::utils::US_PER_SEC, // min_buffer_delay_us:  // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
