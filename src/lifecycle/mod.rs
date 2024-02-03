@@ -10,9 +10,10 @@ use crate::{
         SERVICE_ID_GET_SOFTWARE_VERSION,
     },
     utils::US_PER_SEC,
+    SendMsgFnReturnType,
 };
 use std::hash::{Hash, Hasher};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 
 pub type LifecycleId = u32;
 pub type LifecycleItem = Lifecycle; // Box<Lifecycle>; V needs to be Eq+Hash+ShallowCopy (and Send?)
@@ -454,7 +455,7 @@ impl Lifecycle {
 /// // tx.send(msg);
 /// drop(tx); // close the channel tx to indicate last msg otherwise the function wont end
 /// let (_lcs_r, lcs_w) = evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
-/// let lcs_w = adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2);
+/// let lcs_w = adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m|tx2.send(m));
 /// ````
 /// # Note
 /// As soon as the lcs_w is dropped the lcs_r returns no data. That's why the lcs_w is returned and
@@ -466,14 +467,14 @@ impl Lifecycle {
 /// // tx.send(msg);
 /// drop(tx); // close the channel tx to indicate last msg otherwise the function wont end
 /// let (lcs_r, lcs_w) = evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
-/// let t = std::thread::spawn(move || adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2));
+/// let t = std::thread::spawn(move || adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m|tx2.send(m)));
 /// let lcs_w = t.join().unwrap();
 /// // now lcs_r still contains valid data!
 /// ````
-pub fn parse_lifecycles_buffered_from_stream<M, S>(
+pub fn parse_lifecycles_buffered_from_stream<M, S, F: Fn(DltMessage) -> SendMsgFnReturnType>(
     mut lcs_w: evmap::WriteHandle<LifecycleId, LifecycleItem, M, S>,
     inflow: Receiver<DltMessage>,
-    outflow: Sender<DltMessage>,
+    outflow: &F,
 ) -> evmap::WriteHandle<LifecycleId, LifecycleItem, M, S>
 where
     S: std::hash::BuildHasher + Clone,
@@ -515,7 +516,7 @@ where
     // todo add check that msg.received times increase monotonically! (ignoring the dlt viewer bug)
     let mut next_buffer_check_time: u64 = 0;
     let mut merged_needed_id: LifecycleId = 0;
-    let start = std::time::Instant::now();
+    // let start = std::time::Instant::now();
     let mut lcs_w_needs_refresh = false;
     let mut last_msg_index: DltMessageIndexType = 0;
     for mut msg in inflow {
@@ -684,7 +685,7 @@ where
                                         lcs_w.refresh();
                                         lcs_w_needs_refresh = false;
                                     }
-                                    if let Err(e) = outflow.send(msg) {
+                                    if let Err(e) = outflow(msg) {
                                         println!("parse_lifecycles_buffered_from_stream .send 1 got err={}", e);
                                         break; // exit. the receiver has stopped
                                     }
@@ -696,7 +697,7 @@ where
                                         lcs_w.refresh();
                                         lcs_w_needs_refresh = false;
                                     }
-                                    if let Err(e) = outflow.send(msg) {
+                                    if let Err(e) = outflow(msg) {
                                         println!("parse_lifecycles_buffered_from_stream .send 2 got err={}", e);
                                         break;
                                     }
@@ -720,7 +721,7 @@ where
                 lcs_w.refresh();
                 lcs_w_needs_refresh = false;
             }
-            if let Err(e) = outflow.send(msg) {
+            if let Err(e) = outflow(msg) {
                 println!(
                     "parse_lifecycles_buffered_from_stream .send 3 got err={}",
                     e
@@ -748,7 +749,7 @@ where
     // if we have buffered msgs we have to output them now:
     for m in buffered_msgs.into_iter() {
         // println!("sending buffered_msg {:?}", m);
-        if let Err(e) = outflow.send(m) {
+        if let Err(e) = outflow(m) {
             println!(
                 "parse_lifecycles_buffered_from_stream .send 4 got err={}",
                 e
@@ -772,10 +773,10 @@ where
             println!("lcs_w content id={:?} lc={:?}", id, b);
         }
     }*/
-    let duration = start.elapsed();
+    /*let duration = start.elapsed();
     if duration > std::time::Duration::from_millis(1) {
         // println!("parse_lifecycles_buffered_from_stream took {:?}", duration);
-    }
+    }*/
     lcs_w
 }
 
@@ -827,7 +828,7 @@ mod tests {
     use ntest::timeout;
     use std::fs::File;
     use std::str::FromStr;
-    use std::sync::mpsc::channel;
+    use std::sync::mpsc::{channel, sync_channel};
     use std::time::Instant;
     extern crate nohash_hasher;
     #[test]
@@ -843,13 +844,15 @@ mod tests {
             "Time elapsed sending {}msgs is: {:?}",
             NUMBER_ITERATIONS, duration
         );
-        let (tx2, rx2) = channel();
+        let (tx2, rx2) = sync_channel(NUMBER_ITERATIONS);
         drop(tx);
         let (lcs_r, lcs_w) = evmap::Options::default()
             .with_hasher(nohash_hasher::BuildNoHashHasher::<LifecycleId>::default())
             .construct::<LifecycleId, LifecycleItem>(); //  evmap::new::<u32, Box<Lifecycle>>();
         let start = Instant::now();
-        let t = std::thread::spawn(move || parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2));
+        let t = std::thread::spawn(move || {
+            parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m| tx2.send(m))
+        });
         if let Some(a) = lcs_r.read() {
             println!("lcs_r content before join {:?}", a);
         }
@@ -899,20 +902,20 @@ mod tests {
     #[test]
     fn basics() {
         let (tx, rx) = channel();
-        let (tx2, rx2) = channel();
+        let (tx2, rx2) = sync_channel(2048);
         drop(tx);
         let (_lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2);
-        assert!(rx2.recv().is_err());
+        parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m| tx2.send(m));
+        assert!(rx2.try_recv().is_err());
     }
     #[test]
     fn basics_read_in_different_thread() {
         let (tx, rx) = channel();
-        let (tx2, rx2) = channel();
+        let (tx2, rx2) = sync_channel(2048);
         drop(tx);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2);
-        assert!(rx2.recv().is_err());
+        parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m| tx2.send(m));
+        assert!(rx2.try_recv().is_err());
         let r = lcs_r;
         let t = std::thread::spawn(move || {
             if let Some(a) = r.read() {
@@ -935,9 +938,10 @@ mod tests {
 
         tx.send(m1).unwrap();
         drop(tx);
-        let (parse_lc_out, _rx) = channel();
+        let (parse_lc_out, _rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         assert_eq!(1, lcs_r.len(), "wrong number of lcs!");
         // todo
     }
@@ -985,9 +989,10 @@ mod tests {
         tx.send(m2).unwrap();
         tx.send(m3).unwrap();
         drop(tx);
-        let (parse_lc_out, _rx) = channel();
+        let (parse_lc_out, _rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         assert_eq!(3, lcs_r.len(), "wrong number of lcs!");
     }
 
@@ -1015,7 +1020,7 @@ mod tests {
         let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(210_002, 70_000); // 0s buf delay
         tx.send(m1).unwrap();
 
-        let (parse_lc_out, rx) = channel();
+        let (parse_lc_out, rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
         let t = std::thread::spawn(move || {
@@ -1027,7 +1032,8 @@ mod tests {
             rx
         });
 
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         // wait until one message could be received
         let _rx = t.join().unwrap(); // need result to avoid channel being closed too early!
 
@@ -1051,7 +1057,7 @@ mod tests {
         let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(210_002, 70_000); // 0s buf delay
         tx.send(m1).unwrap();
 
-        let (parse_lc_out, rx) = channel();
+        let (parse_lc_out, rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
         let t = std::thread::spawn(move || {
@@ -1063,7 +1069,8 @@ mod tests {
             rx
         });
 
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         // wait until one message could be received
         let _rx = t.join().unwrap(); // need result to avoid channel being closed too early!
 
@@ -1100,7 +1107,7 @@ mod tests {
         let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(160_003, 40_000); // 0s buf delay
         tx.send(m1).unwrap();
 
-        let (parse_lc_out, rx) = channel();
+        let (parse_lc_out, rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
         let t = std::thread::spawn(move || {
@@ -1115,7 +1122,8 @@ mod tests {
             rx
         });
 
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         // wait until one message could be received
         let rx = t.join().unwrap(); // need result to avoid channel being closed too early!
         assert!(rx.try_recv().is_ok()); // now msgs can be recvd
@@ -1143,7 +1151,7 @@ mod tests {
         let m1 = crate::dlt::DltMessage::for_test_rcv_tms_ms(160_003, 40_000); // 0s buf delay
         tx.send(m1).unwrap();
 
-        let (parse_lc_out, rx) = channel();
+        let (parse_lc_out, rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
         let t = std::thread::spawn(move || {
@@ -1158,7 +1166,8 @@ mod tests {
             rx
         });
 
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         // wait until one message could be received
         let rx = t.join().unwrap(); // need result to avoid channel being closed too early!
         assert!(rx.try_recv().is_ok());
@@ -1181,9 +1190,10 @@ mod tests {
             .unwrap();
 
         drop(tx);
-        let (parse_lc_out, _rx) = channel();
+        let (parse_lc_out, _rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         assert_eq!(1, lcs_r.len(), "wrong number of lcs: {:?}", lcs_r.read());
     }
 
@@ -1207,9 +1217,10 @@ mod tests {
             .unwrap();
 
         drop(tx);
-        let (parse_lc_out, _rx) = channel();
+        let (parse_lc_out, _rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         assert_eq!(2, lcs_r.len(), "wrong number of lcs!");
     }
 
@@ -1236,9 +1247,10 @@ mod tests {
             .unwrap();
 
         drop(tx);
-        let (parse_lc_out, _rx) = channel();
+        let (parse_lc_out, _rx) = sync_channel(2048);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         assert_eq!(1, lcs_r.len(), "wrong number of lcs!");
     }
 
@@ -1309,7 +1321,7 @@ mod tests {
     #[test]
     fn gen_two_lcs() {
         let (tx, rx) = channel();
-        let (tx2, rx2) = channel();
+        let (tx2, rx2) = sync_channel(2048);
         const NUMBER_PER_MSG_CAT: usize = 50;
         const MSG_DELAYS: [(u64, u64); 2] = [(45_000, 0), (30_000, 10_000)];
         const LC_START_TIMES: [u64; 2] = [1_000_000, 1_060_000];
@@ -1334,7 +1346,7 @@ mod tests {
         }
         drop(tx);
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2);
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m| tx2.send(m));
         // now check the lifecycles:
         println!("have {} interims lifecycles", lcs_r.len());
         if let Some(a) = lcs_r.read() {
@@ -1404,7 +1416,7 @@ mod tests {
                     .is_none());
                 //println!("got msg:{:?}", rm.unwrap());
             }
-            assert!(rx2.recv().is_err());
+            assert!(rx2.try_recv().is_err());
         } else {
             assert_eq!(true, false);
         };
@@ -1458,7 +1470,7 @@ mod tests {
         drop(tx1);
 
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2);
+        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m| tx2.send(m));
         // now check the lifecycles:
         println!("have {} interims lifecycles", lcs_r.len());
         if let Some(a) = lcs_r.read() {
@@ -1533,7 +1545,7 @@ mod tests {
                     .was_merged()
                     .is_none());
             }
-            assert!(rx2.recv().is_err());
+            assert!(rx2.try_recv().is_err());
         } else {
             assert_eq!(true, false);
         };
@@ -1573,7 +1585,7 @@ mod tests {
         // lets try to model a real use-case:
         // export sorted messages async from a stream
         let (tx, rx) = channel();
-        let (tx2, rx2) = channel();
+        let (tx2, rx2) = sync_channel(2048);
         const NUMBER_PER_MSG_CAT: usize = 50;
         const MSG_DELAYS: [(u64, u64); 2] = [(45_000, 0), (30_000, 10_000)];
         const LC_START_TIMES: [u64; 2] = [1_000_000, 1_060_000];
@@ -1602,7 +1614,9 @@ mod tests {
             // not needed as done autom. drop(tx);
         });
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
-        let t2 = std::thread::spawn(move || parse_lifecycles_buffered_from_stream(lcs_w, rx, tx2));
+        let t2 = std::thread::spawn(move || {
+            parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m| tx2.send(m))
+        });
         // now we need to buffer/delay the messages, to let the lcs settle a bit
         let (tx3, rx3) = channel();
         let t3 = std::thread::spawn(move || {
@@ -1737,9 +1751,11 @@ mod tests {
         let (tx_for_parse_thread, rx_from_parse_thread) = channel();
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
-        let (tx_for_lc_thread, rx_from_lc_thread) = channel();
+        let (tx_for_lc_thread, rx_from_lc_thread) = sync_channel(2048);
         let lc_thread = std::thread::spawn(move || {
-            parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, tx_for_lc_thread)
+            parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, &|m| {
+                tx_for_lc_thread.send(m)
+            })
         });
         let junk_thread = std::thread::spawn(move || for _msg in rx_from_lc_thread {});
 

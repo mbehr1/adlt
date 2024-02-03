@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{prelude::*, BufWriter},
-    sync::mpsc::channel,
+    sync::mpsc::{channel, SendError},
 };
 
 use adlt::{
@@ -534,17 +534,28 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         }
     }
 
+    // We use bounded channels to reduce the memory/alloc pressure. The bounded channels can allocate once.
+    // The channel sizes start with 1mio msgs and then decrease following the logic that each stage should always have enough data to work on.
+    // If sending to a channel fails with "full" we artificially wait 10ms to avoid that from that time one the process is constantly woken up.
+    // The 10ms time is a bit arbitrary and we might need to find an algorithm to calculate the optimal time (e.g. 1/4 of the time it took to fill the buffer).
+
     // setup (thread) filter chain:
-    let (tx_for_parse_thread, rx_from_parse_thread) = channel(); // msg -> parse_lifecycles (t2)
-    let (tx_for_lc_thread, rx_from_lc_thread) = channel(); // parse_lifecycles -> buffer_sort_messages (t3)
+    let (tx_for_parse_thread, rx_from_parse_thread) = std::sync::mpsc::sync_channel(1024 * 1024); // msg -> parse_lifecycles (t2)
+    let (tx_for_lc_thread, rx_from_lc_thread) = std::sync::mpsc::sync_channel(512 * 1024); // parse_lifecycles -> buffer_sort_messages (t3)
     let (lcs_r, lcs_w) =
         evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
     let lc_thread = std::thread::spawn(move || {
-        adlt::lifecycle::parse_lifecycles_buffered_from_stream(
-            lcs_w,
-            rx_from_parse_thread,
-            tx_for_lc_thread,
-        )
+        adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, &|m| {
+            //tx_for_lc_thread.send(m)
+            match tx_for_lc_thread.try_send(m) {
+                Ok(()) => Ok(()),
+                Err(std::sync::mpsc::TrySendError::Full(m)) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
+                    tx_for_lc_thread.send(m)
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
+            }
+        })
     });
 
     let (plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
@@ -774,7 +785,18 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         match dlt_msg_iterator.next() {
             Some(msg) => {
                 messages_processed += 1;
-                tx_for_parse_thread.send(msg).unwrap(); // todo handle error
+                match tx_for_parse_thread.try_send(msg) {
+                    Ok(()) => {}
+                    Err(std::sync::mpsc::TrySendError::Full(m)) => {
+                        std::thread::sleep(std::time::Duration::from_millis(10)); // 1mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
+                        tx_for_parse_thread.send(m).unwrap(); // todo handle error
+                    }
+                    Err(e) => {
+                        error!(log, "failed to send msg to parse_thread due to {:?}", e);
+                        break;
+                    }
+                }
+                //tx_for_parse_thread.send(msg).unwrap(); // todo handle error
             }
             None => {
                 debug!(log, "finished processing all msgs";"messages_processed"=>messages_processed);

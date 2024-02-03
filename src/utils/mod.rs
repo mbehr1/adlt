@@ -745,7 +745,7 @@ mod tests {
     use crate::utils::*;
     use std::fs::File;
     use std::io::Write;
-    use std::sync::mpsc::channel;
+    use std::sync::mpsc::{channel, sync_channel};
     //    use std::time::Instant;
     use chrono::{Datelike, Timelike};
     use tempfile::NamedTempFile;
@@ -1196,13 +1196,15 @@ mod tests {
             .unwrap();
         drop(tx);
 
-        let (parse_lc_out, sort_in) = channel();
+        let (parse_lc_out, sort_in) = sync_channel(2048);
         let (sort_out, rx) = channel();
 
         let (lcs_r, lcs_w) = evmap::new::<LifecycleId, LifecycleItem>();
 
-        let _lcs_w = parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, parse_lc_out);
+        let _lcs_w =
+            parse_lifecycles_buffered_from_stream(lcs_w, parse_lc_in, &|m| parse_lc_out.send(m));
         assert_eq!(1, lcs_r.len(), "wrong number of lcs!");
+        drop(parse_lc_out);
 
         let res = buffer_sort_messages(sort_in, sort_out, &lcs_r, 3, 2_000_000);
         assert!(res.is_ok());
