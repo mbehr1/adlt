@@ -484,8 +484,10 @@ where
 
     // create a map of ecu:vec<lifecycle.id>
     // we can maintain that here as we're the only one modifying the lcs_ evmap
-    let mut ecu_map: std::collections::HashMap<DltChar4, Vec<Lifecycle>> =
-        std::collections::HashMap::new();
+    let mut ecu_map = std::collections::HashMap::with_capacity_and_hasher(
+        64,
+        nohash_hasher::BuildNoHashHasher::<DltChar4>::default(),
+    );
 
     if let Some(lci) = lcs_w.read() {
         for (_id, b) in &lci {
