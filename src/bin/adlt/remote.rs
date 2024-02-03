@@ -24,7 +24,7 @@ use std::{
     io::prelude::*,
     net::TcpListener,
     sync::{
-        mpsc::{channel, Receiver, SendError},
+        mpsc::{sync_channel, Receiver, SendError, TrySendError},
         Arc, RwLock,
     },
     time::Instant,
@@ -1845,8 +1845,8 @@ fn create_parser_thread(
     sort_by_time: bool,
     plugins_active: Vec<Box<dyn Plugin + Send>>,
 ) -> ParserThreadType {
-    let (tx_for_parse_thread, rx_from_parse_thread) = channel();
-    let (tx_for_lc_thread, rx_from_lc_thread) = channel(); // todo ... std::sync::mpsc::sync_channel(...);
+    let (tx_for_parse_thread, rx_from_parse_thread) = sync_channel(1024 * 1024);
+    let (tx_for_lc_thread, rx_from_lc_thread) = sync_channel(512 * 1024);
     let (lcs_r, lcs_w) =
         evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
 
@@ -1855,17 +1855,31 @@ fn create_parser_thread(
 
     let lc_thread = std::thread::spawn(move || {
         adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, &|m| {
-            tx_for_lc_thread.send(m)
+            match tx_for_lc_thread.try_send(m) {
+                Ok(()) => Ok(()),
+                Err(std::sync::mpsc::TrySendError::Full(m)) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
+                    tx_for_lc_thread.send(m)
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
+            }
         })
     });
 
     let (_plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
-        let (tx_for_plugin_thread, rx_from_plugin_thread) = channel();
+        let (tx_for_plugin_thread, rx_from_plugin_thread) = sync_channel(512 * 1024);
         (
             Some(std::thread::spawn(move || {
                 plugins_process_msgs(
                     rx_from_lc_thread,
-                    &|m| tx_for_plugin_thread.send(m),
+                    &|m| match tx_for_plugin_thread.try_send(m) {
+                        Ok(()) => Ok(()),
+                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
+                            std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
+                            tx_for_plugin_thread.send(m)
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
+                    },
                     plugins_active,
                 )
             })),
@@ -1877,12 +1891,19 @@ fn create_parser_thread(
 
     let sort_thread_lcs_r = lcs_r.clone();
     let (sort_thread, rx_final) = if sort_by_time {
-        let (tx_for_sort_thread, rx_from_sort_thread) = channel();
+        let (tx_for_sort_thread, rx_from_sort_thread) = sync_channel(512 * 1024);
         (
             Some(std::thread::spawn(move || {
                 adlt::utils::buffer_sort_messages(
                     rx_from_plugin_thread,
-                    &|m| tx_for_sort_thread.send(m),
+                    &|m| match tx_for_sort_thread.try_send(m) {
+                        Ok(()) => Ok(()),
+                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
+                            std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
+                            tx_for_sort_thread.send(m)
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
+                    },
                     &sort_thread_lcs_r,
                     3,
                     20 * adlt::utils::US_PER_SEC, // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
@@ -1966,11 +1987,20 @@ fn create_parser_thread(
                         .collect(),
                 );
 
+                let send_fn = |m| match tx_for_parse_thread.try_send(m) {
+                    Ok(_) => Ok(()),
+                    Err(TrySendError::Full(m)) => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        tx_for_parse_thread.send(m)
+                    }
+                    Err(TrySendError::Disconnected(m)) => Err(SendError(m)),
+                };
+
                 loop {
                     match dlt_msg_iterator.next() {
                         Some(msg) => {
                             messages_processed += 1;
-                            if let Err(e) = tx_for_parse_thread.send(msg) {
+                            if let Err(e) = send_fn(msg) {
                                 info!(log, "parser_thread aborted on err={}", e; "msgs_processed" => messages_processed);
                                 return Err(Box::new(e));
                             }
@@ -2139,6 +2169,119 @@ mod tests {
     }
 
     use std::{collections::HashMap, time::Duration};
+
+    #[test]
+    fn create_parser_thread_empty() {
+        let log = new_logger();
+        let input_file_streams: Vec<StreamEntry> = vec![];
+        let ptt = create_parser_thread(log, input_file_streams, 42, true, vec![]);
+        let pt_pt = ptt.parse_thread.join().unwrap();
+        assert!(pt_pt.is_ok());
+        let lc_pt = ptt.lc_thread.join().unwrap();
+        assert_eq!(lc_pt.len(), 0);
+        assert!(ptt.sort_thread.is_some());
+        if let Some(st) = ptt.sort_thread {
+            let st_pt = st.join().unwrap();
+            assert!(st_pt.is_ok());
+        }
+        // now without sort_by_time:
+        let log = new_logger();
+        let input_file_streams: Vec<StreamEntry> = vec![];
+        let ptt = create_parser_thread(log, input_file_streams, 42, false, vec![]);
+        let pt_pt = ptt.parse_thread.join().unwrap();
+        assert!(pt_pt.is_ok());
+        let lc_pt = ptt.lc_thread.join().unwrap();
+        assert_eq!(lc_pt.len(), 0);
+        assert!(ptt.sort_thread.is_none());
+    }
+    #[test]
+    fn create_parser_thread_2() {
+        let log = new_logger();
+        let test_file = std::path::PathBuf::new().join("tests").join("lc_ex002.dlt");
+        let fc = FileContext::from(
+            &log.clone(),
+            "open",
+            format!(
+                r#"{{"sort":false, "files":[{}]}}"#,
+                serde_json::json!(test_file.to_str().unwrap())
+            )
+            .as_str(),
+        )
+        .unwrap();
+        let mut all_msgs = Vec::with_capacity(52 * 1024 * 1024);
+        let start = std::time::Instant::now();
+        let ptt =
+            create_parser_thread(log, fc.file_streams, 42, fc.sort_by_time, fc.plugins_active);
+        let rx_thread = std::thread::spawn(move || {
+            for m in ptt.rx {
+                all_msgs.push(m);
+            }
+            all_msgs
+        });
+        let pt_pt = ptt.parse_thread.join().unwrap();
+        let pt_dur = start.elapsed();
+        println!("parse_thread took {:?}", pt_dur);
+        assert!(pt_pt.is_ok());
+        let lc_pt = ptt.lc_thread.join().unwrap();
+        let lc_dur = start.elapsed();
+        println!("lc_thread took {:?}", lc_dur);
+        assert!(lc_pt.len() > 0);
+        if let Some(st) = ptt.sort_thread {
+            let st_pt = st.join().unwrap();
+            let st_dur = start.elapsed();
+            println!("sort_thread took {:?}", st_dur);
+            assert!(st_pt.is_ok());
+        }
+        let all_msgs = rx_thread.join().unwrap();
+        let rx_dur = start.elapsed();
+        println!("rx_thread took {:?}", rx_dur);
+        println!("got_msgs={}", all_msgs.len());
+    }
+
+    #[test]
+    fn create_parser_thread_3() {
+        let log = new_logger();
+        let test_file = std::path::PathBuf::new().join("tests").join("lc_ex002.dlt");
+
+        let fc = FileContext::from(
+            &log.clone(),
+            "open",
+            format!(
+                r#"{{"sort":true, "plugins":[{{"name":"FileTransfer"}}], "files":[{}]}}"#,
+                serde_json::json!(test_file.to_str().unwrap())
+            )
+            .as_str(),
+        )
+        .unwrap();
+        let mut all_msgs = Vec::with_capacity(52 * 1024 * 1024);
+        let start = std::time::Instant::now();
+        let ptt =
+            create_parser_thread(log, fc.file_streams, 42, fc.sort_by_time, fc.plugins_active);
+        let rx_thread = std::thread::spawn(move || {
+            for m in ptt.rx {
+                all_msgs.push(m);
+            }
+            all_msgs
+        });
+        let pt_pt = ptt.parse_thread.join().unwrap();
+        let pt_dur = start.elapsed();
+        println!("parse_thread took {:?}", pt_dur);
+        assert!(pt_pt.is_ok());
+        let lc_pt = ptt.lc_thread.join().unwrap();
+        let lc_dur = start.elapsed();
+        println!("lc_thread took {:?}", lc_dur);
+        assert!(lc_pt.len() > 0);
+        if let Some(st) = ptt.sort_thread {
+            let st_pt = st.join().unwrap();
+            let st_dur = start.elapsed();
+            println!("sort_thread took {:?}", st_dur);
+            assert!(st_pt.is_ok());
+        }
+        let all_msgs = rx_thread.join().unwrap();
+        let rx_dur = start.elapsed();
+        println!("rx_thread took {:?}", rx_dur);
+        println!("got_msgs={}", all_msgs.len());
+    }
 
     #[test]
     fn remote_basic() {
