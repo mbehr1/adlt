@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{prelude::*, BufWriter},
-    sync::mpsc::{channel, sync_channel, SendError},
+    sync::mpsc::{sync_channel, SendError},
 };
 
 use adlt::{
@@ -609,12 +609,21 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     // if we have filters we use a filter thread:
     let (thread_filter, t4_input) = if !filters.is_empty() {
-        let (tx_filter, rx_filter) = channel();
+        let (tx_filter, rx_filter) = sync_channel(256 * 1024);
         (
             Some(std::thread::spawn(move || {
-                adlt::filter::functions::filter_as_streams(&filters, &rx_final, &|m| {
-                    tx_filter.send(m)
-                })
+                adlt::filter::functions::filter_as_streams(
+                    &filters,
+                    &rx_final,
+                    &|m| match tx_filter.try_send(m) {
+                        Ok(()) => Ok(()),
+                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
+                            std::thread::sleep(std::time::Duration::from_millis(10)); // 256k msg buffer is full. wait a bit to avoid constant wakeups after each msg...
+                            tx_filter.send(m)
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
+                    },
+                )
             })),
             rx_filter,
         )
