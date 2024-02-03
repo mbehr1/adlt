@@ -8,17 +8,17 @@ pub mod plugin;
 pub mod rewrite;
 pub mod someip;
 
-use crate::dlt::DltMessage;
+use crate::{dlt::DltMessage, SendMsgFnReturnType};
 use plugin::Plugin;
 
-use std::sync::mpsc::{Receiver, SendError, Sender};
+use std::sync::mpsc::{Receiver, SendError};
 
 /// read all msgs from inflow, have all plugins process the msg.
 /// if any plugin returns false processing of that msg is stopped and the msg
 /// is not forwarded to outflow. Otherwise msg is forwarded to outflow.
-pub fn plugins_process_msgs(
+pub fn plugins_process_msgs<F: Fn(DltMessage) -> SendMsgFnReturnType>(
     inflow: Receiver<DltMessage>,
-    outflow: Sender<DltMessage>,
+    outflow: &F,
     mut plugins_active: Vec<Box<dyn Plugin + Send>>,
 ) -> Result<Vec<Box<dyn Plugin + Send>>, SendError<DltMessage>> {
     for mut msg in inflow {
@@ -32,7 +32,7 @@ pub fn plugins_process_msgs(
             }
         }
         if forward_msg {
-            outflow.send(msg)?;
+            outflow(msg)?;
         }
     }
     Ok(plugins_active)
@@ -60,7 +60,9 @@ mod tests {
         let (to_fn, inflow) = channel();
         let (outflow, _from_fn) = channel();
 
-        let t1 = std::thread::spawn(move || plugins_process_msgs(inflow, outflow, plugins_active));
+        let t1 = std::thread::spawn(move || {
+            plugins_process_msgs(inflow, &|m| outflow.send(m), plugins_active)
+        });
         drop(to_fn);
         let plugins_returned = t1.join().unwrap().unwrap();
 
