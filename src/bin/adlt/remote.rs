@@ -1161,8 +1161,8 @@ fn process_fs_cmd(
                 Ok(attr) => Ok(serde_json::json!({"stat":{
                     "type":type_for_filetype(&attr.file_type(), &path.into()),
                     "size":attr.len(),
-                    "mtime":attr.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis(),
-                    "ctime":attr.created().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis(),
+                    "mtime":attr.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis() as u64, // to u64 as json windows cannot convert u128
+                    "ctime":attr.created().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis() as u64,
                 }})),
                 Err(e) => Ok(serde_json::json!({"err":format!("stat failed with '{}'", e)})),
             },
