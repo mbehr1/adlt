@@ -2,6 +2,25 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.52.1 - 2024-02-04
+#### Bug Fixes
+- **(remote)** timestamps in ms as u64 - (e848b02) - Matthias Behr
+#### Performance Improvements
+- **(convert)** use bounded channel for filter_as_stream - (53953d5) - Matthias Behr
+- **(convert)** use bound channels for buffer_sort_messages - (786d01d) - Matthias Behr
+- **(convert)** use bounded channels for plugins processing - (eedc09f) - Matthias Behr
+- **(convert)** use bounded channels - (1496701) - Matthias Behr
+- **(remote)** use bounded channels - (3adf168) - Matthias Behr
+- parse_lifecycles_buffered_from_stream use no_hash - (02ddbb0) - Matthias Behr
+- use a binary_heap for buffer_sort_messages - (6d83d4d) - Matthias Behr
+- filter_as_stream output fn - (e3834f3) - Matthias Behr
+#### Refactoring
+- add helper function to avoid duplicated code - (a52cf82) - Matthias Behr
+- clippy fixes, return type introduced - (9d77785) - Matthias Behr
+- fix bench baselines - (09f415e) - Matthias Behr
+
+- - -
+
 ## v0.52.0 - 2024-01-22
 #### Features
 - **(remote)** allow to set listen addr - (cedaf84) - Matthias Behr
