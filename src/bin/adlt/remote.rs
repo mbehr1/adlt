@@ -13,7 +13,7 @@ use adlt::{
         eac_stats::EacStats,
         get_dlt_infos_from_file, get_dlt_message_iterator, get_new_namespace, remote_types,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
-        DltFileInfos, LowMarkBufReader,
+        sync_sender_send_delay_if_full, DltFileInfos, LowMarkBufReader,
     },
 };
 use clap::{value_parser, Arg, Command};
@@ -24,7 +24,7 @@ use std::{
     io::prelude::*,
     net::TcpListener,
     sync::{
-        mpsc::{sync_channel, Receiver, SendError, TrySendError},
+        mpsc::{sync_channel, Receiver, SendError},
         Arc, RwLock,
     },
     time::Instant,
@@ -1855,14 +1855,7 @@ fn create_parser_thread(
 
     let lc_thread = std::thread::spawn(move || {
         adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, &|m| {
-            match tx_for_lc_thread.try_send(m) {
-                Ok(()) => Ok(()),
-                Err(std::sync::mpsc::TrySendError::Full(m)) => {
-                    std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
-                    tx_for_lc_thread.send(m)
-                }
-                Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
-            }
+            sync_sender_send_delay_if_full(m, &tx_for_lc_thread)
         })
     });
 
@@ -1872,14 +1865,7 @@ fn create_parser_thread(
             Some(std::thread::spawn(move || {
                 plugins_process_msgs(
                     rx_from_lc_thread,
-                    &|m| match tx_for_plugin_thread.try_send(m) {
-                        Ok(()) => Ok(()),
-                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
-                            std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
-                            tx_for_plugin_thread.send(m)
-                        }
-                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
-                    },
+                    &|m| sync_sender_send_delay_if_full(m, &tx_for_plugin_thread),
                     plugins_active,
                 )
             })),
@@ -1896,14 +1882,7 @@ fn create_parser_thread(
             Some(std::thread::spawn(move || {
                 adlt::utils::buffer_sort_messages(
                     rx_from_plugin_thread,
-                    &|m| match tx_for_sort_thread.try_send(m) {
-                        Ok(()) => Ok(()),
-                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
-                            std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
-                            tx_for_sort_thread.send(m)
-                        }
-                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
-                    },
+                    &|m| sync_sender_send_delay_if_full(m, &tx_for_sort_thread),
                     &sort_thread_lcs_r,
                     3,
                     20 * adlt::utils::US_PER_SEC, // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
@@ -1987,20 +1966,13 @@ fn create_parser_thread(
                         .collect(),
                 );
 
-                let send_fn = |m| match tx_for_parse_thread.try_send(m) {
-                    Ok(_) => Ok(()),
-                    Err(TrySendError::Full(m)) => {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                        tx_for_parse_thread.send(m)
-                    }
-                    Err(TrySendError::Disconnected(m)) => Err(SendError(m)),
-                };
-
                 loop {
                     match dlt_msg_iterator.next() {
                         Some(msg) => {
                             messages_processed += 1;
-                            if let Err(e) = send_fn(msg) {
+                            if let Err(e) =
+                                sync_sender_send_delay_if_full(msg, &tx_for_parse_thread)
+                            {
                                 info!(log, "parser_thread aborted on err={}", e; "msgs_processed" => messages_processed);
                                 return Err(Box::new(e));
                             }
