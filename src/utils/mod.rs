@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::AtomicU32,
-        mpsc::{Receiver, SendError, Sender},
+        mpsc::{Receiver, SendError, Sender, SyncSender, TrySendError},
     },
 };
 mod lowmarkbufreader;
@@ -745,6 +745,47 @@ pub fn get_all_files_with_ext_in_dir(
     Ok(res)
 }
 
+/// Sends a value to the (bounded) channel, delaying 10ms if the channel is full.
+///
+/// This function sends a value to the synchronous channel represented by `sender`. If the channel is full,
+/// it waits for a 10ms duration and tries then blocking(!) via .send(...).
+///
+/// # Arguments
+///
+/// * `value` - The value to send to the channel.
+/// * `sender` - A `sync::Sender<T>` representing the synchronous channel to send the value to.
+///
+/// # Returns
+///
+/// * A `Result<(), SendError<T>>` representing the result of the send operation. If the value was sent successfully,
+///   it returns `Ok(())`. If the receiver has disconnected and the value could not be sent, it returns `Err(SendError(T))`.
+///
+/// # Example
+///
+/// ```
+/// use std::sync::mpsc;
+/// use adlt::utils::sync_sender_send_delay_if_full;
+///
+/// let (sender, receiver) = mpsc::sync_channel(1);
+/// let send_result = sync_sender_send_delay_if_full(42, &sender);
+///
+/// match send_result {
+///     Ok(_) => println!("Value sent successfully"),
+///     Err(error) => println!("Failed to send value: {}", error),
+/// }
+/// ```
+#[inline(always)]
+pub fn sync_sender_send_delay_if_full<T>(m: T, tx: &SyncSender<T>) -> Result<(), SendError<T>> {
+    match tx.try_send(m) {
+        Ok(_) => Ok(()),
+        Err(TrySendError::Full(m)) => {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            tx.send(m)
+        }
+        Err(TrySendError::Disconnected(m)) => Err(SendError(m)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::dlt::{DltMessage, DltStandardHeader, DltStorageHeader};
@@ -879,6 +920,31 @@ mod tests {
             .symmetric_difference(&HashSet::from_iter(ecus.iter().cloned()))
             .collect::<HashSet<_>>()
             .is_empty());
+    }
+
+    #[test]
+    fn sync_sender_send_delay_if_full_1() {
+        let (tx, rx) = sync_channel(1);
+        let send_result = sync_sender_send_delay_if_full(42, &tx);
+        assert!(send_result.is_ok());
+        assert_eq!(rx.recv().unwrap(), 42);
+
+        drop(rx);
+        // now the send should fail even if the channel is empty
+        let send_result = sync_sender_send_delay_if_full(43, &tx);
+        assert!(send_result.is_err());
+
+        let (tx, rx) = sync_channel(1);
+        let send_result = sync_sender_send_delay_if_full(42, &tx);
+        assert!(send_result.is_ok());
+        drop(rx);
+        // now the send should fail and not block/delay
+        let send_result = sync_sender_send_delay_if_full(43, &tx);
+        assert!(send_result.is_err());
+
+        // difficult to test the case where the channel is full.
+        // would need to spawn a thread to read from the channel but even then the
+        // detection whether a sleep did occur is not easy.
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{prelude::*, BufWriter},
-    sync::mpsc::{sync_channel, SendError},
+    sync::mpsc::sync_channel,
 };
 
 use adlt::{
@@ -22,7 +22,7 @@ use adlt::{
         eac_stats::EacStats,
         get_dlt_message_iterator, get_new_namespace,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
-        DltFileInfos, LowMarkBufReader,
+        sync_sender_send_delay_if_full, DltFileInfos, LowMarkBufReader,
     },
 };
 
@@ -546,15 +546,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
     let lc_thread = std::thread::spawn(move || {
         adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, &|m| {
-            //tx_for_lc_thread.send(m)
-            match tx_for_lc_thread.try_send(m) {
-                Ok(()) => Ok(()),
-                Err(std::sync::mpsc::TrySendError::Full(m)) => {
-                    std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
-                    tx_for_lc_thread.send(m)
-                }
-                Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
-            }
+            sync_sender_send_delay_if_full(m, &tx_for_lc_thread)
         })
     });
 
@@ -564,14 +556,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             Some(std::thread::spawn(move || {
                 plugins_process_msgs(
                     rx_from_lc_thread,
-                    &|m| match tx_for_plugin_thread.try_send(m) {
-                        Ok(()) => Ok(()),
-                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
-                            std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
-                            tx_for_plugin_thread.send(m)
-                        }
-                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
-                    },
+                    &|m| sync_sender_send_delay_if_full(m, &tx_for_plugin_thread),
                     plugins_active,
                 )
             })),
@@ -588,14 +573,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             Some(std::thread::spawn(move || {
                 adlt::utils::buffer_sort_messages(
                     rx_from_plugin_thread,
-                    &|m| match tx_for_sort_thread.try_send(m) {
-                        Ok(()) => Ok(()),
-                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
-                            std::thread::sleep(std::time::Duration::from_millis(10)); // 0.5mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
-                            tx_for_sort_thread.send(m)
-                        }
-                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
-                    },
+                    &|m| sync_sender_send_delay_if_full(m, &tx_for_sort_thread),
                     &sort_thread_lcs_r,
                     3,                            // windows_size_secs for the buffer_delay_calc
                     20 * adlt::utils::US_PER_SEC, // min_buffer_delay_us:  // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
@@ -612,18 +590,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         let (tx_filter, rx_filter) = sync_channel(256 * 1024);
         (
             Some(std::thread::spawn(move || {
-                adlt::filter::functions::filter_as_streams(
-                    &filters,
-                    &rx_final,
-                    &|m| match tx_filter.try_send(m) {
-                        Ok(()) => Ok(()),
-                        Err(std::sync::mpsc::TrySendError::Full(m)) => {
-                            std::thread::sleep(std::time::Duration::from_millis(10)); // 256k msg buffer is full. wait a bit to avoid constant wakeups after each msg...
-                            tx_filter.send(m)
-                        }
-                        Err(std::sync::mpsc::TrySendError::Disconnected(m)) => Err(SendError(m)),
-                    },
-                )
+                adlt::filter::functions::filter_as_streams(&filters, &rx_final, &|m| {
+                    sync_sender_send_delay_if_full(m, &tx_filter)
+                })
             })),
             rx_filter,
         )
@@ -812,18 +781,13 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         match dlt_msg_iterator.next() {
             Some(msg) => {
                 messages_processed += 1;
-                match tx_for_parse_thread.try_send(msg) {
+                match sync_sender_send_delay_if_full(msg, &tx_for_parse_thread) {
                     Ok(()) => {}
-                    Err(std::sync::mpsc::TrySendError::Full(m)) => {
-                        std::thread::sleep(std::time::Duration::from_millis(10)); // 1mio msg buffer is full. wait a bit to avoid constant wakeups after each msg...
-                        tx_for_parse_thread.send(m).unwrap(); // todo handle error
-                    }
                     Err(e) => {
                         error!(log, "failed to send msg to parse_thread due to {:?}", e);
                         break;
                     }
                 }
-                //tx_for_parse_thread.send(msg).unwrap(); // todo handle error
             }
             None => {
                 debug!(log, "finished processing all msgs";"messages_processed"=>messages_processed);
