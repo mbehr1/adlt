@@ -235,6 +235,16 @@ static CHARS_HEX_LOW: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 ];
 
+#[inline(always)]
+pub fn is_printable_char(c: &u8) -> bool {
+    *c >= 0x20 && *c <= 0x7e
+}
+
+#[inline(always)]
+pub fn is_non_printable_char_wo_rnt(c: &u8) -> bool {
+    !is_printable_char(c) && *c != b'\r' && *c != b'\n' && *c != b'\t'
+}
+
 /// output as buffer as printable ascii to a (char) writer.
 /// Each byte between [0x20...=0x7e] is printed. Others are replaced by the replacement_char.
 ///
@@ -246,7 +256,7 @@ pub fn buf_as_printable_ascii_to_write(
 ) -> Result<u32, std::fmt::Error> {
     let mut times_replaced = 0;
     for item in buf.iter() {
-        if *item >= 0x20 && *item <= 0x7e {
+        if is_printable_char(item) {
             writer.write_char(*item as char)?;
         } else {
             writer.write_char(replacement_char)?;
@@ -979,6 +989,20 @@ mod tests {
         assert!(contains_regex_chars("!="));
         assert!(contains_regex_chars("<>"));
         assert!(contains_regex_chars(","));
+    }
+
+    #[test]
+    fn is_non_printable_char_wo_rnt_1() {
+        assert!(!is_non_printable_char_wo_rnt(&b'A'));
+        assert!(!is_non_printable_char_wo_rnt(&b'z'));
+        assert!(!is_non_printable_char_wo_rnt(&b' '));
+        assert!(!is_non_printable_char_wo_rnt(&0x7e));
+        assert!(is_non_printable_char_wo_rnt(&0x1f));
+        assert!(is_non_printable_char_wo_rnt(&0x7f));
+        assert!(is_non_printable_char_wo_rnt(&0x00));
+        assert!(!is_non_printable_char_wo_rnt(&b'\r'));
+        assert!(!is_non_printable_char_wo_rnt(&b'\n'));
+        assert!(!is_non_printable_char_wo_rnt(&b'\t'));
     }
 
     #[test]
