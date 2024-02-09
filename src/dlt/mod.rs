@@ -8,7 +8,7 @@ use std::fmt;
 use std::fmt::Write;
 use std::str::FromStr;
 
-use crate::utils::US_PER_SEC;
+use crate::utils::{is_non_printable_char_wo_rnt, US_PER_SEC};
 use control_msgs::{parse_ctrl_log_info_payload, parse_ctrl_sw_version_payload};
 
 /// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
@@ -672,6 +672,7 @@ impl DltMessage {
     }
 
     /// return whether message has verbose mode (from ext header). false if no ext header.
+    #[inline(always)]
     pub fn is_verbose(&self) -> bool {
         match &self.extended_header {
             Some(e) => e.is_verbose(),
@@ -815,7 +816,7 @@ impl DltMessage {
         let mut itoa_buf = itoa::Buffer::new(); // even though cheap, we do reuse
         for (nr_arg, arg) in args.enumerate() {
             if nr_arg > 0 {
-                text.write_char(' ')?;
+                text.push(' ');
             }
             // let _tyle = arg.type_info & 0x0f;
             let is_bool = arg.type_info & DLT_TYPE_INFO_BOOL > 0;
@@ -829,15 +830,15 @@ impl DltMessage {
             if is_bool {
                 let val = arg.payload_raw[0];
                 if val > 0 {
-                    text.write_str("true")?;
+                    text.push_str("true");
                 } else {
-                    text.write_str("false")?;
+                    text.push_str("false");
                 }
             } else if is_uint {
                 match arg.payload_raw.len() {
                     1 => {
                         let val: u8 = arg.payload_raw[0];
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                         // itoa_buf is faster than write!(text, "{}", val)?; // is surpringly faster than text.write_str(&val.to_string())?;
                     }
                     2 => {
@@ -846,7 +847,7 @@ impl DltMessage {
                         } else {
                             u16::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     4 => {
                         let val: u32 = if arg.is_big_endian {
@@ -854,7 +855,7 @@ impl DltMessage {
                         } else {
                             u32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     8 => {
                         let val: u64 = if arg.is_big_endian {
@@ -862,7 +863,7 @@ impl DltMessage {
                         } else {
                             u64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     16 => {
                         let val: u128 = if arg.is_big_endian {
@@ -870,7 +871,7 @@ impl DltMessage {
                         } else {
                             u128::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     _ => (),
                 };
@@ -878,7 +879,7 @@ impl DltMessage {
                 match arg.payload_raw.len() {
                     1 => {
                         let val: i8 = arg.payload_raw[0] as i8;
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     2 => {
                         let val: i16 = if arg.is_big_endian {
@@ -886,7 +887,7 @@ impl DltMessage {
                         } else {
                             i16::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     4 => {
                         let val: i32 = if arg.is_big_endian {
@@ -894,7 +895,7 @@ impl DltMessage {
                         } else {
                             i32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     8 => {
                         let val: i64 = if arg.is_big_endian {
@@ -902,7 +903,7 @@ impl DltMessage {
                         } else {
                             i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     16 => {
                         let val: i128 = if arg.is_big_endian {
@@ -910,7 +911,7 @@ impl DltMessage {
                         } else {
                             i128::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        text.write_str(itoa_buf.format(val))?;
+                        text.push_str(itoa_buf.format(val));
                     }
                     _ => (),
                 };
@@ -923,6 +924,8 @@ impl DltMessage {
                             f32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
                         write!(text, "{}", val)?;
+                        // ryu seems not to be faster (at least in our bench dlt_payload_verb)
+                        //text.push_str(ryu::Buffer::new().format(val));
                     }
                     8 => {
                         let val: f64 = if arg.is_big_endian {
@@ -931,6 +934,7 @@ impl DltMessage {
                             f64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
                         write!(text, "{}", val)?;
+                        //text.push_str(ryu::Buffer::new().format(val));
                     }
                     // f16 and f128 dont exist. todo could use create half::f16 and f128::f128 but dlt-viewer doesn't support it either
                     _ => {
@@ -976,7 +980,7 @@ impl DltMessage {
                                 ),
                             };*/
                             let s = RE_NEW_LINE.replace_all(&s, " ");
-                            text.write_str(&s)?;
+                            text.push_str(&s);
                         }
                     }
                     DLT_SCOD_ASCII => {
@@ -994,7 +998,7 @@ impl DltMessage {
                                     [0..arg.payload_raw.len() - if is_zero_term { 1 } else { 0 }],
                             );
                             let s = RE_NEW_LINE.replace_all(&s, " ");
-                            text.write_str(&s)?;
+                            text.push_str(&s);
                         }
                     }
 
@@ -1017,10 +1021,11 @@ impl DltMessage {
         if let Some(text) = &self.payload_text {
             return Ok(text.clone());
         }
-        let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
         let mut args = self.into_iter();
         if self.is_verbose() {
+            let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
             DltMessage::process_msg_arg_iter(args, &mut text)?;
+            Ok(text)
         } else {
             // non-verbose
             let message_id_arg = args.next();
@@ -1034,8 +1039,7 @@ impl DltMessage {
                     }
                 }
                 None => {
-                    write!(&mut text, "[<args missing>]")?;
-                    return Ok(text); // stop here
+                    return Ok("[<args missing>]".into()); // stop here
                 }
             };
             let payload_arg = args.next();
@@ -1046,6 +1050,7 @@ impl DltMessage {
 
             match self.mstp() {
                 DltMessageType::Control(ct) => {
+                    let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
                     if message_id > 0 && message_id < SERVICE_ID_NAMES.len() as u32 {
                         write!(&mut text, "[{}", SERVICE_ID_NAMES[message_id as usize])?;
                     } else if ct != DltMessageControlType::Time {
@@ -1112,21 +1117,33 @@ impl DltMessage {
                     if needs_closing_bracket {
                         write!(&mut text, "]")?;
                     }
+                    Ok(text)
                 }
                 _ => {
                     // write in dlt-viewer format [<msg id>] ascii chars| hex dump e.g. [4711] CID|43 49 44
+                    const MAX_U32_LEN: usize = "4294967295".len(); // format!("{}", u32::MAX).len();
+                    let est_len_ascii = 3 + 1 + MAX_U32_LEN + payload.len();
+                    // if the string is too long the time for the search removes the benefit of a smaller allocation
+                    // so we assume >128 bytes that we will replace the ascii chars with a hex dump
+                    let will_be_replaced =
+                        est_len_ascii > 128 || payload.iter().any(is_non_printable_char_wo_rnt);
+                    let est_len_full = if will_be_replaced {
+                        est_len_ascii + (payload.len() * 3) - if payload.is_empty() { 0 } else { 1 }
+                    } else {
+                        est_len_ascii
+                    };
+                    let mut text = String::with_capacity(est_len_full.next_power_of_two());
                     write!(&mut text, "[{}] ", message_id)?;
                     let times_replaced =
                         crate::utils::buf_as_printable_ascii_to_write(&mut text, payload, '-')?;
-                    write!(&mut text, "|")?;
+                    text.push('|');
                     if times_replaced > 0 {
                         crate::utils::buf_as_hex_to_write(&mut text, payload)?;
                     }
+                    Ok(text)
                 }
             }
         }
-
-        Ok(text)
     }
 
     #[cfg(test)]
