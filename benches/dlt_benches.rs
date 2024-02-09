@@ -438,6 +438,70 @@ fn dlt_payload_verb(c: &mut Criterion) {
     }
 }
 
+/// bench the payload_as_text method for verbose messages
+fn dlt_payload_nonverb(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dlt_payload_nonverb");
+    //group.sample_size(10);
+    group.warm_up_time(std::time::Duration::new(1, 0));
+    group.measurement_time(std::time::Duration::new(2, 0));
+    let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
+    group.plot_config(plot_config);
+    for payload_len in [0u16, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 0xffff - 4].iter() {
+        let mut payloads = Vec::with_capacity(2);
+        let message_id: u32 = 0xf0000000 + *payload_len as u32;
+        payloads.push(message_id.to_be_bytes().to_vec());
+        payloads.push(vec![0u8; *payload_len as usize]);
+        let m = DltMessage {
+            index: 0,
+            reception_time_us: 0,
+            ecu: DltChar4::from_buf(b"ECU1"),
+            timestamp_dms: 0,
+            standard_header: DltStandardHeader {
+                htyp: 0x20 | 0x02, // big end
+                len: 100,
+                mcnt: 0,
+            },
+            extended_header: None,
+            lifecycle: 0,
+            payload: payloads.into_iter().flatten().collect(),
+            payload_text: None,
+        };
+        // let args = m.into_iter();
+        group.bench_function(BenchmarkId::new("random", *payload_len + 1), |b| {
+            b.iter(|| {
+                let text = m.payload_as_text();
+                assert!(text.is_ok());
+            })
+        });
+        let mut payloads = Vec::with_capacity(2);
+        let message_id: u32 = 0xf0000000 + *payload_len as u32;
+        payloads.push(message_id.to_be_bytes().to_vec());
+        payloads.push(vec![b'A'; *payload_len as usize]);
+        let m = DltMessage {
+            index: 0,
+            reception_time_us: 0,
+            ecu: DltChar4::from_buf(b"ECU1"),
+            timestamp_dms: 0,
+            standard_header: DltStandardHeader {
+                htyp: 0x20 | 0x02, // big end
+                len: 100,
+                mcnt: 0,
+            },
+            extended_header: None,
+            lifecycle: 0,
+            payload: payloads.into_iter().flatten().collect(),
+            payload_text: None,
+        };
+        // let args = m.into_iter();
+        group.bench_function(BenchmarkId::new("ascii_only", *payload_len + 1), |b| {
+            b.iter(|| {
+                let text = m.payload_as_text();
+                assert!(text.is_ok());
+            })
+        });
+    }
+}
+
 criterion_group!(
     dlt_benches,
     dlt_iterator1,
@@ -447,5 +511,6 @@ criterion_group!(
     dlt_bench1,
     dlt_bench2,
     dlt_payload_verb,
+    dlt_payload_nonverb
 );
 criterion_main!(dlt_benches);
