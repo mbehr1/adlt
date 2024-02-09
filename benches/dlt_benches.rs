@@ -1,16 +1,20 @@
 use criterion::{
     /*black_box,*/ criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
 };
+use criterion::{AxisScale, PlotConfiguration};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use tempfile::NamedTempFile;
 
-use adlt::dlt::*;
-use adlt::utils::sorting_multi_readeriterator::{
-    SequentialMultiIterator, SortingMultiReaderIterator,
+use adlt::{
+    dlt::*,
+    dlt_args,
+    utils::{
+        sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
+        *,
+    },
 };
-use adlt::utils::*;
 
 pub fn dlt_bench_is_storage_header_pattern(c: &mut Criterion) {
     let pat1 = [b'D', b'L', b'T', 1u8];
@@ -375,6 +379,65 @@ pub fn dlt_iterator1(c: &mut Criterion) {
     group.finish();
 }
 
+/// bench the payload_as_text method for verbose messages
+fn dlt_payload_verb(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dlt_payload_verb");
+    group.sample_size(20);
+    let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
+    group.plot_config(plot_config);
+    for nr_args in [0, 8, 16, 32, 64, 128, 0xff - 8].iter() {
+        let mut payloads = Vec::with_capacity(*nr_args);
+        let mut got_nr_args = 0usize;
+        while got_nr_args < *nr_args {
+            let (noar, payload) = dlt_args!(
+                nr_args % 2 == 0,
+                42u8,
+                0x4243u16,
+                -0x42434445i32,
+                0x4243444546474849u64,
+                "floats coming",
+                1.0_f32,
+                -2.0_f64
+            )
+            .unwrap();
+            payloads.push(payload);
+            got_nr_args += noar as usize;
+        }
+        let m = DltMessage {
+            index: 0,
+            reception_time_us: 0,
+            ecu: DltChar4::from_buf(b"ECU1"),
+            timestamp_dms: 0,
+            standard_header: DltStandardHeader {
+                htyp: if cfg!(target_endian = "big") {
+                    0x20 | 0x02
+                } else {
+                    0x20_u8
+                }, // little end
+                len: 100,
+                mcnt: 0,
+            },
+            extended_header: Some(DltExtendedHeader {
+                verb_mstp_mtin: 1,
+                noar: got_nr_args as u8,
+                apid: DltChar4::from_buf(b"APID"),
+                ctid: DltChar4::from_buf(b"CTID"),
+            }),
+            lifecycle: 0,
+            payload: payloads.into_iter().flatten().collect(),
+            payload_text: None,
+        };
+        assert_eq!(m.noar() as usize, got_nr_args);
+        // let args = m.into_iter();
+        group.bench_function(BenchmarkId::from_parameter(*nr_args + 1), |b| {
+            b.iter(|| {
+                let text = m.payload_as_text();
+                assert!(text.is_ok());
+            })
+        });
+    }
+}
+
 criterion_group!(
     dlt_benches,
     dlt_iterator1,
@@ -383,5 +446,6 @@ criterion_group!(
     dlt_header_as_text_to_write,
     dlt_bench1,
     dlt_bench2,
+    dlt_payload_verb,
 );
 criterion_main!(dlt_benches);
