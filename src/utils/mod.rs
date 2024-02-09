@@ -228,12 +228,7 @@ pub fn contains_regex_chars(s: &str) -> bool {
     })
 }
 
-static U8_HEX_LOW: [u8; 16] = [
-    b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f',
-];
-static CHARS_HEX_LOW: [char; 16] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
-];
+static U8_HEX_LOW: [u8; 16] = *b"0123456789abcdef";
 
 #[inline(always)]
 pub fn is_printable_char(c: &u8) -> bool {
@@ -278,13 +273,15 @@ pub fn buf_as_hex_to_write(
     buf: &[u8],
 ) -> Result<(), std::fmt::Error> {
     for (i, item) in buf.iter().enumerate() {
-        let c1 = CHARS_HEX_LOW[(item >> 4) as usize];
-        let c2 = CHARS_HEX_LOW[(item & 0x0f) as usize];
+        let c1 = U8_HEX_LOW[(item >> 4) as usize];
+        let c2 = U8_HEX_LOW[(item & 0x0f) as usize];
         if i > 0 {
-            writer.write_char(' ')?;
+            // SAFETY: we know that the slice is valid UTF8
+            writer.write_str(unsafe { std::str::from_utf8_unchecked(&[b' ', c1, c2]) })?;
+        } else {
+            // SAFETY: we know that the slice is valid UTF8
+            writer.write_str(unsafe { std::str::from_utf8_unchecked(&[c1, c2]) })?;
         }
-        writer.write_char(c1)?;
-        writer.write_char(c2)?;
     }
 
     Ok(())
