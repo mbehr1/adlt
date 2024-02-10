@@ -542,8 +542,11 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     // setup (thread) filter chain:
     let (tx_for_parse_thread, rx_from_parse_thread) = sync_channel(1024 * 1024); // msg -> parse_lifecycles (t2)
     let (tx_for_lc_thread, rx_from_lc_thread) = sync_channel(512 * 1024); // parse_lifecycles -> buffer_sort_messages (t3)
-    let (lcs_r, lcs_w) =
-        evmap::new::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
+    let (lcs_r, lcs_w) = evmap::Options::default()
+        .with_hasher(nohash_hasher::BuildNoHashHasher::<
+            adlt::lifecycle::LifecycleId,
+        >::default())
+        .construct::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
     let lc_thread = std::thread::spawn(move || {
         adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, &|m| {
             sync_sender_send_delay_if_full(m, &tx_for_lc_thread)

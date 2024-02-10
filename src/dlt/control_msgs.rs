@@ -16,7 +16,7 @@ pub fn parse_ctrl_sw_version_payload(is_big_endian: bool, payload: &[u8]) -> Opt
         if payload.len() >= sw_len {
             let (s, _) = WINDOWS_1252.decode_without_bom_handling(&payload[0..sw_len]);
             let s2 = RE_NEW_LINE.replace_all(&s, " ");
-            return Some(String::from(s2)); // todo optimize with returning Cow...
+            return Some(String::from(s2));
         }
     }
     None

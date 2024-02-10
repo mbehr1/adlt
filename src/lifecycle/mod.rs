@@ -850,7 +850,7 @@ mod tests {
         drop(tx);
         let (lcs_r, lcs_w) = evmap::Options::default()
             .with_hasher(nohash_hasher::BuildNoHashHasher::<LifecycleId>::default())
-            .construct::<LifecycleId, LifecycleItem>(); //  evmap::new::<u32, Box<Lifecycle>>();
+            .construct::<LifecycleId, LifecycleItem>();
         let start = Instant::now();
         let t = std::thread::spawn(move || {
             parse_lifecycles_buffered_from_stream(lcs_w, rx, &|m| tx2.send(m))
