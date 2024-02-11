@@ -12,6 +12,7 @@ use crate::{
     utils::US_PER_SEC,
     SendMsgFnReturnType,
 };
+use nohash_hasher::BuildNoHashHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc::Receiver;
 
@@ -471,6 +472,18 @@ impl Lifecycle {
 /// let lcs_w = t.join().unwrap();
 /// // now lcs_r still contains valid data!
 /// ````
+/// ## Implementation details
+/// ### Lifecycle information passing
+/// To pass information about the detected lifecycles to the caller or other threads an evmap is used.
+/// The lc.id is used as key and the LifecycleInfo as value.
+/// As these are not globally shared the evmap needs to be "refreshed" to make the info available to other threads.
+/// There are two rules to follow:
+///
+/// #1 for any message passed to the outflow the info should be available. So that the for any message returned a
+/// lifecycle info is available. (so update whenever msgs for a new lifecycle are passed to the outflow)
+///
+/// #2 the lifecycle info should be updated from time to time (e.g. every 100k msgs) and at the end reflect
+/// the final state. This is to e.g. have increasing number of msgs in an UI shown while parsing.
 pub fn parse_lifecycles_buffered_from_stream<M, S, F: Fn(DltMessage) -> SendMsgFnReturnType>(
     mut lcs_w: evmap::WriteHandle<LifecycleId, LifecycleItem, M, S>,
     inflow: Receiver<DltMessage>,
@@ -513,14 +526,59 @@ where
     let mut buffered_msgs: std::collections::VecDeque<DltMessage> =
         std::collections::VecDeque::with_capacity(10_000_000); // todo what is a good value to buffer at least 60s?
                                                                // the lifecycles that have a likelyhood of being merged with prev or changing start times are kept here:
-    let mut buffered_lcs: std::collections::HashSet<LifecycleId> = std::collections::HashSet::new();
+    let mut buffered_lcs =
+        std::collections::HashSet::with_hasher(BuildNoHashHasher::<LifecycleId>::default());
 
     // todo add check that msg.received times increase monotonically! (ignoring the dlt viewer bug)
     let mut next_buffer_check_time: u64 = 0;
     let mut merged_needed_id: LifecycleId = 0;
     // let start = std::time::Instant::now();
-    let mut lcs_w_needs_refresh = false;
     let mut last_msg_index: DltMessageIndexType = 0;
+
+    let mut lcs_to_refresh = Vec::<LifecycleId>::with_capacity(128);
+
+    let mark_lc_id_to_refresh = |id: LifecycleId, lcs_to_refresh: &mut Vec<LifecycleId>| {
+        if !lcs_to_refresh.contains(&id) {
+            // reverse contains might be faster
+            lcs_to_refresh.push(id);
+        }
+    };
+
+    let mut last_regular_refresh_index: DltMessageIndexType = 0;
+
+    let mut check_regular_refresh =
+        |last_msg_index: u32,
+         force_refresh: bool,
+         lcs_to_refresh: &mut Vec<LifecycleId>,
+         lcs_w: &mut evmap::WriteHandle<LifecycleId, LifecycleItem, M, S>,
+         ecu_map: &std::collections::HashMap<
+            DltChar4,
+            Vec<Lifecycle>,
+            std::hash::BuildHasherDefault<nohash_hasher::NoHashHasher<DltChar4>>,
+        >| {
+            if force_refresh || last_regular_refresh_index + 100_000 < last_msg_index {
+                // update all marked lifecycles:
+                let mut nr_lcs_to_update = lcs_to_refresh.len();
+                for vs in ecu_map.values() {
+                    if nr_lcs_to_update == 0 {
+                        break;
+                    }
+                    for lc in vs.iter().rev() {
+                        if lcs_to_refresh.contains(&lc.id) {
+                            lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index));
+                            nr_lcs_to_update -= 1;
+                            if nr_lcs_to_update == 0 {
+                                break;
+                            }
+                        }
+                    }
+                }
+                lcs_w.refresh();
+                last_regular_refresh_index = last_msg_index;
+                lcs_to_refresh.clear();
+            }
+        };
+
     for mut msg in inflow {
         /* if msg.ecu == DltChar4::from_str("ECU").unwrap() && msg.timestamp_dms > 0 {
             println!(
@@ -559,6 +617,7 @@ where
                             let is_buffered = buffered_lcs.contains(&prev_lc.id);
                             if is_buffered {
                                 // the buffered lcs shall be merged again (so lc2 is invalid afterwards)
+                                // todo this is cpu intensive/expensive. try to reduce the likelyhood.
                                 // this is easy now:
                                 prev_lc.merge(lc2);
                                 msg.lifecycle = prev_lc.id;
@@ -605,23 +664,9 @@ where
                             }
                         }
                     }
-
-                    // quick fix for wrong lifecycle end/nr msgs, otherwise the next .contains_key might be wrong!
-                    // happens when the lc2.id is not in buffered_lcs anymore.
-                    // todo refresh logic needed, e.g. by option every x sec or every x msgs
-                    if lcs_w_needs_refresh {
-                        lcs_w.refresh();
-                        lcs_w_needs_refresh = false;
-                    }
-                    if lcs_w.contains_key(&lc2.id) {
-                        // this assert is met. so we can ignore the above prev_lc merge part assert!(!buffered_lcs.contains(&lc2.id));
-                        // and prev_lc is still buffered as well to as well not contained.
-                        // to update nr of msgs in lifecycle and end time:
-                        lcs_w.update(lc2.id, new_lifecycle_item(lc2, last_msg_index));
-                        lcs_w_needs_refresh = true;
-                    }
+                    // here lc2.id is not valid anylonger is remove_last_lc is set! Then it was merged in the buffered prev_lc
                 }
-                Some(lc3) => {
+                Some(new_lc) => {
                     // new lc was created (as calc. lc start_time was past prev lc end time)
 
                     // we buffer here the messages until its clear that this is really
@@ -633,8 +678,8 @@ where
                     // 1. once the new lifecycle overlaps the prev. one -> and needs a merge (see above)
                     // 2. once the new lifecycle contains messages with timestamp > x (max buffering at (start plus at runtime) buffer)
                     // println!("added lc id {} to buffered_lcs", lc3.id);
-                    buffered_lcs.insert(lc3.id);
-                    ecu_lcs.push(lc3);
+                    buffered_lcs.insert(new_lc.id);
+                    ecu_lcs.push(new_lc);
                 }
             }
             if remove_last_lc {
@@ -673,8 +718,9 @@ where
                             for lc in &buffered_lcs {
                                 println!(" buffered_lc={}", lc);
                             }*/
-                            lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index)); // update is safer and handles add case as well lcs_w.insert(lc.id, new_lifecycle_item(lc.clone()));
-                            lcs_w_needs_refresh = true;
+                            // lc update due to rule #1:
+                            lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index));
+                            lcs_w.refresh();
 
                             // if the first msg in buffered_msgs belongs to this confirmed lc
                             // then send all msgs until one msgs belongs to a buffered_lcs
@@ -683,22 +729,20 @@ where
                                 let msg_lc = buffered_msgs[0].lifecycle;
                                 if msg_lc == prune_lc_id {
                                     let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
-                                    if lcs_w_needs_refresh {
-                                        lcs_w.refresh();
-                                        lcs_w_needs_refresh = false;
-                                    }
                                     if let Err(e) = outflow(msg) {
                                         println!("parse_lifecycles_buffered_from_stream .send 1 got err={}", e);
                                         break; // exit. the receiver has stopped
                                     }
                                 } else if !buffered_lcs.contains(&msg_lc) {
                                     prune_lc_id = msg_lc;
-                                    // and we can delete right away
+                                    // todo: this would be a perfect time to update the lc from that msg due to rule #2
+                                    // the lc info might have been significantly updated after being removed from buffered_lcs.
+                                    // the updated lc.ids would need to be cached here to avoid double redundant updates.
+                                    // for now mark only here as "needs refresh"
+                                    mark_lc_id_to_refresh(msg_lc, &mut lcs_to_refresh);
+
+                                    // send that msg right away: (code duplication, might as well just wait one iteration)
                                     let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
-                                    if lcs_w_needs_refresh {
-                                        lcs_w.refresh();
-                                        lcs_w_needs_refresh = false;
-                                    }
                                     if let Err(e) = outflow(msg) {
                                         println!("parse_lifecycles_buffered_from_stream .send 2 got err={}", e);
                                         break;
@@ -718,11 +762,15 @@ where
         if !buffered_lcs.is_empty() {
             buffered_msgs.push_back(msg);
         } else {
-            // todo slog... println!("sending non-buffered_msg {:?}", msg);
-            if lcs_w_needs_refresh {
-                lcs_w.refresh();
-                lcs_w_needs_refresh = false;
-            }
+            // check for lc update rule #2 here.
+            mark_lc_id_to_refresh(msg.lifecycle, &mut lcs_to_refresh);
+            check_regular_refresh(
+                last_msg_index,
+                false,
+                &mut lcs_to_refresh,
+                &mut lcs_w,
+                &ecu_map,
+            );
             if let Err(e) = outflow(msg) {
                 println!(
                     "parse_lifecycles_buffered_from_stream .send 3 got err={}",
@@ -733,19 +781,23 @@ where
         }
     }
 
-    // if we have still buffered lcs we have to make them valid now:
-    //println!("adding {} buffered_lcs to lcs_w at end", buffered_lcs.len());
-    for lc_id in buffered_lcs {
-        'outer: for vs in ecu_map.values() {
-            for v in vs {
-                if v.id == lc_id {
-                    lcs_w.update(lc_id, new_lifecycle_item(v, last_msg_index));
-                    // println!("lcs_w content added at end id={:?} lc={:?}", lc_id, *v);
-                    break 'outer;
+    // if we have still buffered lcs we have to make them valid now: (rule#1)
+    let mut nr_lcs_to_update = buffered_lcs.len();
+    for vs in ecu_map.values() {
+        if nr_lcs_to_update == 0 {
+            break;
+        }
+        for lc in vs.iter().rev() {
+            if buffered_lcs.contains(&lc.id) {
+                lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index));
+                nr_lcs_to_update -= 1;
+                if nr_lcs_to_update == 0 {
+                    break;
                 }
             }
         }
     }
+
     lcs_w.refresh();
 
     // if we have buffered msgs we have to output them now:
@@ -759,6 +811,15 @@ where
             break;
         }
     }
+
+    // todo check for rule #2 and do the final update
+    check_regular_refresh(
+        last_msg_index,
+        true,
+        &mut lcs_to_refresh,
+        &mut lcs_w,
+        &ecu_map,
+    );
 
     /*
     println!(
