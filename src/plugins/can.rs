@@ -671,6 +671,9 @@ impl CanPlugin {
 
         let files = get_all_fibex_in_dir(Path::new(&fibex_dir), false)?; // todo or recursive
         let fibex_data = load_all_fibex(&files)?;
+        for warning in &fibex_data.parse_warnings {
+            warnings.push(warning.clone());
+        }
 
         // update state:
 

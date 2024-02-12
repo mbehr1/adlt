@@ -751,6 +751,10 @@ impl SomeipPlugin {
                 fibex_dir
             ));
         }
+        // add any of those warnings after the prev one.
+        for warning in &fibex_data.parse_warnings {
+            warnings.push(warning.clone());
+        }
 
         // update state:
         let mut services_by_name = fibex_data
