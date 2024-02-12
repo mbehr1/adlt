@@ -2,6 +2,24 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.53.0 - 2024-02-12
+#### Features
+- **(fibex)** show warnings from parsing - (3cbe61f) - Matthias Behr
+#### Miscellaneous Chores
+- update dependencies - (4126c57) - Matthias Behr
+- update chrono dep - (5ec5a53) - Matthias Behr
+- update slog-async and clap - (d68aea3) - Matthias Behr
+- update regex crates - (b721de7) - Matthias Behr
+#### Performance Improvements
+- **(lifecycle)** optimize evmap update logic - (0dfccfb) - Matthias Behr
+- use nohash for lifecycle hashmap - (f6d6b3d) - Matthias Behr
+- optimize buf_as_hey_to_write - (c8b9e17) - Matthias Behr
+- improve payload_as_text for non-verbose msgs - (5ec1781) - Matthias Behr
+- add dlt_payload_nonverb bench - (766ab66) - Matthias Behr
+- add payload_verb bench - (78a6373) - Matthias Behr
+
+- - -
+
 ## v0.52.1 - 2024-02-04
 #### Bug Fixes
 - **(remote)** timestamps in ms as u64 - (e848b02) - Matthias Behr
