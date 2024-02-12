@@ -408,7 +408,9 @@ impl NonVerbosePlugin {
                 warnings.push(warning);
             } else {
                 // is it a non-verbose describing fibex?
-
+                for warning in &fd.parse_warnings {
+                    warnings.push(warning.clone()); // or only if it was a proper non-verbose file?
+                }
                 // [Dlt402] only one ECU XML element
                 if fd.elements.ecus.len() == 1 {
                     let ecu: &Ecu = &fd.elements.ecus[0];
