@@ -271,7 +271,11 @@ impl Lifecycle {
     /// * ignore/handle control messages
     /// * if the lifecycle is longer than time x (e.g. a few mins) stop adjusting starttime to reduce impact of different clock speed/skews between recorder and ecu
     ///
-    pub fn update(&mut self, msg: &mut DltMessage) -> Option<Lifecycle> {
+    pub fn update(
+        &mut self,
+        msg: &mut DltMessage,
+        max_buffering_delay_us: u64,
+    ) -> Option<Lifecycle> {
         // check whether this msg belongs to the lifecycle:
         // 0) ignore any CTRL REQUEST msgs:
         if msg.is_ctrl_request() {
@@ -307,6 +311,30 @@ impl Lifecycle {
         let is_part_of_cur_lc = (!is_msg_lc_start_slightly_overlapping
             && (msg_lc_start <= cur_end_time/*|| msg_lc_start <= self.last_reception_time disabled as part of fixing lc_ex006 (idlts)*/))
             || !msg.standard_header.has_timestamp();
+
+        let would_move_start_time_us = if msg_lc_start < self.start_time {
+            self.start_time - msg_lc_start
+        } else {
+            0
+        };
+
+        if is_part_of_cur_lc
+            && would_move_start_time_us > max_buffering_delay_us
+            && self.max_timestamp_us > 0
+        // a heuristic to ignore those very short lifecycles created by (most of the time invalid msgs with timestamp 0)
+        {
+            // we ignore this as it's likely wrong timestamp
+            println!(
+                "update: ignoring msg as it would move start time by {}s\n{:?}\nLC:{:?}",
+                would_move_start_time_us / US_PER_SEC,
+                msg,
+                &self
+            );
+            // so assign to this one but don't update any time related stats
+            msg.lifecycle = self.id;
+            self.nr_msgs += 1;
+            return None;
+        }
 
         // resume (e.g. from Android STR) detection:
         // - a gap of >MIN_RESUME_RECEPTION_TIME_GAP s in reception time
@@ -531,8 +559,6 @@ where
 
     // todo add check that msg.received times increase monotonically! (ignoring the dlt viewer bug)
     let mut next_buffer_check_time: u64 = 0;
-    let mut merged_needed_id: LifecycleId = 0;
-    // let start = std::time::Instant::now();
     let mut last_msg_index: DltMessageIndexType = 0;
 
     let mut lcs_to_refresh = Vec::<LifecycleId>::with_capacity(128);
@@ -592,7 +618,7 @@ where
         }*/
         // get the lifecycles for the ecu from that msg:
         last_msg_index = msg.index;
-        let msg_reception_time = msg.reception_time_us;
+        let msg_reception_time_us = msg.reception_time_us;
 
         let msg_timestamp_us = msg.timestamp_us();
 
@@ -604,7 +630,7 @@ where
             let (last_lc, rest_lcs) = ecu_lcs.as_mut_slice().split_last_mut().unwrap();
             let lc2 = last_lc;
             let mut remove_last_lc = false;
-            match lc2.update(&mut msg) {
+            match lc2.update(&mut msg, max_buffering_delay_us) {
                 None => {
                     // lc2 was updated
                     // now we have to check whether it overlaps with the prev. one and needs to be merged:
@@ -612,7 +638,10 @@ where
                         let prev_lc = rest_lcs.last_mut().unwrap(); // : &mut Lifecycle = &mut last_lcs[ecu_lcs_len - 2];
                         if lc2.start_time <= prev_lc.end_time() && !lc2.is_resume() {
                             // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
-                            //println!("merge needed:\n {:?}\n {:?}", prev_lc, lc2);
+                            /*println!(
+                                "merge needed after msg#{}:\n {:?}\n {:?}",
+                                msg.index, prev_lc, lc2
+                            );*/
                             // we merge into the prev. one (so use the prev.one only)
                             let is_buffered = buffered_lcs.contains(&prev_lc.id);
                             if is_buffered {
@@ -639,28 +668,41 @@ where
                                     "buffered_lcs does not contain {} msg:{:?}",
                                     lc2.id,
                                     msg
-                                ); // logical error otherwise
+                                ); // logical error otherwise (prev lc still buffered but the newer one that is to be merged into the prev one not?)
                                 buffered_lcs.remove(&lc2.id);
                                 remove_last_lc = true;
                                 // if we have no more yet, send the other msgs: (not possible as prev_lc exists)
                             } else {
+                                /*
                                 #[allow(clippy::collapsible_else_if)]
                                 if merged_needed_id != lc2.id {
                                     println!("merge needed but prev_lc not buffered anymore! (todo!):\n {:?}\n {:?} msg #{}", prev_lc, lc2, last_msg_index);
                                     merged_needed_id = lc2.id;
-                                }
-                                //panic!("todo shouldn't happen yet!");
-                                // this is the rare case where there had been already 2 lifecycles from prev. run and now
-                                // the 2nd got merged... todo think about how to handle that... as we dont want to have our callers
-                                // have to support/handle interims lifecycles!
-                                /*
+                                }*/
+
+                                let lc2_msgs = lc2.nr_msgs;
                                 prev_lc.merge(lc2);
-                                lcs_w.update(prev_lc.id, *prev_lc);
-                                // we will store lc2 later as the msgs still point to this one
-                                // but we have to make sure that this is not ecu_lcs anymore
+                                msg.lifecycle = prev_lc.id;
+                                let mut moved_msgs = 1;
+                                // and now update the buffered msgs:
+                                {
+                                    buffered_msgs.iter_mut().for_each(|m| {
+                                        /*println!(
+                                            "modifying lifecycle from {} to {} for {:?}",
+                                            lc2.id, prev_lc.id, m
+                                        );*/
+                                        if m.lifecycle == lc2.id {
+                                            m.lifecycle = prev_lc.id;
+                                            moved_msgs += 1;
+                                        }
+                                    });
+                                };
+                                if !buffered_lcs.remove(&lc2.id) && moved_msgs != lc2_msgs {
+                                    println!("merged lc was not in buffered_lcs or its msgs not buffered anymore!\n {:?}\n {:?} msg #{}, moved_msgs={} vs {}", prev_lc, lc2, last_msg_index, moved_msgs, lc2_msgs);
+                                }
                                 remove_last_lc = true;
-                                // check whether prev_lc now overlaps with the prevprev one... todo
-                                */
+                                // we can simply merge with prev one, i.e. assign the prev_lc.id to the msgs from the cur one!
+                                // (as those still need to buffered according to rule #b1)
                             }
                         }
                     }
@@ -697,68 +739,112 @@ where
 
         // if we have buffered lifecycles check whether we can stop buffering them and mark as valid ones:
         // once the lifecycle start even including a max buffering delay can not fit into the prev one any longer:
+        // The evaluation needs to be per ecu!
+
+        // a lifecycle (or msgs of a lifecycle) need to be buffered for:
+        // #b1. the current lifecycle (last one per ECU) might still be merged into the prev. one
+        // #b2. ? (the prev one?) do we need to keep it? partly? for how long and why?
+        //   There could be "cascaded" merges. E.g. lc2 merged with lc1 merged with lc0?
+        //   Is this the same check as for #b1 but with "last lc"?
+        //    So when can we assume a lifecycle will not need to be merged with prev. one?
+        //     if its reasonable long enough: i.e. by amount of msgs... -> more and more unlikely (as the buffering delay tends to 0 then)
+        //  ! ->  so if the lifecycle contains msgs with a timestamp distance > max_buffering_delay_us (e.g. min timestamp 10s, max timestamp 70s -> unlikely that msgs with timestamp <10 do arrive)
+        //    this should be if: lc.max_timestamp_us - lc.min_timestamp_us > max_buffering_delay_us
+        // or (if e.g. there are no more msgs for this lifecycle from ecu A but only from other LCs from ECU B): TODO
+
+        //     (not) if the start time is not close to the prev. one even if a msg with max buffering delay would arrive (no, max buffering delay moves the calc start time to later)
+
+        // Need to use a way that doesn't rely on the next lifecycle (so can only evaluate prev lc as the current test below)
+        // with long lifecycles the buffer delay will be small so:
+        //   msg.reception_time_us - msg_timestamp_us will converge towards lc.start_time
+        //   so min_lc_start_time = msg.reception_time_us - msg_timestamp_us - max_buffering_delay_us will roughly be max_buffering_delay_us smaller than lc.start_time
+
         // we do this only once per sec
-        if next_buffer_check_time < msg_reception_time {
-            let min_lc_start_time =
-                if msg.reception_time_us > (msg_timestamp_us + max_buffering_delay_us) {
-                    (msg.reception_time_us - msg_timestamp_us) - max_buffering_delay_us
-                } else {
-                    0
-                };
-            for ecu_lcs in ecu_map.values() {
-                for lc in ecu_lcs.iter().rev() {
-                    if !buffered_lcs.contains(&lc.id) {
-                        break;
-                    } else {
-                        // this lc is still buffered:
-                        if min_lc_start_time > lc.start_time {
-                            //println!("confirmed buffered lc as min_lc_start_time {} > lc.start_time {}, confirmed lc={:?}", min_lc_start_time, lc.start_time, lc);
-                            buffered_lcs.remove(&lc.id);
-                            /*println!("remaining buffered_lcs={}", buffered_lcs.len());
-                            for lc in &buffered_lcs {
-                                println!(" buffered_lc={}", lc);
-                            }*/
-                            // lc update due to rule #1:
-                            lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index));
-                            lcs_w.refresh();
+        if next_buffer_check_time < msg_reception_time_us {
+            if msg_reception_time_us > (msg_timestamp_us + max_buffering_delay_us) {
+                let min_lc_start_time =
+                    msg_reception_time_us - (msg_timestamp_us + max_buffering_delay_us);
+                for ecu_lcs in ecu_map.values() {
+                    /*println!(
+                        "ecu_lcs.len()={}, buffered_lcs.len()={} buffered_msgs.len()={}",
+                        ecu_lcs.len(),
+                        buffered_lcs.len(),
+                        buffered_msgs.len()
+                    );*/
+                    for lc in ecu_lcs.iter().rev() {
+                        if buffered_lcs.is_empty() {
+                            break;
+                        } else {
+                            if !buffered_lcs.contains(&lc.id) {
+                                continue;
+                            }
+                            // this lc is still buffered:
+                            if (lc.start_time < min_lc_start_time && lc.ecu==msg.ecu)
+                            || lc.max_timestamp_us - lc.min_timestamp_us > max_buffering_delay_us
+                            // or if any message recvd would have a too high max_buffering_delay to impact this lifecycle
+                            // the situation is a short (so the upper check doesn't fire) lifecycle close to start of a long next one
+                            || msg_reception_time_us - max_buffering_delay_us > lc.end_time()
+                            {
+                                if lc.start_time < min_lc_start_time {
+                                    println!(
+                                    "confirmed buffered lc as min_lc_start_time {} > lc.start_time {}, confirmed lc={:?}",
+                                    min_lc_start_time, lc.start_time, lc
+                                );
+                                } else {
+                                    println!("confirmed buffered lc as >max_buffering_delay, confirmed lc={:?}", lc);
+                                }
+                                buffered_lcs.remove(&lc.id);
+                                /*println!("remaining buffered_lcs={}", buffered_lcs.len());
+                                for lc in &buffered_lcs {
+                                    println!(" buffered_lc={}", lc);
+                                }*/
+                                // lc update due to rule #1:
+                                lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index));
+                                lcs_w.refresh();
 
-                            // if the first msg in buffered_msgs belongs to this confirmed lc
-                            // then send all msgs until one msgs belongs to a buffered_lcs
-                            let mut prune_lc_id = lc.id;
-                            while !buffered_msgs.is_empty() {
-                                let msg_lc = buffered_msgs[0].lifecycle;
-                                if msg_lc == prune_lc_id {
-                                    let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
-                                    if let Err(e) = outflow(msg) {
-                                        println!("parse_lifecycles_buffered_from_stream .send 1 got err={}", e);
-                                        break; // exit. the receiver has stopped
-                                    }
-                                } else if !buffered_lcs.contains(&msg_lc) {
-                                    prune_lc_id = msg_lc;
-                                    // todo: this would be a perfect time to update the lc from that msg due to rule #2
-                                    // the lc info might have been significantly updated after being removed from buffered_lcs.
-                                    // the updated lc.ids would need to be cached here to avoid double redundant updates.
-                                    // for now mark only here as "needs refresh"
-                                    mark_lc_id_to_refresh(msg_lc, &mut lcs_to_refresh);
+                                // if the first msg in buffered_msgs belongs to this confirmed lc
+                                // then send all msgs until one msgs belongs to a buffered_lcs
+                                let mut prune_lc_id = lc.id;
+                                while !buffered_msgs.is_empty() {
+                                    let msg_lc = buffered_msgs[0].lifecycle;
+                                    if msg_lc == prune_lc_id {
+                                        let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
+                                        if let Err(e) = outflow(msg) {
+                                            println!("parse_lifecycles_buffered_from_stream .send 1 got err={}", e);
+                                            break; // exit. the receiver has stopped
+                                        }
+                                    } else if !buffered_lcs.contains(&msg_lc) {
+                                        prune_lc_id = msg_lc;
+                                        // todo: this would be a perfect time to update the lc from that msg due to rule #2
+                                        // the lc info might have been significantly updated after being removed from buffered_lcs.
+                                        // the updated lc.ids would need to be cached here to avoid double redundant updates.
+                                        // for now mark only here as "needs refresh"
+                                        mark_lc_id_to_refresh(msg_lc, &mut lcs_to_refresh);
 
-                                    // send that msg right away: (code duplication, might as well just wait one iteration)
-                                    let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
-                                    if let Err(e) = outflow(msg) {
-                                        println!("parse_lifecycles_buffered_from_stream .send 2 got err={}", e);
+                                        // send that msg right away: (code duplication, might as well just wait one iteration)
+                                        let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
+                                        if let Err(e) = outflow(msg) {
+                                            println!("parse_lifecycles_buffered_from_stream .send 2 got err={}", e);
+                                            break;
+                                        }
+                                    } else {
                                         break;
                                     }
-                                } else {
-                                    break;
                                 }
                             }
                         }
                     }
                 }
-                next_buffer_check_time = msg_reception_time + US_PER_SEC; // in 1s again
             }
+            next_buffer_check_time = msg_reception_time_us + US_PER_SEC;
+            // in 1s again
         }
 
         // pass msg to outflow only if we dont have buffered lcs:
+        // we cannot treat this per ecu as we need to keep the msg.index order
+        // or for cases where we later on want to sort by timestamp even then we do need to keep the order somewhat
+        // as we want a "streaming" search where we sort within a time window only...
+
         if !buffered_lcs.is_empty() {
             buffered_msgs.push_back(msg);
         } else {
@@ -797,12 +883,11 @@ where
             }
         }
     }
-
     lcs_w.refresh();
 
     // if we have buffered msgs we have to output them now:
     for m in buffered_msgs.into_iter() {
-        // println!("sending buffered_msg {:?}", m);
+        mark_lc_id_to_refresh(m.lifecycle, &mut lcs_to_refresh);
         if let Err(e) = outflow(m) {
             println!(
                 "parse_lifecycles_buffered_from_stream .send 4 got err={}",
@@ -1786,7 +1871,7 @@ mod tests {
         );
         let mut lc = Lifecycle::new(&mut m);
         assert!(lc.sw_version.is_none()); // this is weird but currently accepted impl.
-        lc.update(&mut m2);
+        lc.update(&mut m2, 60 * US_PER_SEC);
         assert!(lc.sw_version.is_some());
         assert_eq!(lc.sw_version.unwrap(), "SW 2");
     }

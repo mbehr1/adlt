@@ -2374,68 +2374,92 @@ mod tests {
             let mut got_pluginstate = false;
             let mut got_streaminfo = false;
 
-            while let Ok(msg) = ws.read_message() {
-                match msg {
-                    Message::Binary(d) => {
-                        if let Ok((btype, _)) = bincode::decode_from_slice::<remote_types::BinType, _>(
-                            &d,
-                            BINCODE_CONFIG,
-                        ) {
-                            match btype {
-                                BinType::FileInfo(s) => {
-                                    println!("got binary msg FileInfo: {}", s.nr_msgs);
-                                    got_fileinfo = s.nr_msgs == expected_msgs;
-                                }
-                                BinType::Lifecycles(lcs) => {
-                                    println!("got binary msg Lifecycles: {}", lcs.len());
-                                    for lc in &lcs {
-                                        println!(
-                                            "got binary msg Lifecycle: #{} {} msgs",
-                                            lc.id, lc.nr_msgs
-                                        );
-                                        got_lcs.insert(lc.id, lc.nr_msgs);
+            let start_time = Instant::now();
+            if let tungstenite::stream::MaybeTlsStream::<std::net::TcpStream>::Plain(stream) =
+                ws.get_mut()
+            {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+            }
+            loop {
+                if let Ok(msg) = ws.read_message() {
+                    match msg {
+                        Message::Binary(d) => {
+                            if let Ok((btype, _)) = bincode::decode_from_slice::<
+                                remote_types::BinType,
+                                _,
+                            >(&d, BINCODE_CONFIG)
+                            {
+                                match btype {
+                                    BinType::FileInfo(s) => {
+                                        println!("got binary msg FileInfo: {}", s.nr_msgs);
+                                        got_fileinfo = s.nr_msgs == expected_msgs;
                                     }
-                                    got_lifecycles = got_lcs.iter().map(|lc| lc.1).sum::<u32>()
+                                    BinType::Lifecycles(lcs) => {
+                                        println!("got binary msg with {} Lifecycles", lcs.len());
+                                        for lc in &lcs {
+                                            println!(
+                                                "got binary msg Lifecycle: #{} {} msgs",
+                                                lc.id, lc.nr_msgs
+                                            );
+                                            got_lcs.insert(lc.id, lc.nr_msgs);
+                                        }
+                                        got_lifecycles = got_lcs.iter().map(|lc| lc.1).sum::<u32>()
                                         == (expected_msgs-4) // 4 are CTRL_REQUESTS and not part of lc
                                         && got_lcs.len() == expected_lcs;
-                                }
-                                BinType::EacInfo(eacs) => {
-                                    let sum_msgs: u32 = eacs.iter().map(|eac| eac.nr_msgs).sum();
-                                    got_eacinfo = sum_msgs == expected_msgs;
-                                    println!(
-                                        "got binary msg EacInfo: {}, sum_msgs={}",
-                                        eacs.len(),
-                                        sum_msgs
-                                    );
-                                }
-                                BinType::PluginState(p) => {
-                                    println!("got binary msg PluginState: {}", p.len());
-                                    got_pluginstate = true;
-                                }
-                                BinType::DltMsgs((_stream_id, msgs)) => {
-                                    println!("got binary msg DltMsgs: #{}", msgs.len());
-                                    got_msgs += msgs.len();
-                                } // _ => {}
-                                BinType::StreamInfo(_si) => {
-                                    got_streaminfo = true;
-                                    // todo add test where this is evaluated!
+                                    }
+                                    BinType::EacInfo(eacs) => {
+                                        let sum_msgs: u32 =
+                                            eacs.iter().map(|eac| eac.nr_msgs).sum();
+                                        got_eacinfo = sum_msgs == expected_msgs;
+                                        println!(
+                                            "got binary msg EacInfo: {}, sum_msgs={}",
+                                            eacs.len(),
+                                            sum_msgs
+                                        );
+                                    }
+                                    BinType::PluginState(p) => {
+                                        println!("got binary msg PluginState: {}", p.len());
+                                        got_pluginstate = true;
+                                    }
+                                    BinType::DltMsgs((_stream_id, msgs)) => {
+                                        println!("got binary msg DltMsgs: #{}", msgs.len());
+                                        got_msgs += msgs.len();
+                                    } // _ => {}
+                                    BinType::StreamInfo(_si) => {
+                                        got_streaminfo = true;
+                                        // todo add test where this is evaluated!
+                                    }
                                 }
                             }
                         }
-                    }
-                    Message::Text(s) => {
-                        println!("got text msg: {}", s);
-                        if s.starts_with("ok: stream") {
-                            // todo check stream id {"id":x,...} and compare with DltMsgs stream_id
-                            got_stream_ok = true;
+                        Message::Text(s) => {
+                            println!("got text msg: {}", s);
+                            if s.starts_with("ok: stream") {
+                                // todo check stream id {"id":x,...} and compare with DltMsgs stream_id
+                                got_stream_ok = true;
+                            }
                         }
+                        _ => {} // ignore
                     }
-                    _ => {} // ignore
                 }
                 if got_fileinfo && got_lifecycles && got_eacinfo && got_pluginstate {
                     break;
                 }
+                if start_time.elapsed() > Duration::from_secs(10) {
+                    println!("timeout");
+                    break;
+                }
             }
+            assert!(got_fileinfo);
+            assert!(
+                got_lifecycles,
+                "expected lcs={}, got_lcs={:?}",
+                expected_lcs, got_lcs
+            );
+            assert!(got_eacinfo);
+            assert!(got_pluginstate);
             assert_eq!(got_msgs, 0); // no msgs expected as no stream requested
             assert!(!got_stream_ok);
             assert!(!got_streaminfo);

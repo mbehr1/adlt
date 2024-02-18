@@ -1355,7 +1355,7 @@ mod tests {
         tx.send(m1).unwrap();
         // 2nd one is slightly earlier... (so has 0.099 less buffering delay)
         let mut m2 = DltMessage::for_test_rcv_tms_ms(1, 1_000);
-        assert!(lc.update(&mut m2).is_none());
+        assert!(lc.update(&mut m2, 60 * US_PER_SEC).is_none());
 
         tx.send(m2).unwrap();
         drop(tx);
