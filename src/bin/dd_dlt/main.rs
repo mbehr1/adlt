@@ -3,10 +3,15 @@ use std::{env, io::{self, Read}, u16};
 
 use adlt::{dlt::{DltChar4, DltExtendedHeader, DltMessage, DltStandardHeader}, dlt_args};
 
+enum DdDltMode {
+    Utf8,
+    Raw
+}
+
 fn main() -> Result<(), std::io::Error> {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 4 {
-        eprintln!("usage: {} <ecu_id> <app_id> <payload_size>", args[0]);
+    if args.len() < 5 {
+        eprintln!("usage: {} <ecu_id> <app_id> <payload_size> <utf8|raw>", args[0]);
         eprintln!("  reads input form stdin and write valid DLT verbose mode to stdout.");
 
         return Ok(());
@@ -18,6 +23,12 @@ fn main() -> Result<(), std::io::Error> {
     let mut payload_size: u16 = match args[3].parse::<u16>() {
         Ok(val) => val,
         Err(_) => panic!("wrong parameter"),
+    };
+
+    let mode = match args[4].as_str() {
+        "string" => DdDltMode::Utf8,
+        "raw" => DdDltMode::Raw,
+        _ => panic!("wrong parameter")
     };
 
     let mut buf = vec![0u8; payload_size as usize];
@@ -35,18 +46,11 @@ fn main() -> Result<(), std::io::Error> {
 
         // arbitrary args, taken from dlt_benches::dlt_payload_verb
         let payload: Vec<u8>;
-        (nr_args, payload) = dlt_args!(
-            count as u8,
-            count as u16,
-            count as i32,
-            count as u64,
-            "Argument (",
-            bytes, // this is the payload from stdin
-            ")",
-            count as f32,
-            count as f64
-        )
-        .expect("wrong parameter");
+        match mode {
+            DdDltMode::Raw =>  {(nr_args, payload) = dlt_args!(bytes).expect("wrong parameter");},
+            DdDltMode::Utf8 => {(nr_args, payload) = dlt_args!(std::str::from_utf8(buf.as_slice()).expect("input is not convertable to UTF-8")).expect("wrong parameter");},
+        }
+
         payload_size = payload.len() as u16;
         let len: u16 = 4 + 10 + 4 + payload_size;
 
