@@ -26,7 +26,7 @@ fn main() -> Result<(), std::io::Error> {
     };
 
     let mode = match args[4].as_str() {
-        "string" => DdDltMode::Utf8,
+        "utf8" => DdDltMode::Utf8,
         "raw" => DdDltMode::Raw,
         _ => panic!("wrong parameter")
     };
