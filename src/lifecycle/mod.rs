@@ -636,6 +636,9 @@ where
                     // now we have to check whether it overlaps with the prev. one and needs to be merged:
                     if ecu_lcs_len > 1 {
                         let prev_lc = rest_lcs.last_mut().unwrap(); // : &mut Lifecycle = &mut last_lcs[ecu_lcs_len - 2];
+
+                        // todo same logic from .update needed with !slightly overlapping...
+
                         if lc2.start_time <= prev_lc.end_time() && !lc2.is_resume() {
                             // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
                             /*println!(
@@ -680,27 +683,40 @@ where
                                     merged_needed_id = lc2.id;
                                 }*/
 
-                                let lc2_msgs = lc2.nr_msgs;
-                                prev_lc.merge(lc2);
-                                msg.lifecycle = prev_lc.id;
-                                let mut moved_msgs = 1;
-                                // and now update the buffered msgs:
-                                {
-                                    buffered_msgs.iter_mut().for_each(|m| {
-                                        /*println!(
-                                            "modifying lifecycle from {} to {} for {:?}",
-                                            lc2.id, prev_lc.id, m
-                                        );*/
-                                        if m.lifecycle == lc2.id {
-                                            m.lifecycle = prev_lc.id;
-                                            moved_msgs += 1;
-                                        }
-                                    });
-                                };
-                                if !buffered_lcs.remove(&lc2.id) && moved_msgs != lc2_msgs {
-                                    println!("merged lc was not in buffered_lcs or its msgs not buffered anymore!\n {:?}\n {:?} msg #{}, moved_msgs={} vs {}", prev_lc, lc2, last_msg_index, moved_msgs, lc2_msgs);
+                                let lc2_msgs = lc2.nr_msgs as usize;
+
+                                // check first whether all msgs are buffered. If not, dont merge but keep it:
+                                let nr_buffered_msgs = buffered_msgs
+                                    .iter()
+                                    .filter(|m| m.lifecycle == lc2.id)
+                                    .count()
+                                    + 1;
+                                if nr_buffered_msgs == lc2_msgs {
+                                    prev_lc.merge(lc2);
+                                    msg.lifecycle = prev_lc.id;
+                                    let mut moved_msgs = 1;
+                                    // and now update the buffered msgs:
+                                    {
+                                        buffered_msgs.iter_mut().for_each(|m| {
+                                            /*println!(
+                                                "modifying lifecycle from {} to {} for {:?}",
+                                                lc2.id, prev_lc.id, m
+                                            );*/
+                                            if m.lifecycle == lc2.id {
+                                                m.lifecycle = prev_lc.id;
+                                                moved_msgs += 1;
+                                            }
+                                        });
+                                    };
+                                    if !buffered_lcs.remove(&lc2.id) && moved_msgs != lc2_msgs {
+                                        println!("merged lc was not in buffered_lcs or its msgs not buffered anymore!\n {:?}\n {:?} msg #{}, moved_msgs={} vs {}", prev_lc, lc2, last_msg_index, moved_msgs, lc2_msgs);
+                                    }
+                                    remove_last_lc = true;
+                                } else {
+                                    println!("merge needed but not all msgs buffered anymore! (todo!):\n {:?}\n {:?} msg #{}", prev_lc, lc2, last_msg_index);
+                                    // we keep the lc2 for now and buffer the msgs
+                                    // todo, needed? buffered_lcs.insert(lc2.id);
                                 }
-                                remove_last_lc = true;
                                 // we can simply merge with prev one, i.e. assign the prev_lc.id to the msgs from the cur one!
                                 // (as those still need to buffered according to rule #b1)
                             }
