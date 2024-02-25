@@ -56,7 +56,7 @@ impl<T: Default> std::ops::IndexMut<FilterKind> for FilterKindContainer<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// An enum representing either a 4-character (ascii) string/DltChar4 or a regular expression (non utf8!).
 ///
 pub enum Char4OrRegex {
@@ -121,7 +121,7 @@ impl PartialEq for Char4OrRegex {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Filter {
     pub kind: FilterKind,
     pub enabled: bool, // defaults to true
