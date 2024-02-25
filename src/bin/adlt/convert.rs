@@ -1,7 +1,7 @@
 use chrono::{Local, TimeZone};
 use clap::{Arg, Command};
 use glob::{glob_with, MatchOptions};
-use slog::{debug, error, info, warn};
+use slog::{debug, error, info, warn, Drain};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::File,
@@ -415,7 +415,14 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             (hashset, time_files)
         })
         .collect();
-    debug!(log, "sorted input_files by first message reception time and ecus_seen:"; "input_file_streams" => format!("{:?}",&input_file_streams));
+    if log.is_debug_enabled() {
+        for (ecus, files) in &input_file_streams {
+            info!(log, "ecus {:?} have {} files:", ecus, files.len());
+            for (time, file, _dfi) in files {
+                info!(log, " file {} has first msg at {}", file, time);
+            }
+        }
+    }
 
     // determine plugins
     let mut plugins_active: Vec<Box<dyn Plugin + Send>> = vec![];

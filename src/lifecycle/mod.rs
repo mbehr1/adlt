@@ -265,6 +265,20 @@ impl Lifecycle {
         }
     }
 
+    /// returns whether this lifecycle is slightly overlapping with another lifecycles start time
+    ///
+    /// This is the case if the start time of the other lifecycle is within the last 2s of the
+    /// current lifecycle and the current lifecycle is at least 10s long.
+    ///
+    /// This is a heuristic used mainly for the idlt traces (internally recorded traces where internal
+    /// real time clock used is a persisted time at startup and thus slightly overlaps with prev. recordings)
+    fn is_slightly_overlapping(&self, other_start_us: u64) -> bool {
+        let cur_end_time = self.end_time();
+        other_start_us <= cur_end_time
+            && (other_start_us + (US_PER_SEC * 2)) > cur_end_time
+            && cur_end_time > (self.start_time + (US_PER_SEC * 10))
+    }
+
     /// update the Lifecycle. If this msg doesn't seem to belong to the current one
     /// a new lifecycle is created and returned.
     /// # TODOs:
@@ -304,9 +318,7 @@ impl Lifecycle {
         // is at least 10s long.
         // We should check here as well that the msg has a smaller timestamp than the last msg from same apid/ctid (TODO!)
 
-        let is_msg_lc_start_slightly_overlapping = msg_lc_start <= cur_end_time
-            && (msg_lc_start + (US_PER_SEC * 2)) > cur_end_time
-            && cur_end_time > (self.start_time + (US_PER_SEC * 10));
+        let is_msg_lc_start_slightly_overlapping = self.is_slightly_overlapping(msg_lc_start);
 
         let is_part_of_cur_lc = (!is_msg_lc_start_slightly_overlapping
             && (msg_lc_start <= cur_end_time/*|| msg_lc_start <= self.last_reception_time disabled as part of fixing lc_ex006 (idlts)*/))
@@ -324,12 +336,13 @@ impl Lifecycle {
         // a heuristic to ignore those very short lifecycles created by (most of the time invalid msgs with timestamp 0)
         {
             // we ignore this as it's likely wrong timestamp
+            /*
             println!(
                 "update: ignoring msg as it would move start time by {}s\n{:?}\nLC:{:?}",
                 would_move_start_time_us / US_PER_SEC,
                 msg,
                 &self
-            );
+            );*/
             // so assign to this one but don't update any time related stats
             msg.lifecycle = self.id;
             self.nr_msgs += 1;
@@ -444,10 +457,10 @@ impl Lifecycle {
 
             None
         } else {
-            /* if is_resume && is_part_of_cur_lc
+            /*
             {
                 println!(
-                    "update: new resume lifecycle created by\n{:?}\ntimestamp_diff={}\nlc_start_diff= {}\nrecp_time_diff={}\nLC:{:?}",
+                    "update: new lifecycle is_resume={is_resume} created by\n{:?}\ntimestamp_diff={}\nlc_start_diff= {}\nrecp_time_diff={}\nLC:{:?}",
                     msg, msg_timestamp_us - self.max_timestamp_us, msg_lc_start - self.start_time,
                     msg_reception_time_us - self.last_reception_time, &self
                 );
@@ -521,7 +534,7 @@ where
     S: std::hash::BuildHasher + Clone,
     M: 'static + Clone,
 {
-    let max_buffering_delay_us: u64 = 60_000_000; // 60s
+    let max_buffering_delay_us: u64 = 60_000_000;
 
     // create a map of ecu:vec<lifecycle.id>
     // we can maintain that here as we're the only one modifying the lcs_ evmap
@@ -637,9 +650,10 @@ where
                     if ecu_lcs_len > 1 {
                         let prev_lc = rest_lcs.last_mut().unwrap(); // : &mut Lifecycle = &mut last_lcs[ecu_lcs_len - 2];
 
-                        // todo same logic from .update needed with !slightly overlapping...
-
-                        if lc2.start_time <= prev_lc.end_time() && !lc2.is_resume() {
+                        if lc2.start_time <= prev_lc.end_time()
+                            && !lc2.is_resume()
+                            && !prev_lc.is_slightly_overlapping(lc2.start_time)
+                        {
                             // todo consider clock skew here. the earliest start time needs to be close to the prev start time and not just within...
                             /*println!(
                                 "merge needed after msg#{}:\n {:?}\n {:?}",
@@ -801,14 +815,14 @@ where
                             // the situation is a short (so the upper check doesn't fire) lifecycle close to start of a long next one
                             || msg_reception_time_us - max_buffering_delay_us > lc.end_time()
                             {
-                                if lc.start_time < min_lc_start_time {
+                                /*if lc.start_time < min_lc_start_time {
                                     println!(
                                     "confirmed buffered lc as min_lc_start_time {} > lc.start_time {}, confirmed lc={:?}",
                                     min_lc_start_time, lc.start_time, lc
                                 );
                                 } else {
                                     println!("confirmed buffered lc as >max_buffering_delay, confirmed lc={:?}", lc);
-                                }
+                                }*/
                                 buffered_lcs.remove(&lc.id);
                                 /*println!("remaining buffered_lcs={}", buffered_lcs.len());
                                 for lc in &buffered_lcs {
