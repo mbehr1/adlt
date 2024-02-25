@@ -11,14 +11,17 @@ use std::{
 
 use adlt::{
     dlt::{DltChar4, DLT_MAX_STORAGE_MSG_SIZE},
-    filter::functions::{filters_from_convert_format, filters_from_dlf},
+    filter::{
+        functions::{filters_from_convert_format, filters_from_dlf},
+        Char4OrRegex, Filter,
+    },
     plugins::{
         anonymize::AnonymizePlugin, can::CanPlugin, file_transfer::FileTransferPlugin,
         muniic::MuniicPlugin, non_verbose::NonVerbosePlugin, plugin::Plugin, plugins_process_msgs,
         rewrite::RewritePlugin, someip::SomeipPlugin,
     },
     utils::{
-        buf_as_hex_to_io_write,
+        buf_as_hex_to_io_write, contains_regex_chars,
         eac_stats::EacStats,
         get_dlt_message_iterator, get_new_namespace,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
@@ -33,6 +36,65 @@ enum OutputStyle {
     //Mixed,
     HeaderOnly,
     None,
+}
+
+#[derive(Debug, Clone)]
+struct EacFilter {
+    filter: Filter,
+}
+
+impl EacFilter {
+    /// Parse a filter in the format: "ECU:APID:CTID"
+    /// All 3 parts can be regex.
+    /// Empty parts are ignored.
+    /// e.g. filter for CTID 'TC': "::TC"
+    fn from_str(s: &str) -> Result<Self, String> {
+        if s.is_empty() {
+            return Err("filter condition is missing".to_string());
+        }
+        let mut parts = s.split(':');
+        let ecu = parts.next().unwrap_or_default();
+        let apid = parts.next().unwrap_or_default();
+        let ctid = parts.next().unwrap_or_default();
+        let mut filter = Filter::new(adlt::filter::FilterKind::Positive);
+        if !ecu.is_empty() {
+            let is_regex = contains_regex_chars(ecu);
+            let c4 = Char4OrRegex::from_str(ecu, is_regex);
+            match c4 {
+                Ok(c4) => {
+                    filter.ecu = Some(c4);
+                }
+                Err(e) => {
+                    return Err(format!("failed to parse ecu '{}': {}", ecu, e));
+                }
+            }
+        }
+        if !apid.is_empty() {
+            let is_regex = contains_regex_chars(apid);
+            let c4 = Char4OrRegex::from_str(apid, is_regex);
+            match c4 {
+                Ok(c4) => {
+                    filter.apid = Some(c4);
+                }
+                Err(e) => {
+                    return Err(format!("failed to parse apid '{}': {}", apid, e));
+                }
+            }
+        }
+        if !ctid.is_empty() {
+            let is_regex = contains_regex_chars(ctid);
+            let c4 = Char4OrRegex::from_str(ctid, is_regex);
+            match c4 {
+                Ok(c4) => {
+                    filter.ctid = Some(c4);
+                }
+                Err(e) => {
+                    return Err(format!("failed to parse ctid '{}': {}", ctid, e));
+                }
+            }
+        }
+        Ok(EacFilter { filter })
+    }
 }
 
 pub fn add_subcommand(app: Command) -> Command {
@@ -74,6 +136,17 @@ pub fn add_subcommand(app: Command) -> Command {
                 .short('f')
                 .num_args(1)
                 .help("File with filters to apply. Can be in dlt-convert format or dlt-viewer dlf format.")
+            )
+            .arg(
+                Arg::new("filter_eac")
+                .short('F')
+                .long("eac")
+                .action(clap::ArgAction::Set)
+                .require_equals(true)
+                .num_args(1..)
+                .value_parser(EacFilter::from_str)
+                .value_delimiter(',')
+                .help(r#"Filter for the specified ECU:APID:CTIDs. E.g. --eac=ECU:APID:CTID,ECU2,:APID2 . Ecu, apid, ctid are separated by ':'. Empty ones are ignored. E.g. ':apid' filters for apid only not for ecu. Entries can contain regex chars e.g. --eac=ECU1|ECU2:TC to filter for ecu=ECU1|ECU2 with APID TC. Seperate multiple filter by ','. Warning: powershell needs escaping ("-F=ECU1,ECU2,ECU3:APID3") or the long arg --eac=ECU1,ECU2,ECU3:APID3"#)
             )
             .arg(
                 Arg::new("file")
@@ -253,7 +326,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
     // parse filter file if provided:
     let filter_file = sub_m.get_one::<String>("filter_file");
-    let filters = if let Some(filter_file) = filter_file {
+    let mut filters = if let Some(filter_file) = filter_file {
         // try to open the file in either dlf/xml format or dlt-convert "APID CTID " format.
         let file = File::open(filter_file)?;
         let reader = std::io::BufReader::new(file);
@@ -276,6 +349,22 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     } else {
         vec![]
     };
+
+    let filter_eac: Vec<&EacFilter> = match sub_m.get_many::<EacFilter>("filter_eac") {
+        None => vec![],
+        Some(s) => s.collect(),
+    };
+
+    if !filter_eac.is_empty() {
+        info!(
+            log,
+            "filter_eac: {:?}",
+            filter_eac.iter().map(|f| &f.filter).collect::<Vec<_>>()
+        );
+        for eac_f in &filter_eac {
+            filters.push(eac_f.filter.clone());
+        }
+    }
 
     let output_file = sub_m.get_one::<String>("output_file").map(|s| s.to_owned());
     info!(log, "convert have {} input files", input_file_names.len(); "index_first"=>index_first, "index_last"=>index_last);
@@ -1389,6 +1478,95 @@ mod tests {
         let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
         assert_eq!(5 - 2 + 1, r.messages_processed);
         assert!(output_file.close().is_ok());
+    }
+
+    #[test]
+    fn eacfilter_fromstr() {
+        assert!(EacFilter::from_str("").is_err());
+        assert!(EacFilter::from_str("ecuŊ").is_err()); // non ascii
+        assert!(EacFilter::from_str("ecu:a(").is_err()); // ctid invalid regex
+        assert!(EacFilter::from_str("ecu::c|\\").is_err()); // ctid invalid regex
+
+        // TODO not working! assert!(EacFilter::from_str("e|uŊ").is_err()); // apid non ascii regex...
+        let f = EacFilter::from_str("ECU1:APID:CTID").unwrap().filter;
+        assert_eq!(f.ecu, Some(Char4OrRegex::from_str("ECU1", false).unwrap()));
+        assert_eq!(f.apid, Some(Char4OrRegex::from_str("APID", false).unwrap()));
+        assert_eq!(f.ctid, Some(Char4OrRegex::from_str("CTID", false).unwrap()));
+
+        let f = EacFilter::from_str("ECU1:APID|API2").unwrap().filter;
+        assert_eq!(f.ecu, Some(Char4OrRegex::from_str("ECU1", false).unwrap()));
+        assert_eq!(
+            f.apid,
+            Some(Char4OrRegex::from_str("APID|API2", true).unwrap())
+        );
+        assert_eq!(f.ctid, None);
+
+        let f = EacFilter::from_str("ECU1|ECU2::CTID|CT").unwrap().filter;
+        assert_eq!(
+            f.ecu,
+            Some(Char4OrRegex::from_str("ECU1|ECU2", true).unwrap())
+        );
+        assert_eq!(f.apid, None);
+        assert_eq!(
+            f.ctid,
+            Some(Char4OrRegex::from_str("CTID|CT", true).unwrap())
+        );
+    }
+
+    #[test]
+    fn filter_eac() {
+        let logger = new_logger();
+
+        let mut file = NamedTempFile::new().unwrap();
+        let file_path = String::from(file.path().to_str().unwrap());
+
+        // persist some messages
+        let persisted_msgs: adlt::dlt::DltMessageIndexType = 5;
+        let ecu = dlt::DltChar4::from_buf(b"ECU1");
+        for i in 0..persisted_msgs {
+            let sh = adlt::dlt::DltStorageHeader {
+                secs: (1640995200000000 / utils::US_PER_SEC) as u32, // 1.1.22, 00:00:00 as GMT
+                micros: 0,
+                ecu,
+            };
+            let standard_header = adlt::dlt::DltStandardHeader {
+                htyp: 1 << 5, // vers 1
+                mcnt: (i % 256) as u8,
+                len: 4,
+            };
+
+            let m = adlt::dlt::DltMessage::from_headers(i, sh, standard_header, &[], vec![]);
+            m.to_write(&mut file).unwrap(); // will persist with timestamp
+        }
+        file.flush().unwrap();
+
+        let arg_vec = vec!["t", "convert", "-a", "-F=ECU1,ECU2", file_path.as_str()];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand().unwrap();
+        assert_eq!("convert", c);
+        assert_eq!(sub_m.get_many::<EacFilter>("filter_eac").unwrap().len(), 2);
+
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
+        assert_eq!(persisted_msgs, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+
+        let arg_vec = vec![
+            "t",
+            "convert",
+            "-a",
+            "-F=ECU2:AP2:CT2,ECU3::CT3,ECU4::",
+            file_path.as_str(),
+        ];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand().unwrap();
+        assert_eq!("convert", c);
+        assert_eq!(sub_m.get_many::<EacFilter>("filter_eac").unwrap().len(), 3);
+
+        let r = convert(&logger, sub_m, std::io::stdout()).unwrap();
+        assert_eq!(0, r.messages_output);
+        assert_eq!(persisted_msgs, r.messages_processed);
+
+        assert!(file.close().is_ok());
     }
 
     #[test]
