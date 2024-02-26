@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.54.0 - 2024-02-26
+#### Bug Fixes
+- **(lifecycle)** consider slightly overlapping lcs - (50fb122) - Matthias Behr
+- **(lifecycle)** handle non buffered lifecycles better - (c0f35a9) - Matthias Behr
+- **(lifecycle)** lifecycles are buffered too long - (82f68f3) - Matthias Behr
+#### Features
+- **(convert)** add parameter for filters for ECU, APID or CTID. - (c0b8ce3) - Matthias Behr
+
+- - -
+
 ## v0.53.0 - 2024-02-12
 #### Features
 - **(fibex)** show warnings from parsing - (3cbe61f) - Matthias Behr
