@@ -1690,6 +1690,7 @@ fn process_file_context<T: Read + Write>(
                             i
                         };
                         let msg = &fc.all_msgs[msg_idx];
+                        let payload_as_text = msg.payload_as_text().unwrap_or_default();
                         let bin_msg = remote_types::BinDltMsg {
                             index: msg.index,
                             reception_time: msg.reception_time_us,
@@ -1714,7 +1715,7 @@ fn process_file_context<T: Read + Write>(
                                 0
                             },
                             noar: msg.noar(),
-                            payload_as_text: msg.payload_as_text().unwrap_or_default(),
+                            payload_as_text,
                         };
                         bin_msgs.push(bin_msg);
                     }
@@ -1808,6 +1809,10 @@ fn match_filters(
     // if any is set it has to match as well
     // so they are applied after the pos/neg filters
     // todo think about it... (could be treated as pos filter as well)
+    // it's currently used for dlt-logs search as multiple not/negative filters
+    // don't work.
+    // so the search uses the event filters as pos. filters to be applied after
+    // any pos/neg filters (which might currently be active in the document)
     if matches && have_event_filters {
         matches = false;
         for filter in &filters[FilterKind::Event] {

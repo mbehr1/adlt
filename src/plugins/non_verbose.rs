@@ -624,8 +624,8 @@ mod tests {
         m.payload = 805312382u32.to_le_bytes().into();
         assert!(p.process_msg(&mut m));
         assert_eq!(
-            m.payload_as_text(),
-            Ok("FooStateMachine, Enter ON State".to_owned())
+            m.payload_as_text().unwrap(),
+            "FooStateMachine, Enter ON State"
         );
         // verify that mstp, APID, CTID are updated as well:
         assert_eq!(m.mstp(), DltMessageType::Log(DltMessageLogType::Debug));
@@ -642,8 +642,8 @@ mod tests {
         m.payload = payload.into_iter().flatten().collect();
         assert!(p.process_msg(&mut m));
         assert_eq!(
-            m.payload_as_text(),
-            Ok("DTC set but env data was not yet fetched, lldErrorStatus= 12345678 , lldStatus= -23456789 , lldBcklTemp= 4711 , lldVccVoltage= 42".to_owned())
+            m.payload_as_text().unwrap(),
+            "DTC set but env data was not yet fetched, lldErrorStatus= 12345678 , lldStatus= -23456789 , lldBcklTemp= 4711 , lldVccVoltage= 42"
         );
 
         // message without CTID (issue #116)
@@ -654,8 +654,8 @@ mod tests {
         m.payload = 800000000u32.to_le_bytes().into();
         assert!(p.process_msg(&mut m));
         assert_eq!(
-            m.payload_as_text(),
-            Ok("FooStateMachine, msg with no context".to_owned())
+            m.payload_as_text().unwrap(),
+            "FooStateMachine, msg with no context"
         );
         // verify that mstp, APID, CTID are updated as well:
         assert_eq!(m.mstp(), DltMessageType::Log(DltMessageLogType::Info));

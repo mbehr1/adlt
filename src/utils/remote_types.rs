@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use bincode::Encode;
 // we use bincode serialization
 #[derive(Encode, bincode::Decode)]
@@ -12,7 +14,7 @@ pub struct BinLifecycle {
 }
 
 #[derive(Encode, bincode::Decode)]
-pub struct BinDltMsg {
+pub struct BinDltMsg<'a> {
     pub index: u32, // todo use DltMessageIndexType!
     pub reception_time: u64,
     pub timestamp_dms: u32,
@@ -24,7 +26,7 @@ pub struct BinDltMsg {
     pub mcnt: u8,
     pub verb_mstp_mtin: u8,
     pub noar: u8,
-    pub payload_as_text: String, // todo and option for payload as vec[u8]?
+    pub payload_as_text: Cow<'a, str>, // todo and option for payload as vec[u8]?
 }
 
 #[derive(Encode, bincode::Decode)]
@@ -64,10 +66,10 @@ pub struct BinStreamInfo {
 }
 
 #[derive(Encode, bincode::Decode)]
-pub enum BinType {
+pub enum BinType<'a> {
     FileInfo(BinFileInfo),
     Lifecycles(Vec<BinLifecycle>),
-    DltMsgs((u32, Vec<BinDltMsg>)), // stream id and Vec
+    DltMsgs((u32, Vec<BinDltMsg<'a>>)), // stream id and Vec
     EacInfo(Vec<BinEcuStats>),
     PluginState(Vec<String>), // serialized json from each plugin with generation update
     StreamInfo(BinStreamInfo),
