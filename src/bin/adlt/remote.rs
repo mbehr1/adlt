@@ -18,6 +18,7 @@ use adlt::{
 };
 use clap::{value_parser, Arg, Command};
 use nohash_hasher::NoHashHasher;
+use rayon::prelude::*;
 use slog::{debug, error, info, warn};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -1616,31 +1617,72 @@ fn process_file_context<T: Read + Write>(
                 let have_event_filters = !stream.filters[FilterKind::Event].is_empty();
 
                 // check msgs from _processed_len to all_msgs_len
-                // todo use parallel iterator
-                // todo break after some max time/max amount of messages to improve reaction time
-                let mut i = last_all_msgs_last_processed_len;
-                while i < all_msgs_len {
-                    let msg: &adlt::dlt::DltMessage = &fc.all_msgs[i];
-                    let matches =
-                        match_filters(msg, &stream.filters, have_pos_filters, have_event_filters);
+                // todo use parallel iterator for !is_stream as well!
+                // break after some max time/max amount of messages to improve reaction time
 
-                    if matches {
-                        stream.filtered_msgs.push(i);
-                        // for !is_stream end as soon as enough are filtered/found
-                        if !stream.is_stream
-                            && stream.filtered_msgs.len() >= stream.msgs_to_send.end
-                        {
-                            i += 1;
+                if stream.is_stream {
+                    // use parallel iterator
+                    let max_idx =
+                        std::cmp::min(all_msgs_len, last_all_msgs_last_processed_len + 3_000_000);
+                    let mut matching_idxs: Vec<usize> = fc.all_msgs
+                        [last_all_msgs_last_processed_len..max_idx]
+                        .par_iter()
+                        .enumerate()
+                        .filter(|(_i, msg)| {
+                            match_filters(
+                                msg,
+                                &stream.filters,
+                                have_pos_filters,
+                                have_event_filters,
+                            )
+                        })
+                        .map(|(i, _msg)| last_all_msgs_last_processed_len + i)
+                        .collect();
+                    // rayon collect seems to keep the order. not needed: matching_idxs.par_sort_unstable();
+                    // https://github.com/rayon-rs/rayon/issues/551#issuecomment-371657900
+                    /*
+                    // check whether matching_idxs is sorted:
+                    if !matching_idxs.windows(2).all(|w| w[0] < w[1]) {
+                        warn!(
+                            log,
+                            "par stream search from {}..max_idx={} matching_idxs.len={} not sorted!",
+                            last_all_msgs_last_processed_len,
+                            max_idx,
+                            matching_idxs.len()
+                        );
+                        matching_idxs.par_sort_unstable();
+                    }*/
+                    stream.filtered_msgs.append(&mut matching_idxs);
+                    stream.all_msgs_last_processed_len = max_idx;
+                } else {
+                    let mut i = last_all_msgs_last_processed_len;
+                    while i < all_msgs_len {
+                        let msg: &adlt::dlt::DltMessage = &fc.all_msgs[i];
+                        let matches = match_filters(
+                            msg,
+                            &stream.filters,
+                            have_pos_filters,
+                            have_event_filters,
+                        );
+
+                        if matches {
+                            stream.filtered_msgs.push(i);
+                            // for !is_stream end as soon as enough are filtered/found
+                            if !stream.is_stream
+                                && stream.filtered_msgs.len() >= stream.msgs_to_send.end
+                            {
+                                i += 1;
+                                break;
+                            }
+                        }
+                        i += 1;
+                        if i % 1_000_000 == 0 {
+                            // process 1mio msgs as a chunk
                             break;
                         }
                     }
-                    i += 1;
-                    if i % 1_000_000 == 0 {
-                        // process 1mio msgs as a chunk
-                        break;
-                    }
+                    stream.all_msgs_last_processed_len = i;
                 }
-                stream.all_msgs_last_processed_len = i;
             } else {
                 stream.all_msgs_last_processed_len = all_msgs_len;
             }
