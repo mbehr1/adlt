@@ -131,7 +131,8 @@ impl Plugin for RewritePlugin {
         }
         for r in &self.rewrites {
             if r.filter.matches(msg) {
-                if let Ok(payload_text) = msg.payload_as_text() {
+                // need to avoid borrowing the msg as we want to mutate it later
+                if let Ok(payload_text) = msg.payload_as_text().map(|s| s.into_owned()) {
                     if let Ok(Some(captures)) = r.payload_regex.captures(&payload_text) {
                         for (idx, capt_name) in r.payload_regex.capture_names().enumerate() {
                             match capt_name {
@@ -310,7 +311,7 @@ mod tests {
         let r = p.process_msg(&mut m);
         assert!(r); // dont throw away the msg
         assert_eq!(m.timestamp_dms, 123457);
-        assert_eq!(m.payload_as_text(), Ok("only wanted text".to_owned()));
+        assert_eq!(m.payload_as_text().unwrap(), "only wanted text");
 
         // not matching payload regex (but matching filter)
         m.payload_text = Some("baf 12.345678 only wanted text".to_owned());
@@ -319,8 +320,8 @@ mod tests {
         assert!(r); // dont throw away the msg
         assert_eq!(m.timestamp_dms, 1);
         assert_eq!(
-            m.payload_as_text(),
-            Ok("baf 12.345678 only wanted text".to_owned())
+            m.payload_as_text().unwrap(),
+            "baf 12.345678 only wanted text"
         );
 
         // not matching filter:
@@ -332,8 +333,8 @@ mod tests {
         assert!(r); // dont throw away the msg
         assert_eq!(m.timestamp_dms, 2);
         assert_eq!(
-            m.payload_as_text(),
-            Ok("bar 12.345678 only wanted text".to_owned())
+            m.payload_as_text().unwrap(),
+            "bar 12.345678 only wanted text"
         );
 
         // matching filter but wrong capture group names:
@@ -346,8 +347,8 @@ mod tests {
         assert_eq!(m.timestamp_dms, 2); // time unchanged
         assert_eq!(
             // unchanged
-            m.payload_as_text(),
-            Ok("bar 12.345678 only wanted text".to_owned())
+            m.payload_as_text().unwrap(),
+            "bar 12.345678 only wanted text"
         );
     }
 }

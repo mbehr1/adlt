@@ -3,10 +3,7 @@ use chrono::{Local, TimeZone};
 use encoding_rs::WINDOWS_1252;
 use lazy_static::lazy_static;
 use serde::ser::{Serialize, Serializer};
-use std::convert::TryInto;
-use std::fmt;
-use std::fmt::Write;
-use std::str::FromStr;
+use std::{borrow::Cow, convert::TryInto, fmt, fmt::Write, str::FromStr};
 
 use crate::utils::{is_non_printable_char_wo_rnt, US_PER_SEC};
 use control_msgs::{parse_ctrl_log_info_payload, parse_ctrl_sw_version_payload};
@@ -1017,15 +1014,15 @@ impl DltMessage {
         Ok(())
     }
 
-    pub fn payload_as_text(&self) -> Result<String, std::fmt::Error> {
+    pub fn payload_as_text(&self) -> Result<Cow<str>, std::fmt::Error> {
         if let Some(text) = &self.payload_text {
-            return Ok(text.clone());
+            return Ok(Cow::Borrowed(text));
         }
         let mut args = self.into_iter();
         if self.is_verbose() {
             let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
             DltMessage::process_msg_arg_iter(args, &mut text)?;
-            Ok(text)
+            Ok(Cow::Owned(text))
         } else {
             // non-verbose
             let message_id_arg = args.next();
@@ -1117,7 +1114,7 @@ impl DltMessage {
                     if needs_closing_bracket {
                         write!(&mut text, "]")?;
                     }
-                    Ok(text)
+                    Ok(Cow::Owned(text))
                 }
                 _ => {
                     // write in dlt-viewer format [<msg id>] ascii chars| hex dump e.g. [4711] CID|43 49 44
@@ -1140,7 +1137,7 @@ impl DltMessage {
                     if times_replaced > 0 {
                         crate::utils::buf_as_hex_to_write(&mut text, payload)?;
                     }
-                    Ok(text)
+                    Ok(Cow::Owned(text))
                 }
             }
         }
