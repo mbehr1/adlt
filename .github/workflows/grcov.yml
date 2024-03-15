@@ -6,26 +6,26 @@ jobs:
   grcov:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
           override: true
-      - name: Build
-        run: cargo build --verbose
+      - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --all-features --no-fail-fast
         env:
           CARGO_INCREMENTAL: '0'
           RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
           RUSTDOCFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-      - uses: Swatinem/rust-cache@v2
       - id: coverage
         uses: actions-rs/grcov@v0.1
       - name: show lcov file ls
         run: ls -al ${{ steps.coverage.outputs.report }}
-      - uses: codecov/codecov-action@v3
+      - uses: codecov/codecov-action@v3 # v4 needs docker volume... seems not compatible with grcov v0.1
         with:
           files: ${{ steps.coverage.outputs.report }}
+          # disable_search: true
           fail_ci_if_error: true # optional (default = false)
           verbose: true # optional (default = false)
+          # token: ${{ secrets.CODECOV_TOKEN }}
