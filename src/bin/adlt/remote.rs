@@ -2255,7 +2255,12 @@ mod tests {
 
         assert_eq!(sc.all_msgs_last_processed_len, 0);
 
-        let msgs = [msg_for_test(0), msg_for_test(1)];
+        let mut msgs = vec![];
+        msgs.push(msg_for_test(0));
+        msgs.push(msg_for_test(10));
+        for i in 11..10_000 {
+            msgs.push(msg_for_test(i as u32));
+        }
 
         process_stream_new_msgs(&mut sc, 0, &msgs[0..0], 10);
         assert_eq!(sc.all_msgs_last_processed_len, 0);
@@ -2269,6 +2274,13 @@ mod tests {
         assert_eq!(sc.filtered_msgs.len(), 2); // and idx = 10...
         assert_eq!(sc.filtered_msgs, [0, 10]);
         assert_eq!(sc.all_msgs_last_processed_len, 11);
+
+        process_stream_new_msgs(&mut sc, 11, &msgs[2..], 10_000);
+        assert_eq!(sc.filtered_msgs.len(), msgs.len());
+
+        for (idx, val) in sc.filtered_msgs[2..].iter().enumerate() {
+            assert_eq!(*val, idx + 11, "#{} = {}", idx, val);
+        }
     }
 
     #[test]
