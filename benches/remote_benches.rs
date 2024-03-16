@@ -46,7 +46,7 @@ pub fn process_stream_new_msgs_query(c: &mut Criterion) {
             let mut sc = StreamContext::from(
                 &log,
                 "query",
-                r#"{"filters":[{"type":0,"ecu":"ECU0"}],"window":[0,10000]}"#,
+                r#"{"filters":[{"type":0,"ecu":"ECU0|NA"}],"window":[0,10000]}"#,
             )
             .unwrap();
             assert!(!sc.is_stream);

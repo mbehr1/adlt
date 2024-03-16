@@ -4,7 +4,7 @@ use crate::{
 };
 use rayon::prelude::*;
 use slog::debug;
-use std::sync::atomic::{AtomicUsize, Ordering};
+
 #[derive(Debug)]
 pub struct StreamContext {
     pub id: u32,
@@ -143,23 +143,24 @@ pub fn process_stream_new_msgs(
 
             // break after some searching max_chunk_size of messages to improve reaction time
             let max_idx = std::cmp::min(new_msgs_len, max_chunk_size);
-            let get_matching_idxs = || -> Vec<usize> {
-                new_msgs[0..max_idx]
-                    .par_iter()
+            let get_matching_idxs = |msgs: &[DltMessage], offset: usize| -> Vec<usize> {
+                msgs.par_iter()
                     .enumerate()
                     .filter(|(_i, msg)| {
                         match_filters(msg, &stream.filters, have_pos_filters, have_event_filters)
                     })
-                    .map(|(i, _msg)| new_msgs_offset + i) // done in parallel
+                    .map(|(i, _msg)| offset + i) // done in parallel
                     .collect() // serializing here
+
+                // rayon collect seems to keep the order. not needed: matching_idxs.par_sort_unstable();
+                // https://github.com/rayon-rs/rayon/issues/551#issuecomment-371657900
             };
 
             if stream.is_stream {
                 // we want to filter/identify all stream msgs even though the window
                 // might just send a few ones...
-                let mut matching_idxs: Vec<usize> = get_matching_idxs();
-                // rayon collect seems to keep the order. not needed: matching_idxs.par_sort_unstable();
-                // https://github.com/rayon-rs/rayon/issues/551#issuecomment-371657900
+                let mut matching_idxs: Vec<usize> =
+                    get_matching_idxs(&new_msgs[0..max_idx], new_msgs_offset);
                 stream.filtered_msgs.append(&mut matching_idxs);
                 stream.all_msgs_last_processed_len = new_msgs_offset + max_idx;
             } else {
@@ -167,46 +168,25 @@ pub fn process_stream_new_msgs(
                 // the problem is: how to end up once enough items are collected
                 // we cannot do this with an atomic cnt and while_some as the adding/comparing
                 // would then be done in parallel.
-                // so we just use a full search and then limit the results:
-                // we could iterate over a few max_chunk_size fragments... (but might not be worth the benefit)
+                // so we iterate over smaller chunks and stop as soon as we have enough.
 
                 let max_matching = stream.msgs_to_send.end;
-                if stream.filtered_msgs.len() < max_matching {
+                let mut start_idx = 0;
+                let part_chunk_size = std::cmp::min(max_chunk_size, 64 * 1024); // we use 64k as max chunk size
+                while stream.filtered_msgs.len() < max_matching && start_idx < max_idx {
                     let nr_wanted = max_matching - stream.filtered_msgs.len();
 
-                    let mut matching_idxs: Vec<usize> = get_matching_idxs();
-                    /*
-                    let cnt_found = AtomicUsize::new(0);
-                    let cnt_found_idx = AtomicUsize::new(usize::MAX);
-                                        let mut matching_idxs: Vec<usize> = new_msgs[0..max_idx]
-                                            .par_iter()
-                                            .enumerate()
-                                            .filter(|(_i, msg)| {
-                                                match_filters(
-                                                    msg,
-                                                    &stream.filters,
-                                                    have_pos_filters,
-                                                    have_event_filters,
-                                                )
-                                            })
-                                            .map(|(i, _msg)| {
-                                                if cnt_found.fetch_add(1, Ordering::SeqCst) == nr_wanted - 1 {
-                                                    cnt_found_idx.store(i, Ordering::SeqCst);
-                                                }
-                                                // we can stop collecting the results from all idxs that are larger than the one we found
-                                                if i <= cnt_found_idx.load(Ordering::SeqCst) {
-                                                    Some(new_msgs_offset + i)
-                                                } else {
-                                                    None
-                                                }
-                                            }) // done in parallel
-                                            .while_some()
-                                            .collect(); // serializing here
-                    */
+                    let max_this_chunk = std::cmp::min(max_idx, start_idx + part_chunk_size);
+                    let new_offset = new_msgs_offset + start_idx;
+
+                    let mut matching_idxs =
+                        get_matching_idxs(&new_msgs[start_idx..max_this_chunk], new_offset);
+
+                    start_idx = max_this_chunk;
                     // if we found more than wanted, we need to ensure that the next search
                     // restarts at the unwanted one...
                     if matching_idxs.len() <= nr_wanted {
-                        stream.all_msgs_last_processed_len = new_msgs_offset + max_idx;
+                        stream.all_msgs_last_processed_len = new_offset + max_this_chunk;
                     } else {
                         // found more than wanted:
                         let first_unwanted = matching_idxs[nr_wanted];
