@@ -38,6 +38,10 @@ harness = false
 name = "muniic_benches"
 harness = false
 
+[[bench]]
+name = "remote_benches"
+harness = false
+
 [dev-dependencies]
 ntest = "0.9"
 criterion = "0.5"
