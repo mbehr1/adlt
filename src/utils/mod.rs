@@ -24,6 +24,7 @@ pub mod eac_stats;
 mod logcat2dltmsgiterator;
 pub mod remote_types;
 pub use self::logcat2dltmsgiterator::LogCat2DltMsgIterator;
+pub mod remote_utils;
 
 static GLOBAL_NEXT_NAMESPACE: AtomicU32 = AtomicU32::new(0);
 
