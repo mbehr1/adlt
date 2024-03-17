@@ -2,6 +2,25 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.55.0 - 2024-03-17
+#### Continuous Integration
+- **(codecov)** update checkout and codecov-action to v4 - (2bc4d19) - Matthias Behr
+- **(codecov)** actions-rs instead of ructions - (95ebb39) - Matthias Behr
+#### Features
+- add first support for generic (text) log files - (9ce74e1) - Matthias Behr
+#### Performance Improvements
+- **(remote)** chunked parallel search for queries - (bdbc20f) - Matthias Behr
+- **(remote)** process stream filtering in parallel - (e5684f5) - Matthias Behr
+- add bench for process_stream_new_msgs - (3d9ee2c) - Matthias Behr
+- use par_iter for queries/non streams as well - (26e6224) - Matthias Behr
+- use Cow for payload_as_text - (103d823) - Matthias Behr
+#### Refactoring
+- **(remote)** refactor StreamContext into lib functions - (7b0d31c) - Matthias Behr
+#### Tests
+- add sequence test for stream - (d70729f) - Matthias Behr
+
+- - -
+
 ## v0.54.0 - 2024-02-26
 #### Bug Fixes
 - **(lifecycle)** consider slightly overlapping lcs - (50fb122) - Matthias Behr
