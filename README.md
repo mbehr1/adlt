@@ -30,8 +30,9 @@ You can open
 - DLT serial header files
 - CAN "ASC" files with extension .asc
 - Android Logcat files with extension .txt
+- Generic log files with extension .log and format per line like "[2024-03-09 23:01:31.627] [INF] [apid] text..." (INF is the log level).
 
-Take care to not use `.txt`/`.asc` extension for DLT file. Files with those extensions will be parsed as CAN/Android Logcat files.
+Take care to not use `.txt`/`.asc`/`.log` extension for DLT file. Files with those extensions will be parsed as CAN/Android Logcat files.
 
 ## Usage examples
 
