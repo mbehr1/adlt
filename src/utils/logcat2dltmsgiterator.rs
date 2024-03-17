@@ -7,11 +7,9 @@ use slog::{debug, error, info};
 ///    we'd want the last log from a file to have the recorded time = calculated time
 /// [] support other formats than monotonic timestamp and threadtime
 use std::{
-    borrow::Cow,
     collections::{HashMap, VecDeque},
     io::{BufRead, Lines},
     str::FromStr,
-    sync::RwLock,
 };
 
 use crate::{
@@ -21,10 +19,8 @@ use crate::{
         DLT_STD_HDR_HAS_ECU_ID, DLT_STD_HDR_HAS_EXT_HDR, DLT_STD_HDR_HAS_TIMESTAMP,
         DLT_STD_HDR_VERSION, SERVICE_ID_GET_LOG_INFO,
     },
-    utils::utc_time_from_us,
+    utils::{get_apid_for_tag, utc_time_from_us, US_PER_SEC},
 };
-
-use super::US_PER_SEC;
 
 pub struct LogCat2DltMsgIterator<'a, R> {
     lines: Lines<R>, // todo could optimize with e.g. stream_iterator for &str instead of string copies!
@@ -185,120 +181,6 @@ impl<'a, R: BufRead> LogCat2DltMsgIterator<'a, R> {
     }
 }
 
-fn get_4digit_str(a_str: &str, iteration: u16) -> Cow<'_, str> {
-    match iteration {
-        0 => Cow::from(a_str),
-        _ => {
-            let len_str = a_str.len();
-            let number_str = iteration.to_string();
-            let len_number = number_str.len();
-            let needed_str = if len_number > 3 { 0 } else { 4 - len_number };
-            if needed_str > len_str {
-                Cow::Owned(format!("{}{:0len$}", a_str, iteration, len = 4 - len_str))
-            } else {
-                Cow::Owned(format!("{}{}", &a_str[0..needed_str], iteration))
-            }
-        }
-    }
-}
-
-fn get_apid_for_tag(namespace: u32, tag: &str) -> DltChar4 {
-    let mut namespace_map = GLOBAL_TAG_APID_MAP.write().unwrap();
-    let map = namespace_map.entry(namespace).or_default();
-    match map.get(tag) {
-        Some(e) => e.to_owned(),
-        None => {
-            let trimmed_tag = tag.trim();
-            // try to find a good apid as tag abbrevation
-            //
-            let mut iteration = 0u16;
-            loop {
-                let apid = match trimmed_tag.len() {
-                    0 => DltChar4::from_str(" ").unwrap(),
-                    1..=4 => DltChar4::from_str(&get_4digit_str(trimmed_tag, iteration))
-                        .unwrap_or(DltChar4::from_str(&get_4digit_str("NoAs", iteration)).unwrap()),
-                    _ => {
-                        let has_underscores = trimmed_tag.contains('_');
-                        if has_underscores {
-                            // assume snake case
-                            let nr_underscore = trimmed_tag.chars().fold(0u32, |acc, c| {
-                                if c == '_' {
-                                    acc + 1
-                                } else {
-                                    acc
-                                }
-                            });
-                            let mut needed_other = if nr_underscore < 3 {
-                                3 - nr_underscore
-                            } else {
-                                0
-                            };
-                            let mut abbrev = String::with_capacity(4);
-                            let mut take_next = true;
-                            for c in trimmed_tag.chars() {
-                                if c == '_' {
-                                    take_next = true;
-                                } else if c.is_ascii() {
-                                    if take_next || needed_other > 0 {
-                                        abbrev.push(c);
-                                        if !take_next {
-                                            needed_other -= 1;
-                                        }
-                                    }
-                                    take_next = false;
-                                }
-                                if abbrev.len() >= 4 {
-                                    break;
-                                }
-                            }
-
-                            DltChar4::from_str(&get_4digit_str(&abbrev, iteration))
-                        } else {
-                            // assume camel case
-                            let nr_capital = trimmed_tag.chars().fold(0u32, |acc, c| {
-                                if c.is_ascii_uppercase() {
-                                    acc + 1
-                                } else {
-                                    acc
-                                }
-                            });
-                            let mut needed_lowercase =
-                                if nr_capital < 4 { 4 - nr_capital } else { 0 };
-                            let mut abbrev = String::with_capacity(4);
-                            for c in trimmed_tag.chars() {
-                                if c.is_ascii_uppercase() {
-                                    abbrev.push(c);
-                                } else if needed_lowercase > 0 && c.is_ascii() {
-                                    abbrev.push(c);
-                                    needed_lowercase -= 1;
-                                }
-                                if abbrev.len() >= 4 {
-                                    break;
-                                }
-                            }
-
-                            DltChar4::from_str(&get_4digit_str(&abbrev, iteration))
-                        }
-                    }
-                    .unwrap_or(DltChar4::from_str(&get_4digit_str("NoAs", iteration)).unwrap()),
-                };
-
-                // does apid exist already?
-                if let Some((_k, _v)) = map.iter().find(|(_k, v)| v == &&apid) {
-                    /* println!(
-                        "get_apid_for_tag iteration {} apid {} for tag {} exists already for tag {}",
-                        iteration, apid, tag, k
-                    ); */
-                    iteration += 1;
-                } else {
-                    map.insert(tag.to_owned(), apid.to_owned());
-                    return apid;
-                }
-            } // todo abort after >100 iterations with a default?
-        }
-    }
-}
-
 /// Parse a timestamp in logcat monotonic format to a time in us.
 ///
 /// Expected format is x.y (x any number, y any number but expected 3 digits)
@@ -407,8 +289,6 @@ lazy_static! {
         Regex::new(r"^(\d\d\-\d\d \d\d:\d\d:\d\d\.\d+)\s+(\d+)\s+(\d+) ([A-Za-z]) (.*?)\s*: (.*)$").unwrap();
         // captures: threadtime pid tid level tag msg
 
-    // map by namespace to a map for tag to apid:
-    static ref GLOBAL_TAG_APID_MAP: RwLock<HashMap<u32, HashMap<String, DltChar4>>> = RwLock::new(HashMap::new());
 }
 
 impl<'a, R> Iterator for LogCat2DltMsgIterator<'a, R>
@@ -628,16 +508,11 @@ mod tests {
     use slog::{o, Drain, Logger};
 
     use crate::{
-        dlt::{
-            DltChar4, DltMessageControlType, DltMessageLogType, DltMessageType,
-            DLT_MAX_STORAGE_MSG_SIZE,
-        },
+        dlt::{DltMessageControlType, DltMessageLogType, DltMessageType, DLT_MAX_STORAGE_MSG_SIZE},
         utils::{get_new_namespace, LogCat2DltMsgIterator, LowMarkBufReader, US_PER_SEC},
     };
 
-    use super::{
-        get_4digit_str, get_apid_for_tag, parse_mmdd_str, parse_threadtime_str, parse_time_str,
-    };
+    use super::{parse_mmdd_str, parse_threadtime_str, parse_time_str};
 
     const MS_PER_SEC: u64 = 1000;
 
@@ -690,51 +565,6 @@ mod tests {
         assert_eq!(
             parse_threadtime_str("02-29 23:59:57.999", ref_date),
             ref_date.and_hms_milli_opt(23, 59, 57, 999) // > ref_date so prev year but 29.2. not valid in 2022, nor in 2023 -> ref_date
-        );
-    }
-
-    #[test]
-    fn get_4digit_str_1() {
-        assert_eq!(get_4digit_str("", 0), "");
-        assert_eq!(get_4digit_str("", 1), "0001");
-        assert_eq!(get_4digit_str("a", 0), "a");
-        assert_eq!(get_4digit_str("a", 1), "a001");
-        assert_eq!(get_4digit_str("a", 99), "a099");
-        assert_eq!(get_4digit_str("a", 1000), "1000");
-        assert_eq!(get_4digit_str("abc", 9), "abc9");
-        assert_eq!(get_4digit_str("abc", 99), "ab99");
-        assert_eq!(get_4digit_str("abcd", 0), "abcd");
-        assert_eq!(get_4digit_str("abcd", 1), "abc1");
-        assert_eq!(get_4digit_str("abcd", 9), "abc9");
-        assert_eq!(get_4digit_str("abcd", 10), "ab10");
-        assert_eq!(get_4digit_str("abcd", 99), "ab99");
-        assert_eq!(get_4digit_str("abcd", 100), "a100");
-        assert_eq!(get_4digit_str("abcd", 999), "a999");
-        assert_eq!(get_4digit_str("abcd", 1000), "1000");
-    }
-
-    #[test]
-    fn get_apid_for_tag_1() {
-        assert_eq!(
-            get_apid_for_tag(0, "snake_case"),
-            DltChar4::from_buf(b"snac")
-        );
-        assert_eq!(
-            get_apid_for_tag(0, "snake_case2"),
-            DltChar4::from_buf(b"sna1") // snac -> exists -> add numbers...
-        );
-        assert_eq!(
-            get_apid_for_tag(1, "snake_case3"),
-            DltChar4::from_buf(b"snac") // different namespace
-        );
-
-        assert_eq!(
-            get_apid_for_tag(0, "CamelBaseAllGood"),
-            DltChar4::from_buf(b"CBAG")
-        );
-        assert_eq!(
-            get_apid_for_tag(0, "CamelBaseAll"),
-            DltChar4::from_buf(b"CaBA")
         );
     }
 

@@ -1,0 +1,59 @@
+-------------------------------- live log setup --------------------------------
+[2024-03-09 23:01:31.627] [INF] [conftest] RAM memory used: 3.44 %
+[2024-03-09 23:01:31.628] [INF] [xtf_common.process.process_wrapper] Starting process: /usr/sbin/tcpdump -U -i qcom_br -w /home/testguide/testguide/test_runs/task_681334/outputs/testcase_data/ecu/aecu1/tests/ef_itf/domains/fasinfo/tests/diagnostics_tests/sli_diagnostics/test_sli_health_state_diag/test_read_sli_health_state/tcpdump_qcom_br.pcap
+[2024-03-09 23:01:31.632] [INF] [xtf_common.process.process_wrapper] Process [/usr/sbin/tcpdump] started with PID: [127606]
+[2024-03-09 23:01:31.633] [INF] [xtf_common.process.process_wrapper] Starting process: /usr/sbin/tcpdump -U -i ipb_br -w /home/testguide/testguide/test_runs/task_681334/outputs/testcase_data/ecu/aecu1/tests/ef_itf/domains/fasinfo/tests/diagnostics_tests/sli_diagnostics/test_sli_health_state_diag/test_read_sli_health_state/tcpdump_ipb_br.pcap
+[2024-03-09 23:01:31.636] [INF] [xtf_common.process.process_wrapper] Process [/usr/sbin/tcpdump] started with PID: [127608]
+[2024-03-09 23:01:31.637] [INF] [xtf_common.process.process_wrapper] Starting process: ./platform/aas/tools/python_dlt/dlt-receive -o /home/testguide/testguide/test_runs/task_681334/outputs/testcase_data/ecu/aecu1/tests/ef_itf/domains/fasinfo/tests/diagnostics_tests/sli_diagnostics/test_sli_health_state_diag/test_read_sli_health_state/dlt_receive.dlt --udp --mcast-ip 225.255.42.99 --mcast-ip 226.127.42.99 --mcast-ip 226.255.42.99 --mcast-ip 227.127.42.99 --mcast-ip 227.255.42.99 --net-if 160.48.249.125 --port 3490
+[2024-03-09 23:01:31.640] [INF] [xtf_common.process.process_wrapper] Process [./platform/aas/tools/python_dlt/dlt-receive] started with PID: [127610]
+[2024-03-09 23:01:31.701] [INF] [tcpdump] tcpdump: listening on ipb_br, link-type EN10MB (Ethernet), capture size 262144 bytes
+[2024-03-09 23:01:31.705] [INF] [tcpdump] tcpdump: listening on qcom_br, link-type EN10MB (Ethernet), capture size 262144 bytes
+-------------------------------- live log call ---------------------------------
+[2024-03-09 23:01:31.742] [DBG] [uds] Waiting for UDS on DoIP connection...
+[2024-03-09 23:01:31.743] [DBG] [doip] Open doip connection to 160.48.249.101.
+[2024-03-09 23:01:31.743] [DBG] [doipclient] Sending DoIP Message: Type: 0x5, Payload Size: 7, Payload: 0E F4 00 00 00 00 00
+[2024-03-09 23:01:31.746] [DBG] [doipclient] Received DoIP Message. Type: 0x6, Payload Size: 9 bytes, Payload: 0E F4 00 91 10 00 00 00 00
+[2024-03-09 23:01:31.746] [DBG] [doip] Established doip connection
+[2024-03-09 23:01:31.746] [DBG] [diagnose.ecu] PresentThread-0x91 waiting
+[2024-03-09 23:01:31.746] [INF] [/home/testguide/testguide/test_runs/task_681334/ecu/aecu1/tests/ef_itf/domains/fasinfo/tests/diagnostics_tests/sli_diagnostics/test_sli_health_state_diag.py] Start read SLI health state
+[2024-03-09 23:01:31.747] [INF] [/home/testguide/testguide/test_runs/task_681334/ecu/aecu1/tests/ef_itf/domains/fasinfo/tests/diagnostics_tests/sli_diagnostics/test_sli_health_state_diag.py] reading healthstate
+[2024-03-09 23:01:31.747] [INF] [root] send
+[2024-03-09 23:01:31.747] [INF] [root] create message
+[2024-03-09 23:01:31.747] [INF] [root] send message to ecu: 22 44 3f
+[2024-03-09 23:01:31.747] [DBG] [doip] Sending request
+[2024-03-09 23:01:31.747] [DBG] [doipclient] Sending DoIP Message: Type: 0x8001, Payload Size: 7, Payload: 0E F4 00 91 22 44 3F
+[2024-03-09 23:01:31.748] [DBG] [diagnose.ecu] PresentThread-0x91 waiting
+[2024-03-09 23:01:31.751] [DBG] [doip] Waiting for diagnostic message ACK
+[2024-03-09 23:01:31.751] [DBG] [doipclient] Received DoIP Message. Type: 0x8002, Payload Size: 8 bytes, Payload: 00 91 0E F4 00 22 44 3F
+[2024-03-09 23:01:31.751] [DBG] [doip] Diagnostic message ACK received
+[2024-03-09 23:01:31.751] [DBG] [doip] Waiting for diagnostic message response
+[2024-03-09 23:01:31.813] [DBG] [doipclient] Received DoIP Message. Type: 0x8001, Payload Size: 37 bytes, Payload: 00 91 0E F4 62 44 3F 00 00 00 00 00 00 FF 00 03 00 00 00 00 00 6E 41 00 5D 00 00 00 00 00 00 00 00 00 00 00 00
+[2024-03-09 23:01:31.813] [DBG] [doip] Diagnostic message response received
+[2024-03-09 23:01:31.814] [INF] [uds] -- Positive Response
+[2024-03-09 23:01:31.814] [INF] [root] got from ECU 62 44 3f 00 00 00 00 00 00 ff 00 03 00 00 00 00 00 6e 41 00 5d 00 00 00 00 00 00 00 00 00 00 00 00
+[2024-03-09 23:01:31.814] [INF] [root] returnlist ['62', '44', '3f', '00', '00', '00', '00', '00', '00', 'ff', '00', '03', '00', '00', '00', '00', '00', '6e', '41', '00', '5d', '00', '00', '00', '00', '00', '00', '00', '00', '00', '00', '00', '00']
+[2024-03-09 23:01:31.814] [DBG] [root] _sid_in, B
+[2024-03-09 23:01:31.814] [DBG] [root] _did_in, >H
+[2024-03-09 23:01:31.814] [DBG] [root] HEALTH_STATE, B
+[2024-03-09 23:01:31.814] [DBG] [root] DISPLAY_SPEED_SIGNAL, >f
+[2024-03-09 23:01:31.814] [DBG] [root] SPEED_LIMIT_INFO_FROM_TSF, >H
+[2024-03-09 23:01:31.815] [DBG] [root] NPI_INFO_FROM_TSF, B
+[2024-03-09 23:01:31.815] [DBG] [root] REQ_SYMBOL_IN_KOMBI, B
+[2024-03-09 23:01:31.815] [DBG] [root] REQ_SL_WARNING_TYPE, B
+[2024-03-09 23:01:31.815] [DBG] [root] SL_CHANGE_HINT, B
+[2024-03-09 23:01:31.815] [DBG] [root] REQ_GONG_TYPE, B
+[2024-03-09 23:01:31.815] [DBG] [root] REQ_CCMS, B
+[2024-03-09 23:01:31.815] [DBG] [root] SL_WARNING_CONFIG_USED, B
+[2024-03-09 23:01:31.815] [DBG] [root] INFO_COUNTRY_CODE, >H
+[2024-03-09 23:01:31.815] [DBG] [root] INFO_SCHOOL_ZONE, B
+[2024-03-09 23:01:31.815] [DBG] [root] INFO_SLI_STATES, B
+[2024-03-09 23:01:31.816] [DBG] [root] INFO_HMI_CONFIG_SPEED_LIMIT_WARNING, B
+[2024-03-09 23:01:31.816] [DBG] [root] INFO_HMI_CONFIG_OFFSET, B
+[2024-03-09 23:01:31.816] [DBG] [root] INFO_HMI_CONFIG_MAX_TRAILER_SL, B
+[2024-03-09 23:01:31.816] [DBG] [root] VEHICLE_STATE, B
+[2024-03-09 23:01:31.816] [DBG] [root] RESERVED1, >I
+[2024-03-09 23:01:31.816] [DBG] [root] RESERVED2, >I
+[2024-03-09 23:01:31.816] [INF] [root] true
+[2024-03-09 23:01:31.816] [INF] [/home/testguide/testguide/test_runs/task_681334/ecu/aecu1/tests/ef_itf/domains/fasinfo/tests/diagnostics_tests/sli_diagnostics/test_sli_health_state_diag.py] HEALTH_STATE: 0, INFO_SLI_STATES: 93
+[2024-03-09 23:01:31.816] [DBG] [diagnose.ecu] PresentThread-0x91 stopped
+[2024-03-09 23:01:32.317] [DBG] [doip] Closed doip connection
