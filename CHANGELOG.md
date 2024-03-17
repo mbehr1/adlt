@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.55.1 - 2024-03-17
+#### Bug Fixes
+- **(readme)** add .log info and mark as fix to trigger new release - (b2f51cf) - Matthias Behr
+#### Continuous Integration
+- change to dtolnay/rust-toolchain instead of unmaintained actions-rs/toolchain - (dd12464) - Matthias Behr
+- update github actions - (5c12252) - Matthias Behr
+- use actions-rs/toolchain instead of removed ructions - (d2bc2d0) - Matthias Behr
+
+- - -
+
 ## v0.55.0 - 2024-03-17
 #### Continuous Integration
 - **(codecov)** update checkout and codecov-action to v4 - (2bc4d19) - Matthias Behr
