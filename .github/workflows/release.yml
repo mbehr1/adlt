@@ -70,7 +70,7 @@ jobs:
       RUST_BACKTRACE: 1
     strategy:
       matrix:
-        build: [linux, linux-arm, linux-aarch64, macos, macos-arm, win-msvc, win32-msvc]
+        build: [linux, linux-arm, linux-aarch64, macos, macos-arm, win-msvc]
         include:
           - build: linux
             os: ubuntu-latest
@@ -96,10 +96,6 @@ jobs:
             os: windows-2019
             rust: stable
             target: x86_64-pc-windows-msvc
-          - build: win32-msvc
-            os: windows-2019
-            rust: stable
-            target: i686-pc-windows-msvc
 
     steps:
       - name: Checkout repository
