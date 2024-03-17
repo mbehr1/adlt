@@ -5,12 +5,15 @@ use crate::{
     SendMsgFnReturnType,
 };
 use std::{
-    collections::HashSet,
+    borrow::Cow,
+    collections::{HashMap, HashSet},
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{
         atomic::AtomicU32,
         mpsc::{Receiver, SendError, Sender, SyncSender, TrySendError},
+        RwLock,
     },
 };
 mod lowmarkbufreader;
@@ -24,9 +27,18 @@ pub mod eac_stats;
 mod logcat2dltmsgiterator;
 pub mod remote_types;
 pub use self::logcat2dltmsgiterator::LogCat2DltMsgIterator;
+mod genlog2dltmsgiterator;
 pub mod remote_utils;
+pub use self::genlog2dltmsgiterator::GenLog2DltMsgIterator;
+
+use lazy_static::lazy_static;
 
 static GLOBAL_NEXT_NAMESPACE: AtomicU32 = AtomicU32::new(0);
+
+lazy_static! {
+    // map by namespace to a map for tag to apid:
+    static ref GLOBAL_TAG_APID_MAP: RwLock<HashMap<u32, HashMap<String, DltChar4>>> = RwLock::new(HashMap::new());
+}
 
 /// return a new namespace
 ///
@@ -41,10 +53,139 @@ pub fn get_new_namespace() -> u32 {
     GLOBAL_NEXT_NAMESPACE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// return a 4 digit string with the prefix and the iteration number
+///
+/// for iteration 0 the input string is returned.
+/// For other iterations the prefix is shortened to fit with the iteration number.
+///
+/// e.g. "abcd", 42 -> "ab42"
+fn get_4digit_str(a_str: &str, iteration: u16) -> Cow<'_, str> {
+    match iteration {
+        0 => Cow::from(a_str),
+        _ => {
+            let len_str = a_str.len();
+            let number_str = iteration.to_string();
+            let len_number = number_str.len();
+            let needed_str = if len_number > 3 { 0 } else { 4 - len_number };
+            if needed_str > len_str {
+                Cow::Owned(format!("{}{:0len$}", a_str, iteration, len = 4 - len_str))
+            } else {
+                Cow::Owned(format!("{}{}", &a_str[0..needed_str], iteration))
+            }
+        }
+    }
+}
+
+/// generate a new apid for a tag for a namespace.
+///
+/// Per namespace a map is maintained that maps a tag to an apid.
+/// If the tag exists already the existing apid is returned.
+/// If the tag does not exist a new apid is generated.
+///
+/// todo: describe the algorithm for the name selection/abbrevation
+pub fn get_apid_for_tag(namespace: u32, tag: &str) -> DltChar4 {
+    let mut namespace_map = GLOBAL_TAG_APID_MAP.write().unwrap();
+    let map = namespace_map.entry(namespace).or_default();
+    match map.get(tag) {
+        Some(e) => e.to_owned(),
+        None => {
+            let trimmed_tag = tag.trim();
+            // try to find a good apid as tag abbrevation
+            //
+            let mut iteration = 0u16;
+            loop {
+                let apid = match trimmed_tag.len() {
+                    0 => DltChar4::from_str(" ").unwrap(),
+                    1..=4 => DltChar4::from_str(&get_4digit_str(trimmed_tag, iteration))
+                        .unwrap_or(DltChar4::from_str(&get_4digit_str("NoAs", iteration)).unwrap()),
+                    _ => {
+                        let has_underscores = trimmed_tag.contains('_');
+                        if has_underscores {
+                            // assume snake case
+                            let nr_underscore = trimmed_tag.chars().fold(0u32, |acc, c| {
+                                if c == '_' {
+                                    acc + 1
+                                } else {
+                                    acc
+                                }
+                            });
+                            let mut needed_other = if nr_underscore < 3 {
+                                3 - nr_underscore
+                            } else {
+                                0
+                            };
+                            let mut abbrev = String::with_capacity(4);
+                            let mut take_next = true;
+                            for c in trimmed_tag.chars() {
+                                if c == '_' {
+                                    take_next = true;
+                                } else if c.is_ascii() {
+                                    if take_next || needed_other > 0 {
+                                        abbrev.push(c);
+                                        if !take_next {
+                                            needed_other -= 1;
+                                        }
+                                    }
+                                    take_next = false;
+                                }
+                                if abbrev.len() >= 4 {
+                                    break;
+                                }
+                            }
+
+                            DltChar4::from_str(&get_4digit_str(&abbrev, iteration))
+                        } else {
+                            // assume camel case
+                            let nr_capital = trimmed_tag.chars().fold(0u32, |acc, c| {
+                                if c.is_ascii_uppercase() {
+                                    acc + 1
+                                } else {
+                                    acc
+                                }
+                            });
+                            let mut needed_lowercase =
+                                if nr_capital < 4 { 4 - nr_capital } else { 0 };
+                            let mut abbrev = String::with_capacity(4);
+                            for c in trimmed_tag.chars() {
+                                if c.is_ascii_uppercase() {
+                                    abbrev.push(c);
+                                } else if needed_lowercase > 0 && c.is_ascii() {
+                                    abbrev.push(c);
+                                    needed_lowercase -= 1;
+                                }
+                                if abbrev.len() >= 4 {
+                                    break;
+                                }
+                            }
+
+                            DltChar4::from_str(&get_4digit_str(&abbrev, iteration))
+                        }
+                    }
+                    .unwrap_or(DltChar4::from_str(&get_4digit_str("NoAs", iteration)).unwrap()),
+                };
+
+                // does apid exist already?
+                if let Some((_k, _v)) = map.iter().find(|(_k, v)| v == &&apid) {
+                    /* println!(
+                        "get_apid_for_tag iteration {} apid {} for tag {} exists already for tag {}",
+                        iteration, apid, tag, k
+                    ); */
+                    iteration += 1;
+                } else {
+                    map.insert(tag.to_owned(), apid.to_owned());
+                    return apid;
+                }
+            } // todo abort after >100 iterations with a default?
+        }
+    }
+}
+
 /// return the proper dlt message iterator for a file type/extension
 ///
 /// Does this currently by extension:
 ///  - `asc` uses the Asc2DltMsgIterator
+///  - `txt` uses the LogCat2DltMsgIterator
+///  - `log` uses the GenLog2DltMsgIterator
 ///  - others use the DltMessageIterator
 ///
 /// ### Arguments
@@ -76,6 +217,14 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
             log,
         )),
         "txt" => Box::new(LogCat2DltMsgIterator::new(
+            start_index,
+            reader,
+            namespace,
+            first_reception_time_us,
+            modified_time_us,
+            log,
+        )),
+        "log" => Box::new(GenLog2DltMsgIterator::new(
             start_index,
             reader,
             namespace,
@@ -805,6 +954,51 @@ mod tests {
     //    use std::time::Instant;
     use chrono::{Datelike, Timelike};
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn get_4digit_str_1() {
+        assert_eq!(get_4digit_str("", 0), "");
+        assert_eq!(get_4digit_str("", 1), "0001");
+        assert_eq!(get_4digit_str("a", 0), "a");
+        assert_eq!(get_4digit_str("a", 1), "a001");
+        assert_eq!(get_4digit_str("a", 99), "a099");
+        assert_eq!(get_4digit_str("a", 1000), "1000");
+        assert_eq!(get_4digit_str("abc", 9), "abc9");
+        assert_eq!(get_4digit_str("abc", 99), "ab99");
+        assert_eq!(get_4digit_str("abcd", 0), "abcd");
+        assert_eq!(get_4digit_str("abcd", 1), "abc1");
+        assert_eq!(get_4digit_str("abcd", 9), "abc9");
+        assert_eq!(get_4digit_str("abcd", 10), "ab10");
+        assert_eq!(get_4digit_str("abcd", 99), "ab99");
+        assert_eq!(get_4digit_str("abcd", 100), "a100");
+        assert_eq!(get_4digit_str("abcd", 999), "a999");
+        assert_eq!(get_4digit_str("abcd", 1000), "1000");
+    }
+
+    #[test]
+    fn get_apid_for_tag_1() {
+        assert_eq!(
+            get_apid_for_tag(0, "snake_case"),
+            DltChar4::from_buf(b"snac")
+        );
+        assert_eq!(
+            get_apid_for_tag(0, "snake_case2"),
+            DltChar4::from_buf(b"sna1") // snac -> exists -> add numbers...
+        );
+        assert_eq!(
+            get_apid_for_tag(1, "snake_case3"),
+            DltChar4::from_buf(b"snac") // different namespace
+        );
+
+        assert_eq!(
+            get_apid_for_tag(0, "CamelBaseAllGood"),
+            DltChar4::from_buf(b"CBAG")
+        );
+        assert_eq!(
+            get_apid_for_tag(0, "CamelBaseAll"),
+            DltChar4::from_buf(b"CaBA")
+        );
+    }
 
     pub fn get_first_message(
         file_ext: &str,
