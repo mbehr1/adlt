@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.55.2 - 2024-03-18
+#### Bug Fixes
+- avoid accessing all_msgs out of bound - (78fbc19) - Matthias Behr
+#### Continuous Integration
+- remove win32-ia32 build - (857e186) - Matthias Behr
+
+- - -
+
 ## v0.55.1 - 2024-03-17
 #### Bug Fixes
 - **(readme)** add .log info and mark as fix to trigger new release - (b2f51cf) - Matthias Behr
