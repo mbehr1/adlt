@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.55.3 - 2024-03-18
+#### Bug Fixes
+- **(remote)** queries that have been chunked returned wrong len - (cc09f9e) - Matthias Behr
+
+- - -
+
 ## v0.55.2 - 2024-03-18
 #### Bug Fixes
 - avoid accessing all_msgs out of bound - (78fbc19) - Matthias Behr
