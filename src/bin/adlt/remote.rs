@@ -1487,7 +1487,7 @@ fn process_file_context<T: Read + Write>(
     let all_msgs_len = fc.all_msgs.len();
     for stream in &mut fc.streams {
         let last_all_msgs_last_processed_len =
-            std::cmp::min(stream.all_msgs_last_processed_len, all_msgs_len); // TODO investigate how this can happen at all!
+            std::cmp::min(stream.all_msgs_last_processed_len, all_msgs_len);
         process_stream_new_msgs(
             stream,
             last_all_msgs_last_processed_len,

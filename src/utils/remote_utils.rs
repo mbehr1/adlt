@@ -172,7 +172,8 @@ pub fn process_stream_new_msgs(
 
                 let max_matching = stream.msgs_to_send.end;
                 let mut start_idx = 0;
-                let part_chunk_size = std::cmp::min(max_chunk_size, 64 * 1024); // we use 64k as max chunk size
+                const PART_CHUNK_SIZE: usize = if cfg!(test) { 64 } else { 64 * 1024 };
+                let part_chunk_size = std::cmp::min(max_chunk_size, PART_CHUNK_SIZE); // we use 64k as max chunk size (and are a bit too lazy to modify the test cases for larger!)
                 while stream.filtered_msgs.len() < max_matching && start_idx < max_idx {
                     let nr_wanted = max_matching - stream.filtered_msgs.len();
 
@@ -186,7 +187,7 @@ pub fn process_stream_new_msgs(
                     // if we found more than wanted, we need to ensure that the next search
                     // restarts at the unwanted one...
                     if matching_idxs.len() <= nr_wanted {
-                        stream.all_msgs_last_processed_len = new_offset + max_this_chunk;
+                        stream.all_msgs_last_processed_len = new_msgs_offset + max_this_chunk;
                     } else {
                         // found more than wanted:
                         let first_unwanted = matching_idxs[nr_wanted];
