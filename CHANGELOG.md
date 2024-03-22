@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.55.4 - 2024-03-22
+#### Bug Fixes
+- dont panic on logs with reception time around 1.1.1970 - (a5d78bc) - Matthias Behr
+
+- - -
+
 ## v0.55.3 - 2024-03-18
 #### Bug Fixes
 - **(remote)** queries that have been chunked returned wrong len - (cc09f9e) - Matthias Behr
