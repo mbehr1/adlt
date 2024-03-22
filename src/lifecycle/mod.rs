@@ -310,7 +310,7 @@ impl Lifecycle {
         // 3) msg has no timestamp. This is for logs without a timestamp (e.g. from SER) where no lifecycle detection is possible.
         let msg_timestamp_us = msg.timestamp_us();
         let msg_reception_time_us = msg.reception_time_us;
-        let msg_lc_start = msg.reception_time_us - msg_timestamp_us;
+        let msg_lc_start = msg_reception_time_us.saturating_sub(msg_timestamp_us);
         let cur_end_time = self.end_time();
 
         // check for lc_ex005 use case:
@@ -1502,7 +1502,7 @@ mod tests {
         let (tx2, rx2) = sync_channel(2048);
         const NUMBER_PER_MSG_CAT: usize = 50;
         const MSG_DELAYS: [(u64, u64); 2] = [(45_000, 0), (30_000, 10_000)];
-        const LC_START_TIMES: [u64; 2] = [1_000_000, 1_060_000];
+        const LC_START_TIMES: [u64; 2] = [631_152_001_000_000, 631_152_001_060_000];
         const NUMBER_MSGS: usize = LC_START_TIMES.len() * NUMBER_PER_MSG_CAT * MSG_DELAYS.len();
         let gen_lc1 = MessageGenerator::new(
             LC_START_TIMES[0],
@@ -1606,7 +1606,7 @@ mod tests {
         let (tx2, rx2) = channel();
         const NUMBER_PER_MSG_CAT: usize = 50;
         const MSG_DELAYS: [(u64, u64); 2] = [(45_000, 0), (30_000, 10_000)];
-        const LC_START_TIMES: [u64; 2] = [1_000_000, 1_060_000];
+        const LC_START_TIMES: [u64; 2] = [631_152_001_000_000, 631_152_001_060_000];
         const NUMBER_MSGS: usize = LC_START_TIMES.len() * NUMBER_PER_MSG_CAT * MSG_DELAYS.len();
         for ecu in 0x45..0x47 {
             let gen_lc1 = MessageGenerator::new(
@@ -2052,4 +2052,19 @@ mod tests {
     // todo add tests and workaround for the regression introduced with the above
     //  lc_ex006 fix. Regressions seem to be in lifecycles with corrupts/inplausible (most of them too high) timestamps
     //  from an ecu with serial recording  (logs/tecmp around index 19413 and following)
+
+    #[test]
+    fn ex_1970_1_1() {
+        // example trace where the recorded time starts at 1970-01-01 (... 0 ... plus some small offset)
+        // we want it to not fail with a panic (due to underflow during subtracting/calc lc start time)
+
+        //LC#  1: E001 1970/01/01 01:00:00.000000 - 03:48:19 #     364
+        //LC#  2: E002 1970/01/01 01:00:00.000000 - 19:01:50 #      18
+        //LC#  3: E001 1970/01/02 03:48:19 RESUME - 10:09:40 #     117
+        //LC#  4: E002 1970/01/01 19:01:50 RESUME - 10:09:40 #       2
+        assert_eq!(
+            nr_lcs_for_files(&[&get_tests_filename("ex_1970_1_1.dlt").to_string_lossy()]),
+            (501, 4)
+        );
+    }
 }
