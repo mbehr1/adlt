@@ -1325,9 +1325,6 @@ fn process_stream_search_params<T: Read + Write>(
     // perform the search now synchronous/blocking:
     let mut search_idxs: Vec<DltMessageIndexType> = Vec::with_capacity(max_results);
 
-    let have_pos_filters = !filters[FilterKind::Positive].is_empty();
-    let have_event_filters = !filters[FilterKind::Event].is_empty();
-
     // check msgs from _processed_len to all_msgs_len
     // todo use parallel iterator
     // todo break after some max time/max amount of messages to improve reaction time
@@ -1335,7 +1332,7 @@ fn process_stream_search_params<T: Read + Write>(
     let stream_msgs_len = stream.filtered_msgs.len();
     while i < stream_msgs_len {
         let msg: &adlt::dlt::DltMessage = &all_msgs[stream.filtered_msgs[i]];
-        let matches = match_filters(msg, &filters, have_pos_filters, have_event_filters);
+        let matches = match_filters(msg, &filters);
 
         if matches {
             search_idxs.push(i as u32);
@@ -2112,7 +2109,10 @@ mod tests {
                                         "got {} lifecycles: {:? }",
                                         lcs.len(),
                                         lcs.iter()
-                                            .map(|lc| format!("{}:", lc.id))
+                                            .map(|lc| format!(
+                                                "{}:{} #msgs={}",
+                                                lc.id, lc.ecu, lc.nr_msgs
+                                            ))
                                             .collect::<Vec<String>>()
                                     );
                                     last_lcs = Some(lcs);
@@ -2162,8 +2162,8 @@ mod tests {
 
         let mut fc = None;
         process_incoming_text_message(
-            &log,
-            r#"open {"sort":true, "collect":false, "files":["tests/lc_ex002.dlt"]}"#.to_string(),
+            &log, // lc_ex002 changes later to merged lifecycles... (so use _ex004)
+            r#"open {"sort":true, "collect":false, "files":["tests/lc_ex004.dlt"]}"#.to_string(),
             &mut fc,
             &mut ws,
         );
@@ -2182,12 +2182,19 @@ mod tests {
 
         // wait >2s to send eac info to the client as well
         std::thread::sleep(Duration::from_millis(2010));
-        let a = process_file_context(&log, &mut fc, &mut ws);
-        assert!(a.is_ok(), "a={:?}", a);
-        assert!(fc.all_msgs.is_empty());
+        loop {
+            let a = process_file_context(&log, &mut fc, &mut ws);
+            assert!(a.is_ok(), "a={:?}", a);
+            assert!(fc.all_msgs.is_empty());
 
-        // the example file is small so within >2s we expect all msgs to be processed:
-        assert_eq!(fc.eac_stats.nr_msgs(), 11696);
+            // the example file is small so within >2s we expect all msgs to be processed:
+            if fc.eac_stats.nr_msgs() >= 52451 {
+                break;
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert_eq!(fc.eac_stats.nr_msgs(), 52451);
         let (remote_file_info_nr_msgs, remote_eac, remote_lcs, remote_text_msgs) =
             t.join().unwrap();
         assert!(remote_text_msgs.iter().any(|t| t.starts_with("ok: open ")));
@@ -2198,11 +2205,14 @@ mod tests {
             .iter()
             .any(|t| t.starts_with("err: query failed")));
 
-        assert_eq!(remote_file_info_nr_msgs, 11696);
-        assert_eq!(remote_eac.unwrap().len(), 2);
-        assert_eq!(remote_lcs.unwrap().len(), 3);
+        assert_eq!(remote_file_info_nr_msgs, 52451);
+        let remote_eac = remote_eac.unwrap();
+        assert_eq!(remote_eac.len(), 1);
+        assert!(remote_eac.iter().map(|eac| eac.nr_msgs).sum::<u32>() <= 52451); // the update is send only every 3s (2s initially). so the last update might be missing
+        let remote_lcs = remote_lcs.unwrap();
+        assert_eq!(remote_lcs.len(), 2);
+        assert_eq!(remote_lcs.iter().map(|lc| lc.nr_msgs).sum::<u32>(), 52451);
     }
-
 
     #[test]
     fn remote_basic() {
