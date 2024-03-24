@@ -241,6 +241,7 @@ struct FileContext {
     plugins_active: Vec<Box<dyn Plugin + Send>>, // will be moved to parsing_thread
     plugin_states: Vec<(u32, Arc<RwLock<PluginState>>)>,
     parsing_thread: Option<ParserThreadType>,
+    collect_all_msgs: bool,
     all_msgs: Vec<adlt::dlt::DltMessage>,
     streams: Vec<StreamContext>,
     /// we did send lifecycles with that max_msg_index_update
@@ -253,6 +254,14 @@ struct FileContext {
 }
 
 impl FileContext {
+    /// create a file context from a json string
+    ///
+    /// supported json keys:
+    /// - `files`: array of strings with file names
+    /// - `sort`: bool (default false) do sort by calculated time/ lc & timestamp (or by file index/order)
+    /// - `collect`: bool (default true) determines whether msgs should be collected into all_msgs
+    /// - `plugins`: array of objects with plugin specific settings
+    ///
     fn from(
         log: &slog::Logger,
         command: &str,
@@ -373,6 +382,11 @@ impl FileContext {
             .collect();
         info!(log, "sorted input_files by first message reception time and ecus_seen:"; "input_file_streams" => format!("{:?}",&input_file_streams));
 
+        let collect_all_msgs = match &v["collect"] {
+            serde_json::Value::Bool(b) => *b,
+            _ => true, // we default to "do collect"
+        };
+
         let all_msgs_len_estimate = sum_file_len / 128; // todo better heuristics? e.g. 20gb dlt -> 117mio msgs
         info!(
             log,
@@ -425,10 +439,12 @@ impl FileContext {
             plugins_active,
             plugin_states,
             parsing_thread: None,
-            all_msgs: Vec::with_capacity(std::cmp::min(
-                all_msgs_len_estimate as usize,
-                u32::MAX as usize,
-            )),
+            collect_all_msgs,
+            all_msgs: Vec::with_capacity(if collect_all_msgs {
+                std::cmp::min(all_msgs_len_estimate as usize, u32::MAX as usize)
+            } else {
+                0
+            }),
             streams: Vec::new(),
             lcs_max_msg_index_update: 0,
             eac_stats,
@@ -573,29 +589,38 @@ fn process_incoming_text_message<T: Read + Write>(
         "stream" | "query" => {
             match file_context {
                 Some(fc) => {
-                    let stream = StreamContext::from(log, command, params);
-                    match stream {
-                        Ok(stream) => {
-                            websocket
-                                .write_message(Message::Text(format!(
-                                    "ok: {} {{\"id\":{}, \"number_filters\":[{},{},{}]}}",
-                                    command,
-                                    stream.id,
-                                    stream.filters[FilterKind::Positive].len(),
-                                    stream.filters[FilterKind::Negative].len(),
-                                    stream.filters[FilterKind::Event].len()
-                                )))
-                                .unwrap(); // todo
-                            fc.streams.push(stream);
+                    if fc.collect_all_msgs {
+                        let stream = StreamContext::from(log, command, params);
+                        match stream {
+                            Ok(stream) => {
+                                websocket
+                                    .write_message(Message::Text(format!(
+                                        "ok: {} {{\"id\":{}, \"number_filters\":[{},{},{}]}}",
+                                        command,
+                                        stream.id,
+                                        stream.filters[FilterKind::Positive].len(),
+                                        stream.filters[FilterKind::Negative].len(),
+                                        stream.filters[FilterKind::Event].len()
+                                    )))
+                                    .unwrap(); // todo
+                                fc.streams.push(stream);
+                            }
+                            Err(e) => {
+                                websocket
+                                    .write_message(Message::Text(format!(
+                                        "err: {} failed with err '{}' from '{}'!",
+                                        command, e, params
+                                    )))
+                                    .unwrap(); // todo
+                            }
                         }
-                        Err(e) => {
-                            websocket
-                                .write_message(Message::Text(format!(
-                                    "err: {} failed with err '{}' from '{}'!",
-                                    command, e, params
-                                )))
-                                .unwrap(); // todo
-                        }
+                    } else {
+                        websocket
+                        .write_message(Message::Text(format!(
+                            "err: {} failed as open option 'collect:false' was used. Stream not supported then.",
+                            command
+                        )))
+                        .unwrap(); // todo
                     }
                 }
                 None => {
@@ -1367,7 +1392,9 @@ fn process_file_context<T: Read + Write>(
             match rm {
                 Ok(msg) => {
                     fc.eac_stats.add_msg(&msg);
-                    fc.all_msgs.push(msg);
+                    if fc.collect_all_msgs {
+                        fc.all_msgs.push(msg);
+                    }
                     got_new_msgs = true;
                 }
                 _ => {
@@ -1385,7 +1412,11 @@ fn process_file_context<T: Read + Write>(
         websocket.write_message(Message::Binary(
             bincode::encode_to_vec(
                 remote_types::BinType::FileInfo(remote_types::BinFileInfo {
-                    nr_msgs: fc.all_msgs.len() as u32,
+                    nr_msgs: if fc.collect_all_msgs {
+                        fc.all_msgs.len() as u32
+                    } else {
+                        fc.eac_stats.nr_msgs()
+                    },
                 }),
                 BINCODE_CONFIG,
             )
@@ -2038,6 +2069,140 @@ mod tests {
         println!("rx_thread took {:?}", rx_dur);
         println!("got_msgs={}", all_msgs.len());
     }
+
+    #[test]
+    /// test a remote "open" command with "collect:false" that can be used to
+    /// get all file infos like lifecycles, eac stats, nr_msgs but no msgs
+    fn process_file_context_no_collect() {
+        let log = new_logger();
+        let port = pick_unused_port().expect("no ports free");
+        let server = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+
+        // spawn a thread to connect to the server
+        let t = std::thread::spawn(move || {
+            let mut ws = tungstenite::client::connect(format!("ws://127.0.0.1:{}", port))
+                .unwrap()
+                .0;
+            println!("got client websocket");
+            if let tungstenite::stream::MaybeTlsStream::<std::net::TcpStream>::Plain(stream) =
+                ws.get_mut()
+            {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+            }
+            let mut file_info_nr_msgs = 0;
+            let mut last_eac = None;
+            let mut last_lcs = None;
+            let mut text_msgs: Vec<String> = vec![];
+            while let Ok(msg) = ws.read_message() {
+                match msg {
+                    Message::Binary(d) => {
+                        if let Ok((btype, _)) = bincode::decode_from_slice::<remote_types::BinType, _>(
+                            &d,
+                            BINCODE_CONFIG,
+                        ) {
+                            match btype {
+                                BinType::FileInfo(s) => {
+                                    println!("got file info: nr_msgs={}", s.nr_msgs);
+                                    file_info_nr_msgs = s.nr_msgs;
+                                }
+                                BinType::Lifecycles(lcs) => {
+                                    println!(
+                                        "got {} lifecycles: {:? }",
+                                        lcs.len(),
+                                        lcs.iter()
+                                            .map(|lc| format!("{}:", lc.id))
+                                            .collect::<Vec<String>>()
+                                    );
+                                    last_lcs = Some(lcs);
+                                }
+                                BinType::EacInfo(eac) => {
+                                    println!("got eac: {:?}", eac.len());
+                                    last_eac = Some(eac);
+                                }
+                                BinType::PluginState(ps) => {
+                                    println!("got plugin state: {:?}", ps);
+                                }
+                                BinType::StreamInfo(si) => {
+                                    println!(
+                                        "got stream info: nr_file_msgs_total={}",
+                                        si.nr_file_msgs_total
+                                    );
+                                }
+                                BinType::DltMsgs((stream_id, msgs)) => {
+                                    println!(
+                                        "got dlt msgs: stream_id={} msgs={}",
+                                        stream_id,
+                                        msgs.len()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Message::Text(s) => {
+                        println!("got text msg: {}", s);
+                        text_msgs.push(s);
+                    }
+                    _ => {
+                        println!("got other msg: {:?}", msg);
+                    }
+                }
+            }
+            ws.write_message(tungstenite::protocol::Message::Text("quit".to_string()))
+                .unwrap();
+            println!("closed client websocket");
+            (file_info_nr_msgs, last_eac, last_lcs, text_msgs)
+        });
+
+        let stream = server.incoming().next().unwrap().unwrap();
+        println!("got incoming stream");
+        let mut ws = tungstenite::accept(stream).unwrap();
+        println!("got incoming websocket");
+
+        let mut fc = None;
+        process_incoming_text_message(
+            &log,
+            r#"open {"sort":true, "collect":false, "files":["tests/lc_ex002.dlt"]}"#.to_string(),
+            &mut fc,
+            &mut ws,
+        );
+        assert!(fc.is_some());
+
+        // check that streams/queries are rejected:
+        process_incoming_text_message(&log, r#"stream {}"#.to_string(), &mut fc, &mut ws);
+        process_incoming_text_message(&log, r#"query {}"#.to_string(), &mut fc, &mut ws);
+
+        let mut fc = fc.unwrap();
+        assert!(!fc.collect_all_msgs);
+
+        let a = process_file_context(&log, &mut fc, &mut ws);
+        assert!(a.is_ok(), "a={:?}", a);
+        assert!(fc.all_msgs.is_empty());
+
+        // wait >2s to send eac info to the client as well
+        std::thread::sleep(Duration::from_millis(2010));
+        let a = process_file_context(&log, &mut fc, &mut ws);
+        assert!(a.is_ok(), "a={:?}", a);
+        assert!(fc.all_msgs.is_empty());
+
+        // the example file is small so within >2s we expect all msgs to be processed:
+        assert_eq!(fc.eac_stats.nr_msgs(), 11696);
+        let (remote_file_info_nr_msgs, remote_eac, remote_lcs, remote_text_msgs) =
+            t.join().unwrap();
+        assert!(remote_text_msgs.iter().any(|t| t.starts_with("ok: open ")));
+        assert!(remote_text_msgs
+            .iter()
+            .any(|t| t.starts_with("err: stream failed")));
+        assert!(remote_text_msgs
+            .iter()
+            .any(|t| t.starts_with("err: query failed")));
+
+        assert_eq!(remote_file_info_nr_msgs, 11696);
+        assert_eq!(remote_eac.unwrap().len(), 2);
+        assert_eq!(remote_lcs.unwrap().len(), 3);
+    }
+
 
     #[test]
     fn remote_basic() {
