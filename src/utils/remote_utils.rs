@@ -138,17 +138,12 @@ pub fn process_stream_new_msgs(
     if !new_msgs.is_empty() {
         let new_msgs_len = new_msgs.len();
         if stream.filters_active {
-            let have_pos_filters = !stream.filters[FilterKind::Positive].is_empty();
-            let have_event_filters = !stream.filters[FilterKind::Event].is_empty();
-
             // break after some searching max_chunk_size of messages to improve reaction time
             let max_idx = std::cmp::min(new_msgs_len, max_chunk_size);
             let get_matching_idxs = |msgs: &[DltMessage], offset: usize| -> Vec<usize> {
                 msgs.par_iter()
                     .enumerate()
-                    .filter(|(_i, msg)| {
-                        match_filters(msg, &stream.filters, have_pos_filters, have_event_filters)
-                    })
+                    .filter(|(_i, msg)| match_filters(msg, &stream.filters))
                     .map(|(i, _msg)| offset + i) // done in parallel
                     .collect() // serializing here
 
@@ -203,55 +198,36 @@ pub fn process_stream_new_msgs(
     }
 }
 
-pub fn match_filters(
-    msg: &DltMessage,
-    filters: &FilterKindContainer<Vec<Filter>>,
-    have_pos_filters: bool,
-    have_event_filters: bool,
-) -> bool {
-    let mut matches = !have_pos_filters;
+/// check if the message matches the filters
+///
+/// the rules are: (for a msg to pass all 3 have to be true)
+///
+/// 1. if no pos filters are set, all messages match, otherwise at least one pos filter has to match
+/// 2. if a neg filter matches, the message is removed
+/// 3. if an event filter is set, the message passing #1 and #2 has to match at least one event filter
+///
+/// So event filter can be used to filter out messages that passed the pos/neg filters.
+pub fn match_filters(msg: &DltMessage, filters: &FilterKindContainer<Vec<Filter>>) -> bool {
+    let pos_filters = &filters[FilterKind::Positive];
 
-    // for now do a simple support of pos. and neg. filters
-    for filter in &filters[FilterKind::Positive] {
-        if filter.matches(msg) {
-            matches = true;
-            // debug!(log, "stream {} got pos matching msg idx={}", stream.id, i);
-            break;
-        }
-    }
-    if matches {
-        // and neg that removes the msg?
-        for filter in &filters[FilterKind::Negative] {
-            if filter.matches(msg) {
-                matches = false;
-                // debug!(log, "stream {} got neg matching msg idx={}", stream.id, i);
-                break;
-            }
-        }
-    }
+    if pos_filters.is_empty() || pos_filters.iter().any(|filter| filter.matches(msg)) {
+        // any neg filter that removes the msg?
+        let neg_filters = &filters[FilterKind::Negative];
+        if !neg_filters.iter().any(|filter| filter.matches(msg)) {
+            // no neg. filter matched:
 
-    // report/event filter?
-    // if any is set it has to match as well
-    // so they are applied after the pos/neg filters
-    // todo think about it... (could be treated as pos filter as well)
-    // it's currently used for dlt-logs search as multiple not/negative filters
-    // don't work.
-    // so the search uses the event filters as pos. filters to be applied after
-    // any pos/neg filters (which might currently be active in the document)
-    if matches && have_event_filters {
-        matches = false;
-        for filter in &filters[FilterKind::Event] {
-            if filter.matches(msg) {
-                matches = true;
-                /*debug!(
-                    log,
-                    "stream {} got pos matching event msg idx={}", stream.id, i
-                );*/
-                break;
-            }
+            // report/event filter?
+            // if any is set it has to match as well
+            // so they are applied after the pos/neg filters
+            // it's currently used for dlt-logs search as multiple not/negative filters don't work.
+            // so the search uses the event filters as pos. filters to be applied after
+            // any pos/neg filters (which might currently be active in the document)
+
+            let ev_filters = &filters[FilterKind::Event];
+            return ev_filters.is_empty() || ev_filters.iter().any(|filter| filter.matches(msg));
         }
     }
-    matches
+    false
 }
 
 #[cfg(test)]
@@ -289,6 +265,77 @@ mod tests {
             lifecycle: 0,
         }
     }
+
+    #[test]
+    fn match_filters_1() {
+        let msg_ecu0 = msg_for_test(0);
+        let msg_ecu1 = msg_for_test(1);
+        let mut filters: FilterKindContainer<Vec<Filter>> = Default::default();
+
+        // empty pos filters, empty neg filters, empty event filters -> match any message
+        assert!(match_filters(&msg_ecu0, &filters));
+
+        // a pos filter: (need to match)
+        let filter = Filter::from_json(r#"{"type":0,"ecu":"^ECU0"}"#).unwrap();
+        filters[FilterKind::Positive].push(filter);
+        assert!(match_filters(&msg_ecu0, &filters));
+        assert!(!match_filters(&msg_ecu1, &filters));
+
+        filters[FilterKind::Positive]
+            .push(Filter::from_json(r#"{"type":0,"ecu":"^ECU1"}"#).unwrap());
+        // now 2 pos filters for ECU0 and ECU1
+        assert!(match_filters(&msg_ecu1, &filters));
+
+        // a pos and a neg filter: (need to match pos and not neg)
+        filters[FilterKind::Negative]
+            .push(Filter::from_json(r#"{"type":1,"ecu":"^ECU1"}"#).unwrap());
+        assert!(match_filters(&msg_ecu0, &filters));
+        assert!(!match_filters(&msg_ecu1, &filters));
+
+        // no pos (so all pass) but a neg filter
+        filters[FilterKind::Positive].clear();
+        assert!(match_filters(&msg_ecu0, &filters));
+        assert!(!match_filters(&msg_ecu1, &filters));
+
+        // no pos, no neg, but an event filter
+        filters[FilterKind::Negative].clear();
+        filters[FilterKind::Event].push(Filter::from_json(r#"{"type":0,"ecu":"^ECU1"}"#).unwrap());
+        assert!(!match_filters(&msg_ecu0, &filters));
+        assert!(match_filters(&msg_ecu1, &filters));
+
+        // a pos, no neg but an event filter
+        filters[FilterKind::Positive]
+            .push(Filter::from_json(r#"{"type":0,"ecu":"^ECU0"}"#).unwrap());
+        assert!(!match_filters(&msg_ecu0, &filters)); // matches pos but not event
+        filters[FilterKind::Event].clear();
+        filters[FilterKind::Event].push(Filter::from_json(r#"{"type":0,"ecu":"^ECU0"}"#).unwrap());
+        assert!(match_filters(&msg_ecu0, &filters)); // matches pos and event
+
+        // a pos, a neg and an event filter
+        filters[FilterKind::Positive].clear();
+        filters[FilterKind::Positive]
+            .push(Filter::from_json(r#"{"type":0,"ecu":"^ECU1"}"#).unwrap());
+        assert!(!match_filters(&msg_ecu0, &filters)); // matches !pos but event
+
+        // no pos, a neg and an event filter
+        filters[FilterKind::Positive].clear();
+        filters[FilterKind::Negative]
+            .push(Filter::from_json(r#"{"type":1,"ecu":"^ECU1"}"#).unwrap());
+        assert!(match_filters(&msg_ecu0, &filters)); // matches event and not neg
+        assert!(!match_filters(&msg_ecu1, &filters)); // matches neg
+
+        filters[FilterKind::Negative].clear();
+        filters[FilterKind::Negative]
+            .push(Filter::from_json(r#"{"type":1,"ecu":"^ECU0"}"#).unwrap());
+        assert!(!match_filters(&msg_ecu0, &filters)); // matches neg
+        assert!(!match_filters(&msg_ecu1, &filters)); // matches not neg but not event either
+
+        filters[FilterKind::Event].clear();
+        filters[FilterKind::Event].push(Filter::from_json(r#"{"type":0,"ecu":"^ECU1"}"#).unwrap());
+        assert!(!match_filters(&msg_ecu0, &filters)); // matches neg
+        assert!(match_filters(&msg_ecu1, &filters)); // matches not neg event but event
+    }
+
     #[test]
     fn stream_context_1() {
         let log = new_logger();
