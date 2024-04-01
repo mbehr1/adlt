@@ -8,6 +8,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::dlt::DltMessage;
+pub use crate::lifecycle::LcsRType;
 
 #[derive(Debug)]
 pub struct PluginError {
@@ -34,6 +35,18 @@ pub trait Plugin {
     fn enabled(&self) -> bool;
 
     fn state(&self) -> Arc<RwLock<PluginState>>;
+
+    /// provide the plugin access to lifecycles.
+    /// the lcs_r is not available at construction time thus
+    /// will be provided before any messages are processed
+    fn set_lifecycle_read_handle(&mut self, lcs_r: &LcsRType);
+
+    /// "sync/flush" the plugin
+    ///
+    /// Will be called e.g. once all msgs have been processed
+    /// but can be called at any time.
+    /// Should update the state with any pending changes and e.g. flush/sync any files.
+    fn sync_all(&mut self);
 
     /// process a single msg
     /// this can modify the msg (and is expected for most plugins)

@@ -7,7 +7,7 @@ use crate::{
         DltChar4, DltMessage, DLT_SCOD_UTF8, DLT_TYPE_INFO_STRG, SERVICE_ID_GET_LOG_INFO,
         SERVICE_ID_GET_SOFTWARE_VERSION,
     },
-    plugins::plugin::{Plugin, PluginState},
+    plugins::plugin::{LcsRType, Plugin, PluginState},
 };
 use std::{
     collections::HashMap,
@@ -170,6 +170,10 @@ impl Plugin for AnonymizePlugin {
     fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
+
+    fn set_lifecycle_read_handle(&mut self, _lcs_r: &LcsRType) {}
+
+    fn sync_all(&mut self) {}
 
     fn process_msg(&mut self, msg: &mut DltMessage) -> bool {
         if !self.enabled {

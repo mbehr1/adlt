@@ -12,8 +12,8 @@ use crate::{
     utils::US_PER_SEC,
     SendMsgFnReturnType,
 };
-use nohash_hasher::BuildNoHashHasher;
-use std::hash::{Hash, Hasher};
+use nohash_hasher::{BuildNoHashHasher, NoHashHasher};
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::mpsc::Receiver;
 
 pub type LifecycleId = u32;
@@ -22,6 +22,10 @@ pub type LifecycleItem = Lifecycle; // Box<Lifecycle>; V needs to be Eq+Hash+Sha
                                     // std::rc::Rc misses Send
                                     // std::sync::Arc ... cannot borrow data in an Arc as mutable -> mod.rs:149
                                     // RwLock&Mutex misses ShallowCopy, Eq and Hash
+
+/// ReadHandle for the lifecycles
+pub type LcsRType =
+    evmap::ReadHandle<LifecycleId, Lifecycle, (), BuildHasherDefault<NoHashHasher<u32>>>;
 
 fn new_lifecycle_item(lc: &Lifecycle, idx: DltMessageIndexType) -> LifecycleItem {
     let mut lc = lc.clone();

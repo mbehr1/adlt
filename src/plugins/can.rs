@@ -7,7 +7,7 @@ use crate::{
         control_msgs::parse_ctrl_log_info_payload, DltChar4, DltMessage, DltMessageNwType,
         DltMessageType, SERVICE_ID_GET_LOG_INFO,
     },
-    plugins::plugin::{Plugin, PluginState},
+    plugins::plugin::{LcsRType, Plugin, PluginState},
 };
 use afibex::fibex::{
     get_all_fibex_in_dir, load_all_fibex, CompuCategory, CompuMethod, FibexData, PduInstance,
@@ -80,6 +80,9 @@ impl Plugin for CanPlugin {
     fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
+    fn set_lifecycle_read_handle(&mut self, _lcs_r: &LcsRType) {}
+
+    fn sync_all(&mut self) {}
 
     fn process_msg(&mut self, msg: &mut DltMessage) -> bool {
         if self.mstp == msg.mstp()

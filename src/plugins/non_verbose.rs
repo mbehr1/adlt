@@ -10,8 +10,7 @@ use crate::{
         DLT_TYPE_INFO_FLOA, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_SINT, DLT_TYPE_INFO_STRG,
         DLT_TYPE_INFO_UINT,
     },
-    //filter::Filter,
-    plugins::plugin::{Plugin, PluginState},
+    plugins::plugin::{LcsRType, Plugin, PluginState},
     utils::eac_stats::EacStats,
 };
 use afibex::fibex::{get_all_fibex_in_dir, Ecu, Elements, FibexData, Frame};
@@ -294,6 +293,9 @@ impl Plugin for NonVerbosePlugin {
     fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
+    fn set_lifecycle_read_handle(&mut self, _lcs_r: &LcsRType) {}
+
+    fn sync_all(&mut self) {}
 
     fn process_msg(&mut self, msg: &mut DltMessage) -> bool {
         if !self.enabled || msg.is_verbose() {

@@ -8,7 +8,7 @@ use crate::{
         DltArg, DltChar4, DltMessage, DltMessageLogType, DltMessageType, DLT_SCOD_ASCII,
         DLT_SCOD_UTF8, DLT_TYPE_INFO_SINT, DLT_TYPE_INFO_UINT,
     },
-    plugins::plugin::{Plugin, PluginState},
+    plugins::plugin::{LcsRType, Plugin, PluginState},
 };
 use serde_json::json;
 use std::{
@@ -192,6 +192,9 @@ impl Plugin for FileTransferPlugin {
     fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
+    fn set_lifecycle_read_handle(&mut self, _lcs_r: &LcsRType) {}
+
+    fn sync_all(&mut self) {}
 
     /// check a msg for rewrite.
     /// returns false if the msg should be discarded, true otherwise
