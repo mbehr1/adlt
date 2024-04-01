@@ -4,7 +4,11 @@
 // [ ] show rewrites in dlt-logs...
 // [ ] investigate using e.g. deno for full javascript/typescript support
 
-use crate::{dlt::DltMessage, filter::Filter, plugins::plugin::Plugin};
+use crate::{
+    dlt::DltMessage,
+    filter::Filter,
+    plugins::plugin::{LcsRType, Plugin, PluginState},
+};
 use fancy_regex::Regex;
 use serde_json::json;
 use std::{
@@ -12,8 +16,6 @@ use std::{
     fmt,
     sync::{Arc, RwLock},
 };
-
-use super::plugin::PluginState;
 
 #[derive(Debug)]
 struct RewritePluginError {
@@ -117,6 +119,9 @@ impl Plugin for RewritePlugin {
     fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
+    fn set_lifecycle_read_handle(&mut self, _lcs_r: &LcsRType) {}
+
+    fn sync_all(&mut self) {}
 
     /// check a msg for rewrite.
     /// returns false if the msg should be discarded, true otherwise

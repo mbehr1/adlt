@@ -1737,7 +1737,7 @@ fn create_parser_thread(
     input_file_streams: Vec<StreamEntry>,
     namespace: u32,
     sort_by_time: bool,
-    plugins_active: Vec<Box<dyn Plugin + Send>>,
+    mut plugins_active: Vec<Box<dyn Plugin + Send>>,
 ) -> ParserThreadType {
     let (tx_for_parse_thread, rx_from_parse_thread) = sync_channel(1024 * 1024);
     let (tx_for_lc_thread, rx_from_lc_thread) = sync_channel(512 * 1024);
@@ -1756,15 +1756,25 @@ fn create_parser_thread(
         })
     });
 
+    let lcs_r_for_plugins = lcs_r.clone();
     let (_plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
         let (tx_for_plugin_thread, rx_from_plugin_thread) = sync_channel(512 * 1024);
         (
             Some(std::thread::spawn(move || {
-                plugins_process_msgs(
+                plugins_active.iter_mut().for_each(|p| {
+                    p.set_lifecycle_read_handle(&lcs_r_for_plugins);
+                });
+                match plugins_process_msgs(
                     rx_from_lc_thread,
                     &|m| sync_sender_send_delay_if_full(m, &tx_for_plugin_thread),
                     plugins_active,
-                )
+                ) {
+                    Ok(mut plugins_active) => {
+                        plugins_active.iter_mut().for_each(|p| p.sync_all());
+                        Ok(plugins_active)
+                    }
+                    Err(e) => Err(e),
+                }
             })),
             rx_from_plugin_thread,
         )

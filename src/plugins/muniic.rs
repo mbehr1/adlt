@@ -1,6 +1,6 @@
 use crate::{
     dlt::{DltArg, DltChar4, DltMessage, DLT_TYPE_INFO_UINT},
-    plugins::plugin::{Plugin, PluginError, PluginState, TreeItem},
+    plugins::plugin::{LcsRType, Plugin, PluginError, PluginState, TreeItem},
     utils::get_all_files_with_ext_in_dir,
 };
 
@@ -69,6 +69,9 @@ impl Plugin for MuniicPlugin {
     fn state(&self) -> Arc<RwLock<PluginState>> {
         self.state.clone()
     }
+    fn set_lifecycle_read_handle(&mut self, _lcs_r: &LcsRType) {}
+
+    fn sync_all(&mut self) {}
 
     fn process_msg(&mut self, msg: &mut DltMessage) -> bool {
         if let Some(ext_header) = &msg.extended_header {
