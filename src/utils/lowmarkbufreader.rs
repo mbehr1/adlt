@@ -45,7 +45,11 @@ impl<R: Read> Read for LowMarkBufReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let nread = {
             let mut rem = self.fill_buf()?;
-            rem.read(buf)?
+            // false positive https://github.com/rust-lang/rust-clippy/issues/12519 in 1.77
+            // #[allow(clippy::unused_io_amount)] doesn't seem to disable it?
+            let nread = rem.read(buf)?;
+            #[allow(clippy::let_and_return)]
+            nread
         };
         self.consume(nread);
         Ok(nread)
