@@ -252,6 +252,7 @@ struct FileContext {
     eac_stats: EacStats,
     eac_next_send_time: Instant,
     eac_last_nr_msgs: DltMessageIndexType,
+    did_inform_parser_processing_finished: bool,
 }
 
 impl FileContext {
@@ -451,6 +452,7 @@ impl FileContext {
             eac_stats,
             eac_next_send_time: std::time::Instant::now() + std::time::Duration::from_secs(2), // after 2 secs the first update
             eac_last_nr_msgs: 0,
+            did_inform_parser_processing_finished: false,
         })
     }
 }
@@ -1397,6 +1399,7 @@ fn process_file_context<T: Read + Write>(
     websocket: &mut WebSocket<T>,
 ) -> Result<(), tungstenite::Error> {
     let mut got_new_msgs = false;
+    let mut parser_thread_finished = false;
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
 
     if let Some(pt) = &fc.parsing_thread {
@@ -1412,9 +1415,15 @@ fn process_file_context<T: Read + Write>(
                     }
                     got_new_msgs = true;
                 }
-                _ => {
-                    break;
-                }
+                Err(e) => match e {
+                    std::sync::mpsc::RecvTimeoutError::Timeout => {
+                        break;
+                    }
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        parser_thread_finished = true;
+                        break;
+                    }
+                },
             };
             if std::time::Instant::now() > deadline {
                 break;
@@ -1424,15 +1433,15 @@ fn process_file_context<T: Read + Write>(
     // inform about new msgs
     if got_new_msgs && websocket.can_write() {
         // todo debounce this a bit? (eg with eac stats?)
+        let nr_msgs = if fc.collect_all_msgs {
+            fc.all_msgs.len() as u32
+        } else {
+            fc.eac_stats.nr_msgs()
+        };
+        // send on new msgs or once if finished
         websocket.write_message(Message::Binary(
             bincode::encode_to_vec(
-                remote_types::BinType::FileInfo(remote_types::BinFileInfo {
-                    nr_msgs: if fc.collect_all_msgs {
-                        fc.all_msgs.len() as u32
-                    } else {
-                        fc.eac_stats.nr_msgs()
-                    },
-                }),
+                remote_types::BinType::FileInfo(remote_types::BinFileInfo { nr_msgs }),
                 BINCODE_CONFIG,
             )
             .unwrap(), // todo
@@ -1485,7 +1494,9 @@ fn process_file_context<T: Read + Write>(
 
     // send eac stats? if deadline expired and nr_msgs have increased
     // so if only desc have been updated this wont trigger a resend
-    if fc.eac_next_send_time < deadline {
+    if fc.eac_next_send_time < deadline
+        || (parser_thread_finished && !fc.did_inform_parser_processing_finished)
+    {
         // deadline is slightly off (~40ms), but we dont care
         fc.eac_next_send_time = std::time::Instant::now() + std::time::Duration::from_secs(3); // every 3s
         let eac_nr_msgs = fc.eac_stats.nr_msgs();
@@ -1671,6 +1682,25 @@ fn process_file_context<T: Read + Write>(
     }
     if stream_marked_as_done {
         fc.streams.retain(|stream| !stream.is_done);
+    }
+
+    if parser_thread_finished && !fc.did_inform_parser_processing_finished {
+        // we want this to be the last msg (so once lifecycle and eac are sent)
+        let nr_msgs = if fc.collect_all_msgs {
+            fc.all_msgs.len() as u32
+        } else {
+            fc.eac_stats.nr_msgs()
+        };
+        // send on new msgs or once if finished
+        websocket.write_message(Message::Binary(
+            bincode::encode_to_vec(
+                // todo add info here to indicate that the parser_thread has finished (extend BinFileInfo or introduce new type)
+                remote_types::BinType::FileInfo(remote_types::BinFileInfo { nr_msgs }),
+                BINCODE_CONFIG,
+            )
+            .unwrap(), // todo
+        ))?;
+        fc.did_inform_parser_processing_finished = true;
     }
     Ok(())
 }
