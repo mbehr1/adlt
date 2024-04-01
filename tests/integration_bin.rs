@@ -320,9 +320,15 @@ fn bin_remote_ex002_open() {
         // send close
         ws.write_message(tungstenite::protocol::Message::Text("close".to_string()))
             .unwrap();
-        let answer = ws.read_message().unwrap();
-        assert!(answer.is_text(), "answer={:?}", answer);
-        assert_eq!(answer.into_text().unwrap(), "ok: 'close'!");
+        loop {
+            let answer = ws.read_message().unwrap();
+            if answer.is_binary() {
+                continue;
+            }
+            assert!(answer.is_text(), "answer={:?}", answer);
+            assert_eq!(answer.into_text().unwrap(), "ok: 'close'!");
+            break;
+        }
         ws.close(None).unwrap();
         std::thread::sleep(Duration::from_millis(20));
     });

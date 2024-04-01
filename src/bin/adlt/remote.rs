@@ -2473,12 +2473,19 @@ mod tests {
                 r#"plugin_cmd {"name":"Rewrite","cmd":"unknown_cmd"}"#.to_string(),
             ))
             .unwrap();
-            let answer = ws.read_message().unwrap();
-            assert!(answer.is_text(), "answer={:?}", answer);
-            assert_eq!(
-                answer.into_text().unwrap(),
-                "err: plugin_cmd plugin 'Rewrite' does not support commands"
-            );
+            // there might be binary messages as well, so we need to loop:
+            loop {
+                let answer = ws.read_message().unwrap();
+                if answer.is_binary() {
+                    continue;
+                }
+                assert!(answer.is_text(), "answer={:?}", answer);
+                assert_eq!(
+                    answer.into_text().unwrap(),
+                    "err: plugin_cmd plugin 'Rewrite' does not support commands"
+                );
+                break;
+            }
 
             // simply close it
             ws.write_message(tungstenite::protocol::Message::Text("close".to_string()))
