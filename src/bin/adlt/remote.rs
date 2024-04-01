@@ -27,6 +27,7 @@ use std::{
     io::prelude::*,
     net::TcpListener,
     sync::{
+        atomic::AtomicBool,
         mpsc::{sync_channel, Receiver, SendError},
         Arc, RwLock,
     },
@@ -558,8 +559,24 @@ fn process_incoming_text_message<T: Read + Write>(
         "close" => {
             if file_context.is_some() {
                 let old_fc = file_context.take().unwrap();
-                // todo how to trigger end e.g. for streams?
                 if let Some(parsing_thread) = old_fc.parsing_thread {
+                    parsing_thread
+                        .shall_stop
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    // now we try to read msgs from the rx as any thread might be stuck in bounded channel send
+                    //while !parsing_thread.parse_thread.is_finished() {
+                    loop {
+                        // waiting just for parse_thread is not enough, last thread (sort or lc_thread) could block as well
+                        match parsing_thread.rx.try_recv() {
+                            Ok(_msg) => {} // throw away
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                break;
+                            }
+                        }
+                    }
                     if parsing_thread.parse_thread.join().is_err() {
                         error!(log, "close: joining parse_thread failed!");
                     }
@@ -571,6 +588,7 @@ fn process_incoming_text_message<T: Read + Write>(
                             error!(log, "close: joining sort_thread failed!");
                         }
                     }
+                    info!(log, "close: all threads joined");
                 }
 
                 websocket
@@ -1659,6 +1677,7 @@ fn process_file_context<T: Read + Write>(
 
 #[derive(Debug)]
 struct ParserThreadType {
+    shall_stop: Arc<AtomicBool>,
     parse_thread: std::thread::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>,
     lc_thread: std::thread::JoinHandle<
         evmap::WriteHandle<
@@ -1742,11 +1761,16 @@ fn create_parser_thread(
         (None, rx_from_plugin_thread)
     };
 
+    let shall_stop = Arc::new(AtomicBool::new(false));
+    let pt_shall_stop = shall_stop.clone();
+
     ParserThreadType {
+        shall_stop,
         sort_thread,
         parse_thread: std::thread::spawn(
             move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 info!(log, "parser_thread started");
+                let shall_stop = pt_shall_stop.as_ref();
                 let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
 
                 const BUFREADER_CAPACITY: usize = 512 * 1024;
@@ -1820,9 +1844,15 @@ fn create_parser_thread(
                             messages_processed += 1;
                             if let Err(e) =
                                 sync_sender_send_delay_if_full(msg, &tx_for_parse_thread)
+                            // might block!
                             {
-                                info!(log, "parser_thread aborted on err={}", e; "msgs_processed" => messages_processed);
+                                info!(log, "parser_thread aborted on err={}", e; "messages_processed" => messages_processed);
                                 return Err(Box::new(e));
+                            }
+                            if shall_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                                // todo check how expensive this check is (compared to e.g. doing it only every 1k msgs)
+                                info!(log, "parser_thread stopped by shall_stop"; "messages_processed"=>messages_processed);
+                                break;
                             }
                         }
                         None => {
