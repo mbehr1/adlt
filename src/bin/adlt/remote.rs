@@ -245,8 +245,8 @@ struct FileContext {
     collect_all_msgs: bool,
     all_msgs: Vec<adlt::dlt::DltMessage>,
     streams: Vec<StreamContext>,
-    /// we did send lifecycles with that max_msg_index_update
-    lcs_max_msg_index_update: DltMessageIndexType,
+    /// we did send lifecycles with that lcs_w_refresh_idx
+    last_lcs_w_refresh_index: u32,
 
     /// stats like ecu, apid, ctid:
     eac_stats: EacStats,
@@ -448,7 +448,7 @@ impl FileContext {
                 0
             }),
             streams: Vec::new(),
-            lcs_max_msg_index_update: 0,
+            last_lcs_w_refresh_index: 0,
             eac_stats,
             eac_next_send_time: std::time::Instant::now() + std::time::Duration::from_secs(2), // after 2 secs the first update
             eac_last_nr_msgs: 0,
@@ -1446,48 +1446,44 @@ fn process_file_context<T: Read + Write>(
             )
             .unwrap(), // todo
         ))?;
-
-        // lc infos:
-        // we send updates only on the ones that did change
-        if let Some(pt) = &fc.parsing_thread {
-            let lcs_r = &pt.lcs_r;
-            if let Some(lc_map) = lcs_r.read() {
-                let mut lcs: Vec<remote_types::BinLifecycle> = vec![];
-                let mut new_max_msg_index_update = fc.lcs_max_msg_index_update;
-                for lc in lc_map.iter().map(|(_id, b)| b.get_one().unwrap()) {
-                    if lc.max_msg_index_update > fc.lcs_max_msg_index_update {
-                        new_max_msg_index_update =
-                            std::cmp::max(new_max_msg_index_update, lc.max_msg_index_update);
-                        if !lc.only_control_requests() {
-                            // send this one
-                            lcs.push(remote_types::BinLifecycle {
-                                id: lc.id(),
-                                ecu: lc.ecu.as_u32le(),
-                                nr_msgs: lc.nr_msgs,
-                                start_time: lc.resume_start_time(), // we use the resume start time here as this is never earlier than from the lifecycle it resumed
-                                resume_time: if lc.is_resume() {
-                                    Some(lc.resume_time())
-                                } else {
-                                    None
-                                },
-                                end_time: lc.end_time(),
-                                sw_version: lc.sw_version.to_owned(),
-                            })
-                        }
+    }
+    // lc infos:
+    // we send updates only on the ones that did change
+    if let Some(pt) = &fc.parsing_thread {
+        let lcs_r = &pt.lcs_r;
+        if let Some(lc_map) = lcs_r.read() {
+            let mut lcs: Vec<remote_types::BinLifecycle> = vec![];
+            let mut new_lcs_w_refresh_index = fc.last_lcs_w_refresh_index;
+            for lc in lc_map.iter().map(|(_id, b)| b.get_one().unwrap()) {
+                if lc.lcs_w_refresh_idx > fc.last_lcs_w_refresh_index {
+                    new_lcs_w_refresh_index =
+                        std::cmp::max(new_lcs_w_refresh_index, lc.lcs_w_refresh_idx);
+                    if !lc.only_control_requests() {
+                        // send this one
+                        lcs.push(remote_types::BinLifecycle {
+                            id: lc.id(),
+                            ecu: lc.ecu.as_u32le(),
+                            nr_msgs: lc.nr_msgs,
+                            start_time: lc.resume_start_time(), // we use the resume start time here as this is never earlier than from the lifecycle it resumed
+                            resume_time: if lc.is_resume() {
+                                Some(lc.resume_time())
+                            } else {
+                                None
+                            },
+                            end_time: lc.end_time(),
+                            sw_version: lc.sw_version.to_owned(),
+                        })
                     }
                 }
-                fc.lcs_max_msg_index_update = new_max_msg_index_update;
-                if !lcs.is_empty() {
-                    // we do send them sorted (even in case only updates are sent)
-                    lcs.sort_unstable_by(|a, b| a.start_time.cmp(&b.start_time));
-                    let encoded: Vec<u8> = bincode::encode_to_vec(
-                        remote_types::BinType::Lifecycles(lcs),
-                        BINCODE_CONFIG,
-                    )
-                    .unwrap(); // todo
-                               //info!(log, "encoded: #{:?}", &encoded);
-                    websocket.write_message(Message::Binary(encoded))?;
-                }
+            }
+            fc.last_lcs_w_refresh_index = new_lcs_w_refresh_index;
+            if !lcs.is_empty() {
+                // we do send them sorted (even in case only updates are sent)
+                lcs.sort_unstable_by(|a, b| a.start_time.cmp(&b.start_time));
+                let encoded: Vec<u8> =
+                    bincode::encode_to_vec(remote_types::BinType::Lifecycles(lcs), BINCODE_CONFIG)
+                        .unwrap(); // todo
+                websocket.write_message(Message::Binary(encoded))?;
             }
         }
     }
@@ -1916,7 +1912,7 @@ fn create_parser_thread(
 mod tests {
     use super::*;
 
-    use adlt::*;
+    use adlt::{utils::remote_types::BinLifecycle, *};
 
     // use serde_json::ser::to_string;
     use portpicker::pick_unused_port;
@@ -2160,7 +2156,7 @@ mod tests {
             }
             let mut file_info_nr_msgs = 0;
             let mut last_eac = None;
-            let mut last_lcs = None;
+            let mut last_lcs: Option<Vec<BinLifecycle>> = None;
             let mut text_msgs: Vec<String> = vec![];
             while let Ok(msg) = ws.read_message() {
                 match msg {
@@ -2185,7 +2181,21 @@ mod tests {
                                             ))
                                             .collect::<Vec<String>>()
                                     );
-                                    last_lcs = Some(lcs);
+                                    if let Some(last_lcs) = &mut last_lcs {
+                                        // merge
+                                        for lc in lcs {
+                                            if let Some(last_lc) = last_lcs
+                                                .iter_mut()
+                                                .find(|last_lc| last_lc.id == lc.id)
+                                            {
+                                                last_lc.nr_msgs = lc.nr_msgs;
+                                            } else {
+                                                last_lcs.push(lc);
+                                            }
+                                        }
+                                    } else {
+                                        last_lcs = Some(lcs);
+                                    }
                                 }
                                 BinType::EacInfo(eac) => {
                                     println!("got eac: {:?}", eac.len());
@@ -2278,7 +2288,7 @@ mod tests {
         assert_eq!(remote_file_info_nr_msgs, 52451);
         let remote_eac = remote_eac.unwrap();
         assert_eq!(remote_eac.len(), 1);
-        assert!(remote_eac.iter().map(|eac| eac.nr_msgs).sum::<u32>() <= 52451); // the update is send only every 3s (2s initially). so the last update might be missing
+        assert_eq!(remote_eac.iter().map(|eac| eac.nr_msgs).sum::<u32>(), 52451);
         let remote_lcs = remote_lcs.unwrap();
         assert_eq!(remote_lcs.len(), 2);
         assert_eq!(remote_lcs.iter().map(|lc| lc.nr_msgs).sum::<u32>(), 52451);

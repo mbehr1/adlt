@@ -27,14 +27,9 @@ pub type LifecycleItem = Lifecycle; // Box<Lifecycle>; V needs to be Eq+Hash+Sha
 pub type LcsRType =
     evmap::ReadHandle<LifecycleId, Lifecycle, (), BuildHasherDefault<NoHashHasher<u32>>>;
 
-fn new_lifecycle_item(lc: &Lifecycle, idx: DltMessageIndexType) -> LifecycleItem {
+fn new_lifecycle_item(lc: &Lifecycle, refresh_idx: DltMessageIndexType) -> LifecycleItem {
     let mut lc = lc.clone();
-    // we have to update the max_msg_index_update here as well as
-    // otherwise buffered lcs are broadcasted with a too old index
-    // and thus not send via remote
-    if idx > lc.max_msg_index_update {
-        lc.max_msg_index_update = idx;
-    }
+    lc.lcs_w_refresh_idx = refresh_idx;
     lc
 }
 
@@ -76,10 +71,10 @@ pub struct Lifecycle {
     /// this is parsed from the control messages GET_SW_VERSION
     pub sw_version: Option<String>,
 
-    /// the highest/maximum index of the msg that lead to an update
+    /// the last lcs_w refresh idx
     /// this can be used as a heuristics to see whether the lifecycle was changed
     /// minor (time wise) updates will not be reflected due to buffering delays
-    pub max_msg_index_update: DltMessageIndexType,
+    pub lcs_w_refresh_idx: u32,
 }
 
 impl evmap::ShallowCopy for Lifecycle {
@@ -215,7 +210,7 @@ impl Lifecycle {
             last_reception_time: msg.reception_time_us,
             resume_lc: None,
             sw_version: None, // might be wrongif the first message is a GET_SW_VERSION but we ignore this case
-            max_msg_index_update: msg.index,
+            lcs_w_refresh_idx: 0,
         };
         msg.lifecycle = alc.id;
         alc
@@ -249,10 +244,6 @@ impl Lifecycle {
         // if the lc_to_merge has a sw_version and we not, we do use that one:
         if self.sw_version.is_none() && lc_to_merge.sw_version.is_some() {
             self.sw_version = lc_to_merge.sw_version.take();
-        }
-
-        if lc_to_merge.max_msg_index_update > self.max_msg_index_update {
-            self.max_msg_index_update = lc_to_merge.max_msg_index_update;
         }
     }
 
@@ -425,9 +416,6 @@ impl Lifecycle {
             }
             msg.lifecycle = self.id;
             self.nr_msgs += 1;
-            if msg.index > self.max_msg_index_update {
-                self.max_msg_index_update = msg.index;
-            }
 
             // sw-version contained?
             if self.sw_version.is_none() && msg.is_ctrl_response() {
@@ -588,6 +576,7 @@ where
     };
 
     let mut last_regular_refresh_index: DltMessageIndexType = 0;
+    let mut last_lcw_refresh_index: DltMessageIndexType = 1; // needs to be larger than 0 and increased after every refresh
 
     let mut check_regular_refresh =
         |last_msg_index: u32,
@@ -598,7 +587,8 @@ where
             DltChar4,
             Vec<Lifecycle>,
             std::hash::BuildHasherDefault<nohash_hasher::NoHashHasher<DltChar4>>,
-        >| {
+        >,
+         last_lcw_refresh_index: &mut u32| {
             if force_refresh || last_regular_refresh_index + 100_000 < last_msg_index {
                 // update all marked lifecycles:
                 let mut nr_lcs_to_update = lcs_to_refresh.len();
@@ -608,7 +598,7 @@ where
                     }
                     for lc in vs.iter().rev() {
                         if lcs_to_refresh.contains(&lc.id) {
-                            lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index));
+                            lcs_w.update(lc.id, new_lifecycle_item(lc, *last_lcw_refresh_index));
                             nr_lcs_to_update -= 1;
                             if nr_lcs_to_update == 0 {
                                 break;
@@ -617,6 +607,7 @@ where
                     }
                 }
                 lcs_w.refresh();
+                *last_lcw_refresh_index += 1;
                 last_regular_refresh_index = last_msg_index;
                 lcs_to_refresh.clear();
             }
@@ -833,8 +824,9 @@ where
                                     println!(" buffered_lc={}", lc);
                                 }*/
                                 // lc update due to rule #1:
-                                lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index));
+                                lcs_w.update(lc.id, new_lifecycle_item(lc, last_lcw_refresh_index));
                                 lcs_w.refresh();
+                                last_lcw_refresh_index += 1;
 
                                 // if the first msg in buffered_msgs belongs to this confirmed lc
                                 // then send all msgs until one msgs belongs to a buffered_lcs
@@ -890,6 +882,7 @@ where
                 &mut lcs_to_refresh,
                 &mut lcs_w,
                 &ecu_map,
+                &mut last_lcw_refresh_index,
             );
             if let Err(e) = outflow(msg) {
                 println!(
@@ -909,7 +902,7 @@ where
         }
         for lc in vs.iter().rev() {
             if buffered_lcs.contains(&lc.id) {
-                lcs_w.update(lc.id, new_lifecycle_item(lc, last_msg_index));
+                lcs_w.update(lc.id, new_lifecycle_item(lc, last_lcw_refresh_index));
                 nr_lcs_to_update -= 1;
                 if nr_lcs_to_update == 0 {
                     break;
@@ -918,6 +911,7 @@ where
         }
     }
     lcs_w.refresh();
+    last_lcw_refresh_index += 1;
 
     // if we have buffered msgs we have to output them now:
     for m in buffered_msgs.into_iter() {
@@ -938,6 +932,7 @@ where
         &mut lcs_to_refresh,
         &mut lcs_w,
         &ecu_map,
+        &mut last_lcw_refresh_index,
     );
 
     /*
