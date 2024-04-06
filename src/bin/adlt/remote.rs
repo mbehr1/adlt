@@ -156,10 +156,12 @@ pub fn remote(
             loop {
                 // 1st step any new messages to process
                 if let Some(ref mut fc) = file_context {
-                    let r = process_file_context(&log, fc, &mut websocket);
-                    if r.is_err() {
-                        warn!(log, "ws process_file_context returned err {:?}", r);
-                        break;
+                    if !fc.paused {
+                        let r = process_file_context(&log, fc, &mut websocket);
+                        if r.is_err() {
+                            warn!(log, "ws process_file_context returned err {:?}", r);
+                            break;
+                        }
                     }
                 }
 
@@ -245,6 +247,7 @@ struct FileContext {
     collect_all_msgs: bool,
     all_msgs: Vec<adlt::dlt::DltMessage>,
     streams: Vec<StreamContext>,
+    paused: bool,
     /// we did send lifecycles with that lcs_w_refresh_idx
     last_lcs_w_refresh_index: u32,
 
@@ -448,6 +451,7 @@ impl FileContext {
                 0
             }),
             streams: Vec::new(),
+            paused: false,
             last_lcs_w_refresh_index: 0,
             eac_stats,
             eac_next_send_time: std::time::Instant::now() + std::time::Duration::from_secs(2), // after 2 secs the first update
@@ -556,6 +560,24 @@ fn process_incoming_text_message<T: Read + Write>(
                             .unwrap(); // todo
                     }
                 }
+            }
+        }
+        "pause" | "resume" => {
+            if let Some(fc) = file_context {
+                fc.paused = command == "pause";
+                websocket
+                    .write_message(Message::Text(format!(
+                        "ok: {} {{\"paused\":{}}}",
+                        command, fc.paused
+                    )))
+                    .unwrap(); // todo
+            } else {
+                websocket
+                    .write_message(Message::Text(format!(
+                        "err: {} failed as no file open. open first!",
+                        command
+                    )))
+                    .unwrap(); // todo
             }
         }
         "close" => {
