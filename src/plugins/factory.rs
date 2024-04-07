@@ -1,7 +1,7 @@
 use crate::utils::eac_stats::EacStats;
 
 use super::{
-    can::CanPlugin, file_transfer::FileTransferPlugin, muniic::MuniicPlugin,
+    can::CanPlugin, export::ExportPlugin, file_transfer::FileTransferPlugin, muniic::MuniicPlugin,
     non_verbose::NonVerbosePlugin, plugin::Plugin, rewrite::RewritePlugin, someip::SomeipPlugin,
 };
 
@@ -74,6 +74,16 @@ pub fn get_plugin(
                 }
                 "Muniic" => {
                     let plugin = MuniicPlugin::from_json(config);
+                    if let Ok(plugin) = plugin {
+                        Some(Box::new(plugin))
+                    } else {
+                        // todo log error properly
+                        println!("plugin:{} got err {:?}", name, plugin.unwrap_err());
+                        None
+                    }
+                }
+                "Export" => {
+                    let plugin = ExportPlugin::from_json(config);
                     if let Ok(plugin) = plugin {
                         Some(Box::new(plugin))
                     } else {
