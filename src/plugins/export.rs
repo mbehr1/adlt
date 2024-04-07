@@ -69,7 +69,7 @@ impl ExportPlugin {
             _ => return Err(PluginError::new("config 'name' not a string/missing").into()),
         };
         if name.is_none() {
-            return Err(PluginError::new("FileTransferPlugin: name missing").into());
+            return Err(PluginError::new("ExportPlugin: name missing").into());
         }
         let enabled = match &config.get("enabled") {
             Some(serde_json::Value::Bool(b)) => *b,
@@ -605,6 +605,29 @@ mod tests {
         let plugin = ExportPlugin::from_json(config.as_object().unwrap()).unwrap();
         assert_eq!(plugin.name(), "Export");
         assert!(plugin.enabled());
+        println!("got plugin:{:?}", plugin);
+
+        // enabled default to true
+        let config = json!({
+            "name": "Export",
+            "exportFileName": "tests/tmp_exported_tmp1.dlt",
+            "filters":[]
+        });
+
+        let plugin = ExportPlugin::from_json(config.as_object().unwrap()).unwrap();
+        assert_eq!(plugin.name(), "Export");
+        assert!(plugin.enabled());
+
+        // enabled needs to be a bool
+        let config = json!({
+            "name": "Export",
+            "enabled":1,
+            "exportFileName": "tests/tmp_exported_tmp1.dlt",
+            "filters":[]
+        });
+
+        let plugin = ExportPlugin::from_json(config.as_object().unwrap());
+        assert!(plugin.is_err());
     }
 
     #[test]
@@ -710,6 +733,24 @@ mod tests {
         assert_eq!(plugin.lifecycles_to_keep.len(), 1);
         assert_eq!(plugin.recorded_time_from, Some(3_000));
         assert_eq!(plugin.recorded_time_to, Some(4_000));
+
+        let config = json!({
+            "name": "Export",
+            "enabled": true,
+            "exportFileName": "tests/tmp_exported_tmp1.dlt",
+            "filters":[],
+            "lifecyclesToKeep":[{"ecu": "FOO", "startTime": 1, "endTime": 2}],
+            "recordedTimeFromMs": 3,
+            "recordedTimeToMs": 4
+        });
+        let plugin = ExportPlugin::from_json(config.as_object().unwrap()).unwrap();
+        assert_eq!(plugin.lifecycles_to_keep.len(), 1);
+        assert_eq!(plugin.recorded_time_from, Some(3_000));
+        assert_eq!(plugin.recorded_time_to, Some(4_000));
+
+        let cur_gen = plugin.state().read().unwrap().generation;
+        plugin.update_state();
+        assert_eq!(plugin.state().read().unwrap().generation, cur_gen + 1);
     }
 
     #[test]
@@ -719,6 +760,7 @@ mod tests {
             &json!({"ecu":"foo", "startTime": "18446744073709551615n", "endTime":"0n", "resumeTime": "4294967295n"}),
         )
         .unwrap();
+        println!("lci:{:?}", lci);
         assert_eq!(lci.ecu, DltChar4::from_buf(b"foo\0"));
         assert_eq!(lci.start_time, u64::MAX);
         assert_eq!(lci.end_time, 0);
