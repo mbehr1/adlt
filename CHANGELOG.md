@@ -2,6 +2,26 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.56.0 - 2024-04-07
+#### Bug Fixes
+- **(clippy)** false positive in rust 1.77 workaround - (1961f48) - Matthias Behr
+- **(export)** typos and increase test coverage - (74f8835) - Matthias Behr
+- **(lifecycle)** last updates were sometimes not send to clients - (997cf87) - Matthias Behr
+- **(remote)** force sending of EAC, PluginState and FileInfo on parse end - (ab9c1ac) - Matthias Behr
+- **(remote)** close blocking infinite - (f1aa15b) - Matthias Behr
+- **(test)** flaky test fixed - (553492c) - Matthias Behr
+#### Continuous Integration
+- use CODECOV_TOKEN for coverage - (07c0926) - Matthias Behr
+#### Features
+- **(export)** add Export plugin - (1947137) - Matthias Behr
+- **(remote)** add pause/resume command - (97e4fad) - Matthias Behr
+- **(remote)** add option collect to open command - (ed8fc0f) - Matthias Behr
+#### Refactoring
+- **(plugins)** add sync_all and set_lifecycle_read_handle - (f387bf7) - Matthias Behr
+- match_filters uses iter().any - (5067e61) - Matthias Behr
+
+- - -
+
 ## v0.55.4 - 2024-03-22
 #### Bug Fixes
 - dont panic on logs with reception time around 1.1.1970 - (a5d78bc) - Matthias Behr
