@@ -11,6 +11,7 @@ use control_msgs::{parse_ctrl_log_info_payload, parse_ctrl_sw_version_payload};
 /// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
 /// todo use crate ryu for float to str conversations (numtoa seems outdated)
 
+// MARK: DltChar4
 #[derive(Clone, Eq, Copy)] // Debug, Hash, Eq, Copy?
 pub struct DltChar4 {
     char4: [u8; 4], // String, // todo u8,4 array?
@@ -142,6 +143,7 @@ impl fmt::Display for DltChar4 {
     }
 }
 
+// MARK: DltStorageHeader
 #[derive(Debug)]
 pub struct DltStorageHeader {
     // we dont store the pattern pub pattern: u32,
@@ -221,6 +223,7 @@ pub(crate) const DLT_STD_HDR_HAS_TIMESTAMP: u8 = 1 << 4;
 
 pub(crate) const DLT_STD_HDR_VERSION: u8 = 0x1 << 5; // 3 bits (5,6,7) max.  [Dlt299]
 
+// MARK: DltStandardHeader
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DltStandardHeader {
     pub htyp: u8,
@@ -484,6 +487,7 @@ pub enum DltMessageType {
     Control(DltMessageControlType),
 }
 
+// MARK: DltExtendedHeader
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DltExtendedHeader {
     pub verb_mstp_mtin: u8,
@@ -542,6 +546,7 @@ impl DltExtendedHeader {
 /// anyhow prepare a type so that it can be easily changed later.
 pub type DltMessageIndexType = u32;
 
+// MARK: DltMessage
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DltMessage {
     pub index: DltMessageIndexType,
@@ -1265,6 +1270,7 @@ impl DltMessage {
     }
 }
 
+// MARK: DltMessageArgIterator
 pub struct DltMessageArgIterator<'a> {
     msg: &'a DltMessage,
     is_verbose: bool,
@@ -1306,6 +1312,7 @@ pub const DLT_SCOD_UTF8: u32 = 0x00008000;
 pub const DLT_SCOD_HEX: u32 = 0x00010000;
 pub const DLT_SCOD_BIN: u32 = 0x00018000;
 
+// MARK: DltArg
 #[derive(Debug, PartialEq, Eq)]
 pub struct DltArg<'a> {
     pub type_info: u32,        // in host endianess already
