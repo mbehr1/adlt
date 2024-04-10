@@ -278,8 +278,6 @@ impl Filter {
             // so convert ecmascript capture groups to python ones
             // not needed any longer with fancy_regex let s = s.replace("(?<", "(?P<");
             if ignore_case_payload {
-                // we need to add ignore case option. this is not quite right as it impacts only the
-                // first group but there seems to be no better way for now... (todo)
                 let s = "(?i)".to_owned() + s;
                 payload_regex = Some(Regex::new(&s).map_err(|e| {
                     Error::new(ErrorKind::InvalidData(format!(
@@ -628,8 +626,6 @@ impl Filter {
             }
         }
 
-        // todo payload and payloadRegex: cache payload_as_text()?
-        // and think about plugins that convert the payload
         if let Some(payload_regex) = &self.payload_regex {
             let payload_text = msg.payload_as_text();
             if let Ok(payload_text) = payload_text {
