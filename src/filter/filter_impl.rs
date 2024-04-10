@@ -539,6 +539,7 @@ impl Filter {
         }
     }
 
+    // MARK: matches
     pub fn matches(&self, msg: &DltMessage) -> bool {
         if !self.enabled {
             return false;
@@ -749,6 +750,7 @@ impl Serialize for Filter {
     }
 }
 
+// MARK: tests
 #[cfg(test)]
 mod tests {
     use super::*;
