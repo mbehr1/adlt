@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.56.1 - 2024-05-01
+#### Bug Fixes
+- **(someip)** dont stop parsing on first service failure - (b290aa6) - Matthias Behr
+#### Miscellaneous Chores
+- removed outdated todos - (546fcb3) - Matthias Behr
+- add MARKers to ease navigation - (726c3d4) - Matthias Behr
+#### Tests
+- add bench filter_multiple_criteria - (7574f30) - Matthias Behr
+- fix flaky test bin_remote_ex002_stream - (5038345) - Matthias Behr
+
+- - -
+
 ## v0.56.0 - 2024-04-07
 #### Bug Fixes
 - **(clippy)** false positive in rust 1.77 workaround - (1961f48) - Matthias Behr
