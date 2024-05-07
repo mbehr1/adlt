@@ -139,14 +139,14 @@ lazy_static! {
     pub(crate) static ref RE_DATE: Regex = Regex::new(r"^date (.*)$").unwrap();
     pub(crate) static ref RE_MSG: Regex =
     // timestamp channel_id can/frame_id Rx|Tx data_len
-        Regex::new(r"^(-?\d+\.\d{6}) (\d+) ([0-9a-fx]+) (Rx|Tx) d (\d+)").unwrap();
+        Regex::new(r"^\s*(-?\d+\.\d{6})\s+(\d+)\s+([0-9a-fx]+)\s+(Rx|Tx)\s+d\s+(\d+)").unwrap();
     pub(crate) static ref RE_MSG_CANFD: Regex =
     // timestamp CANFD channel_id Rx|Tx can_id(hex) frame_name&brs_or_brs (todo!) esi dlc(hex) data_length(dec) data (rest ignored)
-        Regex::new(r"^(-?\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ([0-9a-fx]+)\s+(\d+) (\d+) ([0-9a-fx]+) (\d+)").unwrap();
+        Regex::new(r"^\s*(-?\d+\.\d{6})\s+CANFD\s+(\d+)\s+(Rx|Tx)\s+([0-9a-fx]+)\s+(\d+)\s+(\d+)\s+([0-9a-fx]+)\s+(\d+)").unwrap();
 
     pub(crate) static ref RE_MSG_CANFD_ERRORFRAME: Regex =
         // timestamp CANFD channel_id Rx|Tx ErrorFrame (rest ignored)
-        Regex::new(r"^(-?\d+\.\d{6}) CANFD (\d+) (Rx|Tx) ErrorFrame").unwrap();
+        Regex::new(r"^\s*(-?\d+\.\d{6})\s+CANFD\s+(\d+)\s+(Rx|Tx)\s+ErrorFrame").unwrap();
 
     // map by namespace to a map for name to ecu-id:
     static ref CAN_GLOBAL_ECU_MAP: RwLock<HashMap<u32, HashMap<String, DltChar4>>> = RwLock::new(HashMap::new());
@@ -734,6 +734,35 @@ mod tests {
     }
 
     #[test]
+    fn asc_can_ws() {
+        // multiple whitespace in the data
+        let reader = r##"
+date Fri Apr 26 06:52:12.825 pm 2024
+base hex  timestamps absolute
+internal events logged
+// version 12.0.0
+// Measurement UUID: 17f89a60-b92d-49fb-8662-53318bf3fde2
+    6.836299 TriggerEvent: TriggerBlock[Logging] Start DirectLogging
+    6.836299    SV: 2 0 1 ::ZST::BusType = 0
+    6.836299    SV: 2 0 1 ::ZSTSimECU::EnableSimulation = 1
+    6.840916 1  101             Rx   d 8 00 00 00 00 00 00 0A 00  Length = 241910 BitCount = 125 ID = 257
+    6.850927 1  101             Rx   d 8 07 00 00 00 00 00 0A 00  Length = 237910 BitCount = 123 ID = 257
+    6.859591 1  100             Tx   d 8 00 00 00 00 00 00 00 00  Length = 246015 BitCount = 126 ID = 256"##
+            .as_bytes();
+        let mut it = Asc2DltMsgIterator::new(0, reader, get_new_namespace(), None, None);
+        let mut iterated_msgs: u32 = 0;
+        for m in &mut it {
+            iterated_msgs += 1;
+            match iterated_msgs {
+                2 => assert_eq!(m.timestamp_dms, 68509_u32),
+                3 => assert_eq!(m.timestamp_dms, 68595_u32),
+                _ => {}
+            }
+        }
+        assert_eq!(iterated_msgs, 3);
+    }
+
+    #[test]
     fn asc_can1_reference_time() {
         let reader = r##"
 date Thu Apr 20 10:26:43 AM 2023
@@ -893,5 +922,54 @@ date Thu Apr 20 10:26:43 AM 2023
             }
         }
         assert_eq!(iterated_msgs, 1);
+    }
+
+    #[test]
+    fn asc_example3() {
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("can_example3.asc");
+        let fi = File::open(&test_dir).unwrap();
+        let start_index = 9;
+        let log = new_logger();
+        let mut it = Asc2DltMsgIterator::new(
+            start_index,
+            LowMarkBufReader::new(fi, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
+            get_new_namespace(),
+            None,
+            Some(&log),
+        );
+        let mut iterated_msgs = 0;
+        for m in &mut it {
+            assert_eq!(m.index, start_index + iterated_msgs);
+            assert!(!m.is_verbose());
+            assert_eq!(m.mcnt(), (m.index & 0xff) as u8);
+            iterated_msgs += 1;
+            if m.index == start_index + 1 {
+                // check some static data from example:
+                assert_eq!(
+                    m.reception_time(),
+                    NaiveDateTime::new(
+                        NaiveDate::from_ymd_opt(2024, 4, 26).unwrap(),
+                        NaiveTime::from_hms_micro_opt(
+                            18,
+                            52,
+                            12 + 6 + 1,
+                            825000 + 850927 - 1000000
+                        )
+                        .unwrap()
+                    )
+                );
+                assert_eq!(m.timestamp_dms, 68509);
+                assert_eq!(m.noar(), 2);
+                let exp_payload: Vec<u8> = 0x101u32
+                    .to_ne_bytes()
+                    .into_iter()
+                    .chain(vec![7, 0, 0, 0, 0, 0, 0x0a, 0].into_iter())
+                    .collect::<Vec<u8>>();
+                assert_eq!(m.payload, exp_payload);
+            }
+        }
+        assert_eq!(iterated_msgs, 25);
     }
 }
