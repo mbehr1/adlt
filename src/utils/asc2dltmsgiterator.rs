@@ -177,7 +177,7 @@ fn remove_namespace_global_ecu_map(namespace: u32) -> Option<HashMap<String, Dlt
 
 pub fn asc_parse_date(date_str: &str) -> Result<NaiveDateTime, chrono::ParseError> {
     // we expect them in the following format:
-    NaiveDateTime::parse_from_str(date_str, "%a %b %d %I:%M:%S %p %Y")
+    NaiveDateTime::parse_from_str(date_str, "%a %b %d %I:%M:%S%.f %p %Y")
 }
 
 /// Parse a timestamp in can asc format to a time in us.
@@ -600,6 +600,15 @@ mod tests {
         );
         // println!("nt formatted = '{}'", nt.format("%a %b %d %I:%M:%S %p %Y"));
         assert_eq!(Ok(nt), asc_parse_date("Wed May 25 03:07:31 PM 2022"));
+
+        // with ms:
+        assert_eq!(
+            Ok(NaiveDateTime::new(
+                NaiveDate::from_ymd_opt(2024, 4, 26).unwrap(),
+                NaiveTime::from_hms_micro_opt(18, 52, 12, 825000).unwrap()
+            )),
+            asc_parse_date("Fri Apr 26 06:52:12.825 pm 2024")
+        );
     }
 
     #[test]
