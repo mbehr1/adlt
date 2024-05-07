@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.56.2 - 2024-05-07
+#### Bug Fixes
+- **(can)** support asc files with more than one whitespace - (420b87a) - Matthias Behr
+- **(can)** support date with milliseconds - (a378fcf) - Matthias Behr
+
+- - -
+
 ## v0.56.1 - 2024-05-01
 #### Bug Fixes
 - **(someip)** dont stop parsing on first service failure - (b290aa6) - Matthias Behr
