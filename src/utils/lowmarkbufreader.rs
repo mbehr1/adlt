@@ -1,14 +1,16 @@
-use std::io::{BufRead, Read};
+use std::io::{BufRead, Read, Seek};
 
 /// The `LowMarkBufReader<R>` struct adds buffering to any reader.
 ///
 /// It reads data in chunks from the reader only if the amount of data buffered drops
 /// below the low water mark. It performs then a single large read trying to fill the
 /// full buffer.
+#[derive(Debug)]
 pub struct LowMarkBufReader<R> {
     inner: R,
     buf: Box<[u8]>,
     pos: usize,
+    abs_pos: usize, // abs. pos from initial read (used for Seek)
     cap: usize,
     low_mark: usize,
     empty_last_read: bool,
@@ -26,6 +28,7 @@ impl<R: Read> LowMarkBufReader<R> {
             inner,
             buf,
             pos: 0,
+            abs_pos: 0,
             cap: 0,
             low_mark,
             empty_last_read: false,
@@ -81,6 +84,7 @@ impl<R: Read> BufRead for LowMarkBufReader<R> {
                         self.buf.copy_within(self.pos..self.cap, offset);
                         self.cap = new_cap;
                         self.pos = offset;
+                        self.abs_pos += offset;
                     }
                     // and add more from inner:
                     let read = self.inner.read(&mut self.buf[self.cap..])?;
@@ -105,5 +109,63 @@ impl<R: Read> BufRead for LowMarkBufReader<R> {
 
     fn consume(&mut self, amt: usize) {
         self.pos = std::cmp::min(self.pos + amt, self.cap)
+    }
+}
+
+impl<R: Read> Seek for LowMarkBufReader<R> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        match pos {
+            std::io::SeekFrom::Start(n) => {
+                if n < self.abs_pos as u64 {
+                    println!(
+                        "LowMarkBufReader nok seek to {:?} < abs_pos {}",
+                        pos, self.abs_pos
+                    );
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!(
+                            "LowMarkBufReader unsupported Seek {:?} < abs_pos {}",
+                            pos, self.abs_pos
+                        ),
+                    ))
+                } else if n > (self.abs_pos + self.cap) as u64 {
+                    println!(
+                        "LowMarkBufReader nok seek to {:?} >= abs_pos {} + cap",
+                        pos, self.abs_pos
+                    );
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!(
+                            "LowMarkBufReader unsupported Seek {:?} >= abs_pos {} +cap {}",
+                            pos, self.abs_pos, self.cap
+                        ),
+                    ))
+                } else {
+                    /*println!(
+                        "LowMarkBufReader.seek to {:?} at pos {} / abs_pos {}",
+                        pos, self.pos, self.abs_pos
+                    );*/
+                    self.pos = n as usize - self.abs_pos;
+                    Ok(n)
+                }
+            }
+            std::io::SeekFrom::Current(r) => {
+                let new_pos = (self.abs_pos + self.pos).saturating_add_signed(r as isize);
+                self.seek(std::io::SeekFrom::Start(new_pos as u64))
+            }
+            _ => {
+                println!(
+                    "LowMarkBufReader unsupported Seek {:?} at abs_pos {}",
+                    pos, self.abs_pos
+                );
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "LowMarkBufReader unsupported Seek {:?} at abs_pos {}",
+                        pos, self.abs_pos
+                    ),
+                ))
+            }
+        }
     }
 }
