@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.57.0 - 2024-05-18
+#### Bug Fixes
+- abs_pos wrongly calculated - (d77c46b) - Matthias Behr
+#### Features
+- **(blf)** add blf file support to decode CAN msgs - (2143ba2) - Matthias Behr
+#### Miscellaneous Chores
+- add Seek to LowMarkBufReader - (bf04f2b) - Matthias Behr
+#### Tests
+- **(blf)** add tests for ErrorFrameExt and AppText - (5e8526d) - Matthias Behr
+
+- - -
+
 ## v0.56.2 - 2024-05-07
 #### Bug Fixes
 - **(can)** support asc files with more than one whitespace - (420b87a) - Matthias Behr
