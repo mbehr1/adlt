@@ -431,6 +431,54 @@ mod tests {
     }
 
     #[test]
+    fn blf_can_example_errorframeext() {
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("can_example2.blf"); // test_CanErrorFrameExt
+        let fi = File::open(&test_dir).unwrap();
+        let start_index = 1;
+        let log = new_logger();
+        let mut it = BLF2DltMsgIterator::new(
+            start_index,
+            LowMarkBufReader::new(fi, 512 * 1024, 128 * 1024),
+            get_new_namespace(),
+            None,
+            Some(&log),
+        );
+        let mut iterated_msgs = 0;
+        for m in &mut it {
+            assert_eq!(m.index, start_index + iterated_msgs);
+            assert!(m.payload_text.unwrap().starts_with("Error Frame:{"));
+            iterated_msgs += 1;
+        }
+        assert_eq!(iterated_msgs, 2);
+    }
+
+    #[test]
+    fn blf_can_example_apptext() {
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("can_example3.blf"); // test_AppText
+        let fi = File::open(&test_dir).unwrap();
+        let start_index = 1;
+        let log = new_logger();
+        let mut it = BLF2DltMsgIterator::new(
+            start_index,
+            LowMarkBufReader::new(fi, 512 * 1024, 128 * 1024),
+            get_new_namespace(),
+            None,
+            Some(&log),
+        );
+        let mut iterated_msgs = 0;
+        for m in &mut it {
+            assert_eq!(m.index, start_index + iterated_msgs);
+            assert!(m.payload_as_text().unwrap() == "xyz");
+            iterated_msgs += 1;
+        }
+        assert_eq!(iterated_msgs, 2);
+    }
+
+    #[test]
     fn blf_can_example_large() {
         let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         test_dir.push("tests");
