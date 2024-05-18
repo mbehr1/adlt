@@ -5,15 +5,28 @@ use std::io::{BufRead, Read, Seek};
 /// It reads data in chunks from the reader only if the amount of data buffered drops
 /// below the low water mark. It performs then a single large read trying to fill the
 /// full buffer.
-#[derive(Debug)]
 pub struct LowMarkBufReader<R> {
     inner: R,
     buf: Box<[u8]>,
     pos: usize,
-    abs_pos: usize, // abs. pos from initial read (used for Seek)
+    abs_pos: usize, // abs. pos from initial read for start of buf content (used for Seek)
     cap: usize,
     low_mark: usize,
     empty_last_read: bool,
+}
+
+impl<R: std::fmt::Debug> std::fmt::Debug for LowMarkBufReader<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LowMarkBufReader")
+            //.field("inner", &self.inner)
+            .field("buf.len", &self.buf.len())
+            .field("pos", &self.pos)
+            .field("abs_pos", &self.abs_pos)
+            .field("cap", &self.cap)
+            .field("low_mark", &self.low_mark)
+            .field("empty_last_read", &self.empty_last_read)
+            .finish()
+    }
 }
 
 const CACHE_LINE_SIZE: usize = 4096;
@@ -83,8 +96,8 @@ impl<R: Read> BufRead for LowMarkBufReader<R> {
                         //println!("moving {} bytes", in_buf);
                         self.buf.copy_within(self.pos..self.cap, offset);
                         self.cap = new_cap;
+                        self.abs_pos += self.pos - offset;
                         self.pos = offset;
-                        self.abs_pos += offset;
                     }
                     // and add more from inner:
                     let read = self.inner.read(&mut self.buf[self.cap..])?;
@@ -116,6 +129,9 @@ impl<R: Read> Seek for LowMarkBufReader<R> {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         match pos {
             std::io::SeekFrom::Start(n) => {
+                if self.cap == 0 {
+                    self.fill_buf()?;
+                }
                 if n < self.abs_pos as u64 {
                     println!(
                         "LowMarkBufReader nok seek to {:?} < abs_pos {}",
@@ -167,5 +183,98 @@ impl<R: Read> Seek for LowMarkBufReader<R> {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, SeekFrom};
+
+    #[test]
+    fn test_lowmarkbufreader() {
+        let data = (0..=(2 * CACHE_LINE_SIZE + 10))
+            .map(|x| x as u8)
+            .collect::<Vec<u8>>();
+        let mut reader =
+            LowMarkBufReader::new(Cursor::new(data), 2 * CACHE_LINE_SIZE, CACHE_LINE_SIZE);
+        // we can debug print:
+        println!("reader={:?}", reader);
+        let mut buf = [0u8; 5];
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, &[0, 1, 2, 3, 4]);
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, &[5, 6, 7, 8, 9]);
+        assert_eq!(reader.abs_pos, 0);
+        // we consumed 10, now consume till low_mark:
+        reader.consume(CACHE_LINE_SIZE - 10);
+        println!("reader={:?}", reader);
+        assert_eq!(reader.abs_pos, 0);
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, &[0, 1, 2, 3, 4]);
+        println!("reader={:?}", reader);
+        // first read started with a >=low_mark buffer:
+        assert_eq!(reader.abs_pos, 0);
+        // next read will refill buffer:
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, &[5, 6, 7, 8, 9]);
+        println!("reader={:?}", reader);
+        assert_eq!(reader.abs_pos, 4096);
+    }
+
+    #[test]
+    fn test_lowmarkbufreader_seek() {
+        let data = (0..=(2 * CACHE_LINE_SIZE + 10))
+            .map(|x| x as u8)
+            .collect::<Vec<u8>>();
+        let mut reader =
+            LowMarkBufReader::new(Cursor::new(data), 2 * CACHE_LINE_SIZE, CACHE_LINE_SIZE);
+        // we can seek within the cached part (even before any read/fill_buf) (cap=0):
+        let n = reader
+            .seek(SeekFrom::Start(CACHE_LINE_SIZE as u64))
+            .unwrap();
+        assert_eq!(n, CACHE_LINE_SIZE as u64);
+        assert_eq!(reader.abs_pos, 0);
+        // we can seek beyond low_mark
+        assert_eq!(
+            reader
+                .seek(SeekFrom::Start(CACHE_LINE_SIZE as u64 + 1))
+                .unwrap(),
+            CACHE_LINE_SIZE as u64 + 1
+        );
+        assert_eq!(
+            reader
+                .seek(SeekFrom::Start(2 * CACHE_LINE_SIZE as u64))
+                .unwrap(),
+            2 * CACHE_LINE_SIZE as u64
+        );
+        // we cannot seek beyond capacity:
+        assert!(reader
+            .seek(SeekFrom::Start((2 * CACHE_LINE_SIZE as u64) + 1))
+            .is_err());
+
+        // we can seek back to start:
+        assert_eq!(reader.seek(SeekFrom::Start(0)).unwrap(), 0);
+
+        // trigger refill:
+        println!("reader={:?}", reader);
+        reader.consume(CACHE_LINE_SIZE + 1);
+        reader.fill_buf().unwrap();
+        println!("reader={:?}", reader);
+        assert_eq!(reader.abs_pos, 4096);
+        // now we cannot seek back to 0:
+        assert!(reader.seek(SeekFrom::Start(0)).is_err());
+        assert_eq!(
+            reader.stream_position().unwrap(),
+            CACHE_LINE_SIZE as u64 + 1
+        );
+        assert_eq!(
+            reader.seek(SeekFrom::Current(-1)).unwrap(),
+            CACHE_LINE_SIZE as u64
+        );
     }
 }
