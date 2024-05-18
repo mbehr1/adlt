@@ -20,6 +20,8 @@ mod lowmarkbufreader;
 pub use self::lowmarkbufreader::LowMarkBufReader;
 mod asc2dltmsgiterator;
 pub use self::asc2dltmsgiterator::Asc2DltMsgIterator;
+mod blf2dltmsgiterator;
+pub use self::blf2dltmsgiterator::BLF2DltMsgIterator;
 mod dltmessageiterator;
 pub mod sorting_multi_readeriterator;
 pub use self::dltmessageiterator::DltMessageIterator;
@@ -184,6 +186,7 @@ pub fn get_apid_for_tag(namespace: u32, tag: &str) -> DltChar4 {
 ///
 /// Does this currently by extension:
 ///  - `asc` uses the Asc2DltMsgIterator
+///  - `blf` uses the Blf2DltMsgIterator
 ///  - `txt` uses the LogCat2DltMsgIterator
 ///  - `log` uses the GenLog2DltMsgIterator
 ///  - others use the DltMessageIterator
@@ -210,6 +213,13 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead + Seek>(
 ) -> Box<dyn Iterator<Item = DltMessage> + 'a> {
     match file_ext.to_lowercase().as_str() {
         "asc" => Box::new(Asc2DltMsgIterator::new(
+            start_index,
+            reader,
+            namespace,
+            first_reception_time_us,
+            log,
+        )),
+        "blf" => Box::new(BLF2DltMsgIterator::new(
             start_index,
             reader,
             namespace,
