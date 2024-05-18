@@ -152,7 +152,7 @@ lazy_static! {
     static ref CAN_GLOBAL_ECU_MAP: RwLock<HashMap<u32, HashMap<String, DltChar4>>> = RwLock::new(HashMap::new());
 }
 
-fn get_ecuid_for_namespace(namespace: u32, name: &Option<&str>) -> DltChar4 {
+pub fn get_ecuid_for_namespace(namespace: u32, name: &Option<&str>) -> DltChar4 {
     let mut namespace_map = CAN_GLOBAL_ECU_MAP.write().unwrap();
     let map = namespace_map.entry(namespace).or_default();
     let next_id = map.len() + 1;

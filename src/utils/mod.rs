@@ -7,7 +7,7 @@ use crate::{
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader, Read, Seek},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
@@ -199,7 +199,7 @@ pub fn get_apid_for_tag(namespace: u32, tag: &str) -> DltChar4 {
 ///   Not needed/ignored for DLT files.
 /// * `modified_time_us` - the time from the files last created/modified time in us.
 ///   Used when e.g. the format supports only relative timestamps.
-pub fn get_dlt_message_iterator<'a, R: 'a + BufRead>(
+pub fn get_dlt_message_iterator<'a, R: 'a + BufRead + Seek>(
     file_ext: &str,
     start_index: DltMessageIndexType,
     reader: R,
@@ -292,7 +292,7 @@ pub fn get_dlt_infos_from_file(
             let mut it = get_dlt_message_iterator(
                 file_ext,
                 0,
-                BufReader::with_capacity(read_size, &buf[0..res]),
+                BufReader::with_capacity(read_size, std::io::Cursor::new(&buf[0..res])),
                 namespace,
                 None,
                 modified_time_us,
@@ -1002,7 +1002,7 @@ mod tests {
 
     pub fn get_first_message(
         file_ext: &str,
-        reader: impl BufRead,
+        reader: impl BufRead + Seek,
         namespace: u32,
     ) -> Option<DltMessage> {
         let mut it = get_dlt_message_iterator(file_ext, 0, reader, namespace, None, None, None);
@@ -1023,7 +1023,7 @@ mod tests {
         match res {
             Ok(res) => get_first_message(
                 file_ext,
-                BufReader::with_capacity(read_size, &buf[0..res]),
+                BufReader::with_capacity(read_size, std::io::Cursor::new(&buf[0..res])),
                 namespace,
             ),
             _ => None,
@@ -1036,7 +1036,7 @@ mod tests {
         let mut it_asc = get_dlt_message_iterator(
             "asc",
             0,
-            &[] as &[u8],
+            std::io::Cursor::new(&[] as &[u8]),
             get_new_namespace(),
             None,
             None,
@@ -1047,7 +1047,7 @@ mod tests {
         let mut it_dlt = get_dlt_message_iterator(
             "dlt",
             0,
-            &[] as &[u8],
+            std::io::Cursor::new(&[] as &[u8]),
             get_new_namespace(),
             None,
             None,
