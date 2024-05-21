@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.57.1 - 2024-05-21
+#### Bug Fixes
+- **(someip)** impr log output for decoding errors - (3dd90e4) - Matthias Behr
+
+- - -
+
 ## v0.57.0 - 2024-05-18
 #### Bug Fixes
 - abs_pos wrongly calculated - (d77c46b) - Matthias Behr
