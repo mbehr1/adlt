@@ -179,6 +179,26 @@ To compare against a saved baseline:
 cargo bench --bench dlt_benches -- --baseline <saved_baseline_name>
 ```
 
+### run fuzz tests
+
+To list all available fuzz tests:
+
+```
+cargo +nightly fuzz list
+```
+
+You do need to have `cargo-fuzz` installed. To install use `cargo install cargo-fuzz`.
+
+To run a fuzz test:
+
+```
+cargo +nightly fuzz <fuzz test name>
+# e.g.
+cargo +nightly fuzz dlt_v1_parse_std
+```
+
+The fuzz test never stop except if they find a problem. If you find any please create an issue for it or directly a PR with a fix.
+
 ### perform a release
 
 ```
