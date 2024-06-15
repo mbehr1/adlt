@@ -1,0 +1,30 @@
+[package]
+name = "adlt-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.adlt]
+path = ".."
+
+[[bin]]
+name = "dlt_v1_parse_std"
+path = "fuzz_targets/dlt_v1_parse_std.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dlt_v1_payload_as_text"
+path = "fuzz_targets/dlt_v1_payload_as_text.rs"
+test = false
+doc = false
+bench = false
