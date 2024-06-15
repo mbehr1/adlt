@@ -48,7 +48,11 @@ impl AnonymizePlugin {
 
     fn ecu_anon(&mut self, msg: &mut DltMessage) {
         if self.ecu_map.contains_key(&msg.ecu) {
-            msg.ecu = self.ecu_map.get(&msg.ecu).unwrap().ecu.to_owned();
+            self.ecu_map
+                .get(&msg.ecu)
+                .unwrap()
+                .ecu
+                .clone_into(&mut msg.ecu);
         } else {
             let new_ecu = DltChar4::from_str(format!("E{:03}", self.ecu_map.len() + 1).as_str())
                 .unwrap_or_else(|_| DltChar4::from_buf(b"E99A"));
