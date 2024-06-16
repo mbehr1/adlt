@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # version number used if branch event and not tag event
-      ADLT_VERSION: TEST-0.55.0
+      ADLT_VERSION: TEST-0.57.1
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
@@ -85,15 +85,15 @@ jobs:
             rust: stable
             target: aarch64-unknown-linux-gnu
           - build: macos
-            os: macos-latest
+            os: macos-13 # Intel based
             rust: stable
             target: x86_64-apple-darwin
           - build: macos-arm
-            os: macos-latest
+            os: macos-latest # Latest changed to arm based
             rust: stable
             target: aarch64-apple-darwin
           - build: win-msvc
-            os: windows-2019
+            os: windows-latest
             rust: stable
             target: x86_64-pc-windows-msvc
 
@@ -108,8 +108,13 @@ jobs:
         run: |
           ci/ubuntu-install-packages
 
-      - name: Install packages (macOS)
+      - name: Install packages (macOS arm)
         if: matrix.os == 'macos-latest'
+        run: |
+          ci/macos-install-packages
+
+      - name: Install packages (macOS Intel)
+        if: matrix.os == 'macos-13'
         run: |
           ci/macos-install-packages
 
@@ -165,7 +170,7 @@ jobs:
           cp README.md "$staging/"
           cp CHANGELOG.md "$staging/doc/"
 
-          if [ "${{ matrix.os }}" = "windows-2019" ]; then
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cp "target/${{ matrix.target }}/release/adlt.exe" "$staging/"
             7z a "$staging.zip" "$staging"
             echo "ASSET=$staging.zip" >> $GITHUB_ENV
