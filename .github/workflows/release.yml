@@ -15,7 +15,7 @@
 # Reference:
 # https://eugene-babichenko.github.io/blog/2020/05/09/github-actions-cross-platform-auto-releases/
 #
-# todo: strip macos-arm, linux-aarch64 binary
+# todo: linux-aarch64 binary
 
 name: release
 on:
@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # version number used if branch event and not tag event
-      ADLT_VERSION: TEST-0.57.1
+      ADLT_VERSION: TEST-0.57.2
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
@@ -141,14 +141,8 @@ jobs:
       - name: Build release binary
         run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
 
-      - name: Build release (Mac aarch64)
-        if: startsWith(matrix.config.target, 'aarch64-apple-darwin')
-        run: |
-          rustup target add aarch64-apple-darwin
-          ${{ env.CARGO }} build -verbose --release --target aarch64-apple-darwin
-
       - name: Strip release binary (linux and macos)
-        if: matrix.build == 'linux' || matrix.build == 'macos'
+        if: matrix.build == 'linux' || matrix.build == 'macos' || matrix.build == 'macos-arm'
         run: strip "target/${{ matrix.target }}/release/adlt"
 
       - name: Strip release binary (arm)
