@@ -7,7 +7,9 @@ use std::{
     fs::File,
     io::{prelude::*, BufWriter},
     sync::mpsc::sync_channel,
+    time::Instant,
 };
+use tempfile::TempDir;
 
 use adlt::{
     dlt::{DltChar4, DLT_MAX_STORAGE_MSG_SIZE},
@@ -24,8 +26,14 @@ use adlt::{
         buf_as_hex_to_io_write, contains_regex_chars,
         eac_stats::EacStats,
         get_dlt_message_iterator, get_new_namespace,
+        seekablechain::SeekableChain,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
-        sync_sender_send_delay_if_full, DltFileInfos, LowMarkBufReader,
+        sync_sender_send_delay_if_full,
+        unzip::{
+            archive_get_path_and_glob, extract_to_dir, is_part_of_multi_volume_archive,
+            list_archive_contents, search_dir_for_multi_volume_archive,
+        },
+        DltFileInfos, LowMarkBufReader,
     },
 };
 
@@ -373,75 +381,28 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     // if we have multiple files we do need to sort them first by the first log reception_time!
     // we follow this path even if there is just one paramater as it might be a glob expression
 
+    // check whether some input files are zip files or zipfiles with glob patterns (...*.zip/** )
+    let mut temp_dirs: Vec<(String, TempDir)> = vec![]; // need to keep them till the end. Pair of path/file_name and corresp. temp dir where we extracted to
+
+    let prev_len = input_file_names.len();
+    let input_file_names: Vec<String> = input_file_names
+        .into_iter()
+        .flat_map(|file_name| extract_archives(file_name, &mut temp_dirs, log))
+        .collect();
+    if input_file_names.len() != prev_len || !temp_dirs.is_empty() {
+        info!(
+            log,
+            "have {} input files after archive check and {} tempdirs",
+            input_file_names.len(),
+            temp_dirs.len()
+        );
+    }
+
     // map input_file_names to name/first msg
     let namespace = get_new_namespace();
-    let file_msgs = input_file_names.iter().flat_map(|f_name| {
-            let path = std::path::Path::new(f_name);
-            let fi = File::open(path);
-            match fi {
-                Ok(mut f) => {
-                    let file_ext = std::path::Path::new(&f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-                    let dfi = adlt::utils::get_dlt_infos_from_file(file_ext, &mut f, 512*1024, namespace);
-                    match dfi {
-                        Ok(dfi) => {
-                            let m1 = &dfi.first_msg;
-                            if m1.is_none() {
-                                warn!(log, "file {} ({}) (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext;);
-                            }
-                            vec![(path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).to_string_lossy().to_string(), Ok(dfi))]
-                        },
-                        Err(e) => {
-                            warn!(log, "file {} ({}) (ext: '{}') had io error '{}'. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext, e;);
-                            vec![(path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).to_string_lossy().to_string(), Err(e))]
-                        }
-                    }
-                }
-                _ => {
-                    // file does not exist. Let's check whether its a glob expression (as windows doesn't support glob on cmd)
-                    let options = MatchOptions {
-                        case_sensitive: false,
-                        require_literal_separator: false,
-                        require_literal_leading_dot: false,
-                    };
-                    let mut globbed_names = vec![];
-                    if let Ok(paths) = glob_with(f_name, options) {
-                        for glob_name in paths.flatten() {
-                            debug!(log, "found '{}' via glob '{}'", glob_name.display(), f_name;);
-                            globbed_names.push(glob_name);
-                        }
-                    }
-                    if !globbed_names.is_empty() {
-                        globbed_names.iter().map(|glob_name|{
-                            let fi = File::open(glob_name);
-                            if let Ok(mut f)=fi {
-                                let file_ext = std::path::Path::new(glob_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-
-                                let dfi = adlt::utils::get_dlt_infos_from_file(file_ext, &mut f, 512*1024, namespace);
-                                match dfi {
-                                    Ok(dfi) => {
-                                        let m1 = &dfi.first_msg;
-                                        if m1.is_none() {
-                                            warn!(log, "globbed file '{}' (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
-                                        }
-                                        let path_glob = std::path::Path::new(glob_name);
-                                        (path_glob.canonicalize().unwrap_or_else(|_|glob_name.to_path_buf()).to_string_lossy().to_string(), Ok(dfi))
-                                    },
-                                    Err(e) => {
-                                        warn!(log, "file {} ({}) (ext: '{}') had io error '{}'. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext, e;);
-                                        (glob_name.to_string_lossy().to_string(), Err(e))
-                                    }
-                                }
-                            }else{
-                                (glob_name.to_string_lossy().to_string(), Err(std::io::Error::from(std::io::ErrorKind::NotFound)))
-                            }
-                        }).collect::<Vec<_>>()
-                    }else{
-                        warn!(log, "couldn't open '{}'. Skipping!", f_name;);
-                        vec![(f_name.to_owned(), Err(std::io::Error::from(std::io::ErrorKind::NotFound)))]
-                    }
-                }
-            }
-        });
+    let file_msgs = input_file_names
+        .iter()
+        .flat_map(|f_name| resolve_input_filename(f_name, namespace, log));
 
     let (files_ok, _files_err): (Vec<_>, Vec<_>) = file_msgs.partition(|(_, b)| b.is_ok());
 
@@ -1057,6 +1018,242 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         messages_output,
         writer_screen,
     })
+}
+
+/// check whether a file name is a supported archive and if so extract it to a temp dir
+///
+/// Supports globs for archives as well like "...zip/**/*.dlt"
+/// Checks whether the archive has been extracted to the temp_dirs already and reuses it if so.
+/// If not it extracts the archive to a temp dir, returns the list of extracted files and adds the
+/// temp dir to the temp_dirs list.
+///
+/// Multi-volume archives are supported and only the first part should be used (e.g. .zip.001).
+fn extract_archives(
+    file_name: String,
+    temp_dirs: &mut Vec<(String, TempDir)>,
+    log: &slog::Logger,
+) -> Vec<String> {
+    // check whether its a archive file or whether it's a non existing file with a glob pattern
+    let path = std::path::Path::new(&file_name);
+    if let Some((archive_path, glob_pattern)) = archive_get_path_and_glob(path) {
+        let start_time = Instant::now();
+        let (mut archive, can_path) = if is_part_of_multi_volume_archive(&archive_path) {
+            let all_parts = search_dir_for_multi_volume_archive(&archive_path);
+            info!(
+                log,
+                "search for other parts for multi volume archive file got: '{:?}'.", all_parts
+            );
+            let can_path: String = all_parts
+                .first()
+                .unwrap_or(&archive_path)
+                .canonicalize()
+                .map_or_else(
+                    |_| file_name.clone(),
+                    |f| f.to_str().unwrap_or_default().to_owned(),
+                );
+            let all_files: Vec<_> = all_parts.iter().flat_map(File::open).collect();
+            (SeekableChain::new(all_files), can_path)
+        } else {
+            let can_path: String = archive_path.canonicalize().map_or_else(
+                |_| file_name.clone(),
+                |f| f.to_str().unwrap_or_default().to_owned(),
+            );
+            if let Ok(archive_file) = File::open(&archive_path) {
+                (SeekableChain::new(vec![archive_file]), can_path)
+            } else {
+                warn!(
+                    log,
+                    "failed to open archive file '{}'",
+                    archive_path.display()
+                );
+                return vec![file_name];
+            }
+        };
+        // todo could optimize for glob **/*
+        // and/or extract only supported file extensions...
+
+        match list_archive_contents(&mut archive) {
+            Ok(archive_contents) => {
+                archive
+                    .seek(std::io::SeekFrom::Start(0))
+                    .expect("failed to seek");
+                let mut matching_files = vec![];
+                for entry in archive_contents {
+                    if glob_pattern.matches(&entry) {
+                        matching_files.push(entry);
+                    }
+                }
+                info!(
+                    log,
+                    "found {} matching files in {}:{:?} took {:?}",
+                    matching_files.len(),
+                    archive_path.display(),
+                    matching_files,
+                    start_time.elapsed()
+                );
+                if !matching_files.is_empty() {
+                    // do we have this tempdir yet?
+                    if let Some((_p, d)) = temp_dirs.iter().find(|(p, _d)| p == &can_path) {
+                        info!(
+                            log,
+                            "reuse extracted archive file '{}' in '{}'",
+                            file_name,
+                            d.path().display()
+                        );
+                        matching_files
+                            .iter()
+                            .map(|s| format!("{}/{}", d.path().display(), s))
+                            .collect()
+                    } else {
+                        let temp_dir = TempDir::new().expect("failed to create temp dir");
+                        info!(
+                            log,
+                            "extracting archive file '{}' to '{}'",
+                            file_name,
+                            temp_dir.path().display()
+                        );
+                        let temp_dir_path = temp_dir.path().to_owned();
+                        match extract_to_dir(
+                            &mut archive,
+                            &temp_dir_path,
+                            Some(matching_files.clone()),
+                        ) {
+                            Ok(nr_extracted) => {
+                                info!(
+                                    log,
+                                    "extracted {}/{} matching files took {:?}",
+                                    nr_extracted,
+                                    matching_files.len(),
+                                    start_time.elapsed()
+                                );
+                                temp_dirs.push((can_path, temp_dir));
+                                matching_files
+                                    .iter()
+                                    .map(|s| format!("{}/{}", temp_dir_path.display(), s))
+                                    .collect()
+                            }
+                            Err(e) => {
+                                warn!(
+                                    log,
+                                    "failed to extract archive file '{}' due to {:?}", file_name, e
+                                );
+                                vec![file_name]
+                            }
+                        }
+                    }
+                } else {
+                    vec![]
+                }
+            }
+            Err(e) => {
+                warn!(
+                    log,
+                    "failed to list archive contents of '{}' due to {:?}",
+                    archive_path.display(),
+                    e
+                );
+                vec![]
+            }
+        }
+    } else {
+        // not a supported archive
+        vec![file_name]
+    }
+}
+
+/// try to resolve a provide filename to a vec of pair of filename and DltFileInfos
+///
+/// handles glob expressions thus from one input filename multiple output filenames can be generated
+///
+fn resolve_input_filename(
+    f_name: &String,
+    namespace: u32,
+    log: &slog::Logger,
+) -> Vec<(String, Result<DltFileInfos, std::io::Error>)> {
+    info!(log, "resolving input filename {}", f_name; "namespace"=>namespace);
+    let path = std::path::Path::new(f_name);
+    let fi = File::open(path);
+    match fi {
+        Ok(mut f) => {
+            let file_ext = std::path::Path::new(&f_name)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            let dfi = adlt::utils::get_dlt_infos_from_file(file_ext, &mut f, 512 * 1024, namespace);
+            match dfi {
+                Ok(dfi) => {
+                    let m1 = &dfi.first_msg;
+                    if m1.is_none() {
+                        warn!(log, "file {} ({}) (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext;);
+                    }
+                    vec![(
+                        path.canonicalize()
+                            .unwrap_or_else(|_| std::path::PathBuf::from(f_name))
+                            .to_string_lossy()
+                            .to_string(),
+                        Ok(dfi),
+                    )]
+                }
+                Err(e) => {
+                    warn!(log, "file {} ({}) (ext: '{}') had io error '{}'. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext, e;);
+                    vec![(
+                        path.canonicalize()
+                            .unwrap_or_else(|_| std::path::PathBuf::from(f_name))
+                            .to_string_lossy()
+                            .to_string(),
+                        Err(e),
+                    )]
+                }
+            }
+        }
+        _ => {
+            // file does not exist. Let's check whether its a glob expression (as windows doesn't support glob on cmd)
+            let options = MatchOptions {
+                case_sensitive: false,
+                require_literal_separator: false,
+                require_literal_leading_dot: false,
+            };
+            let mut globbed_names = vec![];
+            if let Ok(paths) = glob_with(f_name, options) {
+                for glob_name in paths.flatten() {
+                    debug!(log, "found '{}' via glob '{}'", glob_name.display(), f_name;);
+                    globbed_names.push(glob_name);
+                }
+            }
+            if !globbed_names.is_empty() {
+                globbed_names.iter().map(|glob_name|{
+                        let fi = File::open(glob_name);
+                        if let Ok(mut f)=fi {
+                            let file_ext = std::path::Path::new(glob_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
+
+                            let dfi = adlt::utils::get_dlt_infos_from_file(file_ext, &mut f, 512*1024, namespace);
+                            match dfi {
+                                Ok(dfi) => {
+                                    let m1 = &dfi.first_msg;
+                                    if m1.is_none() {
+                                        warn!(log, "globbed file '{}' (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+                                    }
+                                    let path_glob = std::path::Path::new(glob_name);
+                                    (path_glob.canonicalize().unwrap_or_else(|_|glob_name.to_path_buf()).to_string_lossy().to_string(), Ok(dfi))
+                                },
+                                Err(e) => {
+                                    warn!(log, "file {} ({}) (ext: '{}') had io error '{}'. Skipping!", f_name, path.canonicalize().unwrap_or_else(|_|std::path::PathBuf::from(f_name)).display(), file_ext, e;);
+                                    (glob_name.to_string_lossy().to_string(), Err(e))
+                                }
+                            }
+                        }else{
+                            (glob_name.to_string_lossy().to_string(), Err(std::io::Error::from(std::io::ErrorKind::NotFound)))
+                        }
+                    }).collect::<Vec<_>>()
+            } else {
+                warn!(log, "couldn't open '{}'. Skipping!", f_name;);
+                vec![(
+                    f_name.to_owned(),
+                    Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+                )]
+            }
+        }
+    }
 }
 
 #[cfg(test)]

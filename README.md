@@ -11,6 +11,8 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 ## Features
 
 - Open DLT files of any size.
+- Archives (zip or if compiled with feature "libarchive": 7z, rar, tar, tar.gz, tar.bz2, tar.xz) are extracted automatically to a temp dir.
+- Multi-volume zip/7z support (simply use the .001 file, the others are opened automatically)
 - **Lifecycle detection** feature including detection (a bit heuristic) of "SUSPEND/RESUME" lifecycles for ECUs with suspend-to-ram implementations.
 - **Sorting by timestamp** taking the lifecycles into account.
 - **Filter**...
@@ -49,6 +51,18 @@ Print ascii representation of a DLT file:
 
 ```sh
 adlt convert -a <dlt_file>
+```
+
+Open all dlt files within a zip file:
+
+```sh
+adlt convert -a <zip_file>
+```
+
+Open a single dlt file within a zip file via a glob pattern:
+
+```sh
+adlt convert -a "zip_file/**/foo.dlt" # take care to use "" around the file name to avoid your shell to try to find the glob pattern
 ```
 
 Show all lifecycles (ecu, time range, number of messages and SW verion) of a DLT file:

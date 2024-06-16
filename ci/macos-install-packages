@@ -1,2 +1,4 @@
 #!/bin/sh
 brew install asciidoctor
+brew install libarchive
+echo PKG_CONFIG_PATH=$(brew ls libarchive | grep .pc$ | sed 's|/libarchive.pc||') >> $GITHUB_ENV

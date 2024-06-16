@@ -33,6 +33,10 @@ mod genlog2dltmsgiterator;
 pub mod remote_utils;
 pub use self::genlog2dltmsgiterator::GenLog2DltMsgIterator;
 
+pub mod cloneable_seekable_reader;
+pub mod seekablechain;
+pub mod unzip;
+
 use lazy_static::lazy_static;
 
 static GLOBAL_NEXT_NAMESPACE: AtomicU32 = AtomicU32::new(0);
@@ -283,22 +287,40 @@ pub fn get_dlt_infos_from_file(
     read_size: usize,
     namespace: u32,
 ) -> std::io::Result<DltFileInfos> {
+    let (file_len, modified_time_us) = file.metadata().map_or((None, None), |m| {
+        (
+            Some(m.len()),
+            m.modified()
+                .map(|t| {
+                    t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros() as u64
+                })
+                .ok(),
+        )
+    });
+    get_dlt_infos_from_read(
+        file_ext,
+        file,
+        file_len,
+        modified_time_us,
+        read_size,
+        namespace,
+    )
+}
+
+pub fn get_dlt_infos_from_read<R: Read>(
+    file_ext: &str,
+    read: &mut R,
+    file_len: Option<u64>,
+    modified_time_us: Option<u64>,
+    read_size: usize,
+    namespace: u32,
+) -> std::io::Result<DltFileInfos> {
     let mut buf = vec![0u8; read_size];
-    let res = file.read(&mut buf);
+    let res = read.read(&mut buf); // todo replace by helper function that tries to read full buf size!
     match res {
         Ok(res) => {
-            let (file_len, modified_time_us) = file.metadata().map_or((None, None), |m| {
-                (
-                    Some(m.len()),
-                    m.modified()
-                        .map(|t| {
-                            t.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_micros() as u64
-                        })
-                        .ok(),
-                )
-            });
             let mut it = get_dlt_message_iterator(
                 file_ext,
                 0,
