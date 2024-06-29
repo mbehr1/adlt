@@ -32,6 +32,8 @@ pub use self::logcat2dltmsgiterator::LogCat2DltMsgIterator;
 mod genlog2dltmsgiterator;
 pub mod remote_utils;
 pub use self::genlog2dltmsgiterator::GenLog2DltMsgIterator;
+#[cfg(feature = "unzip")]
+pub mod unzip;
 
 use lazy_static::lazy_static;
 

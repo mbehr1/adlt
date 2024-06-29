@@ -6,6 +6,10 @@ jobs:
   grcov:
     runs-on: ubuntu-latest
     steps:
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt install libarchive-dev libb2-dev liblz4-dev libacl1-dev libzstd-dev nettle-dev liblzma-dev
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
