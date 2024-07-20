@@ -15,7 +15,6 @@
 # Reference:
 # https://eugene-babichenko.github.io/blog/2020/05/09/github-actions-cross-platform-auto-releases/
 #
-# todo: linux-aarch64 binary
 
 name: release
 on:
@@ -23,7 +22,6 @@ on:
     # Enable when testing release infrastructure on a branch.
     branches:
       - ci/release*
-      - feat/unzip # todo DONT MERGE!
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 jobs:
@@ -32,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # version number used if branch event and not tag event
-      ADLT_VERSION: TEST-0.57.2
+      ADLT_VERSION: TEST-0.57.4
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       adlt_version: ${{ env.ADLT_VERSION }}
