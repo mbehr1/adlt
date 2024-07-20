@@ -37,6 +37,8 @@ pub mod cloneable_seekable_reader;
 pub mod seekablechain;
 pub mod unzip;
 
+pub mod progress;
+
 use lazy_static::lazy_static;
 
 static GLOBAL_NEXT_NAMESPACE: AtomicU32 = AtomicU32::new(0);

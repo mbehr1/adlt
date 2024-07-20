@@ -66,6 +66,13 @@ pub struct BinStreamInfo {
 }
 
 #[derive(Encode, bincode::Decode)]
+pub struct BinProgress<'a> {
+    pub cur_progress: u32,
+    pub max_progress: u32,
+    pub action: Cow<'a, str>,
+}
+
+#[derive(Encode, bincode::Decode)]
 pub enum BinType<'a> {
     FileInfo(BinFileInfo),
     Lifecycles(Vec<BinLifecycle>),
@@ -73,4 +80,5 @@ pub enum BinType<'a> {
     EacInfo(Vec<BinEcuStats>),
     PluginState(Vec<String>), // serialized json from each plugin with generation update
     StreamInfo(BinStreamInfo),
+    Progress(BinProgress<'a>),
 }

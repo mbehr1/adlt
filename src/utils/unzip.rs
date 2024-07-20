@@ -1,10 +1,23 @@
+/// TODOs:
+/// [] check whether extracted files have proper metadata (time...)
 use lazy_static::lazy_static;
 
 use regex::Regex;
+use slog::{info, warn};
 use std::{
+    fs::File,
     io::{Read, Seek},
+    mem::MaybeUninit,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Instant,
 };
+use tempfile::TempDir;
+
+use crate::utils::seekablechain::SeekableChain;
 
 use super::cloneable_seekable_reader::{CloneableSeekableReader, HasLength};
 
@@ -22,8 +35,11 @@ use std::{
 
 // pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// parse an "archive_glob" like foo.zip/**/*.dlt into the archive and the glob part
+/// parse an "archive_glob" like foo.zip/**/*.dlt into the archive (foo.zip) and the glob part (**/*.dlt)
 ///
+/// Two formats are supported:
+///  - foo.zip/... and
+///  - foo.zip!/...
 /// The functions does this by checking whether any ancestor the of path does exist.
 /// So it's not a parsing of it but needs a real file on disk.
 ///
@@ -31,6 +47,22 @@ use std::{
 /// global wildcard pattern "**/*" is returned.
 pub fn archive_get_path_and_glob(path: &Path) -> Option<(PathBuf, glob::Pattern)> {
     if !path.exists() {
+        if path.as_os_str().to_string_lossy().contains("!/") {
+            // split into those 2 parts:
+            let path = path.as_os_str().to_string_lossy();
+            let parts: Vec<&str> = path.splitn(2, "!/").collect();
+            if parts.len() == 2 {
+                let archive = Path::new(parts[0]);
+                let glob_pattern = parts[1];
+                if archive.exists() && !archive.is_dir() && archive_is_supported_filename(archive) {
+                    // todo: is this ok for all valid file names inside an archive?
+                    if let Ok(glob_pattern) = glob::Pattern::new(glob_pattern) {
+                        return Some((archive.to_path_buf(), glob_pattern));
+                    }
+                }
+            }
+        }
+
         // check whether any of the parents is a zip file
         for parent in path.ancestors().skip(1) {
             if parent.exists() {
@@ -56,23 +88,28 @@ pub fn archive_get_path_and_glob(path: &Path) -> Option<(PathBuf, glob::Pattern)
     }
 }
 
-pub fn archive_is_supported_filename(file_name: &Path) -> bool {
-    let file_ext = file_name
-        .extension()
+pub fn archive_supported_fileexts() -> &'static [&'static str] {
+    if cfg!(feature = "libarchive") {
+        &[
+            ".zip", ".zip.001", ".7z", ".7z.001", ".rar", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz",
+        ]
+    } else {
+        &[".zip", ".zip.001"]
+    }
+}
+
+pub fn archive_is_supported_filename(file_path: &Path) -> bool {
+    let file_name = file_path
+        .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let is_supported = file_ext == "zip"
-        || (cfg!(feature = "libarchive")
-            && (file_ext == "7z"
-                || file_ext == "rar"
-                || file_ext == "tar"
-                || file_ext == "tar.gz"
-                || file_ext == "tar.bz2"
-                || file_ext == "tar.xz"));
+    let is_supported = archive_supported_fileexts()
+        .iter()
+        .any(|ext| file_name.ends_with(ext));
     if !is_supported {
         // check for multi volume zip files:
-        if is_part_of_multi_volume_archive(file_name) {
+        if is_part_of_multi_volume_archive(file_path) {
             return true;
         }
     }
@@ -193,6 +230,89 @@ pub fn list_archive_contents<RS: Read + Seek + super::cloneable_seekable_reader:
             std::io::ErrorKind::InvalidData,
             "no libarchive support or corrupt zip file",
         ))
+    }
+}
+
+/// return files and directory type similar to read_dir
+/// from a list of files with abs paths e.g. from list_archive_contents.
+pub fn archive_contents_read_dir<'a>(
+    archive_contents: &'a [String],
+    path: &str,
+) -> impl Iterator<Item = (String, &'static str)> + 'a {
+    let prefix = if path.is_empty() || path.ends_with('/') {
+        path.to_owned()
+    } else {
+        format!("{}/", path)
+    };
+    //println!("using prefix:'{}'", prefix);
+    // we dont want an empty, "." or ".." dir to be returned, so mark them as returned here.
+    // we use the hashset for duplicate detection as well
+    let mut hash_returned_dirs = std::collections::HashSet::from(["", ".", ".."]);
+    archive_contents.iter().filter_map(move |cand_path| {
+        if cand_path.starts_with(&prefix) {
+            let rest = &cand_path[prefix.len()..];
+            // println!("using rest:'{}'", rest);
+            if !rest.contains('/') && !rest.is_empty() {
+                Some((rest.to_owned(), "file"))
+            } else {
+                // we do want the dir as well...
+                if let Some(rest) = rest.strip_suffix('/') {
+                    // it's a dir:
+                    if !rest.contains('/') {
+                        let dir_name = &rest[..rest.len()];
+                        if !hash_returned_dirs.contains(dir_name) {
+                            hash_returned_dirs.insert(dir_name);
+                            Some((dir_name.to_owned(), "dir"))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    // not ending with /, so a file but in sub dir
+                    // return the first dir part
+                    if let Some((first, _rem)) = rest.split_once('/') {
+                        let dir_name = first;
+                        if !hash_returned_dirs.contains(dir_name) {
+                            hash_returned_dirs.insert(dir_name);
+                            Some((dir_name.to_owned(), "dir"))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        }
+    })
+}
+
+pub fn archive_contents_metadata(
+    archive_contents: &[String],
+    path: &str,
+) -> std::io::Result<(&'static str, usize)> {
+    let dir_contents = archive_contents_read_dir(archive_contents, path);
+    let count = dir_contents.count();
+    if count > 0 {
+        Ok(("dir", count))
+    } else {
+        // is it a file in the list?
+        if archive_contents.iter().any(|f| f == path) {
+            if !path.ends_with('/') {
+                Ok(("file", 42))
+            } else {
+                Ok(("dir", 0))
+            }
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("file or dir not found: {}", path),
+            ))
+        }
     }
 }
 
@@ -363,6 +483,7 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
     source: RS,
     target_dir: &Path,
     files_filter: Option<Vec<String>>,
+    shall_cancel: &Arc<AtomicBool>,
 ) -> Result<usize, std::io::Error> {
     // try first with zip lib...
     let source = CloneableSeekableReader::new(source);
@@ -370,6 +491,12 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
     if let Ok(mut zip_archive) = zip::ZipArchive::new(source.clone()) {
         let mut nr_extracted = 0;
         for i in 0..zip_archive.len() {
+            if shall_cancel.load(Ordering::Relaxed) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "extraction cancelled",
+                ));
+            }
             if let Ok(mut file) = zip_archive.by_index(i) {
                 if let Some(file_name) = file.enclosed_name() {
                     if let Some(files) = &files_filter {
@@ -386,7 +513,10 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                         if let Some(target_dir) = target_file.parent() {
                             std::fs::create_dir_all(target_dir)?;
                             let mut target_file = std::fs::File::create(target_file)?;
-                            std::io::copy(&mut file, &mut target_file)?;
+                            // use a cancelable copy here
+                            //std::io::copy(&mut file, &mut target_file)?;
+                            // todo or better a cancelable reader? (check what's faster)
+                            cancelable_copy(&mut file, &mut target_file, shall_cancel)?;
                             nr_extracted += 1;
                         }
                     } // ignore symlinks
@@ -414,6 +544,12 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
         let mut bytes_expected = 0;
         let mut nr_extracted = 0;
         for content in archive {
+            if shall_cancel.load(Ordering::Relaxed) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "extraction cancelled",
+                ));
+            }
             match content {
                 ArchiveContents::StartOfEntry(name, stat) => {
                     // if is dir, create it
@@ -482,16 +618,303 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
     }
 }
 
+// taken from an older version of rust std::io::copy...
+fn cancelable_copy<R: std::io::Read + ?Sized, W: std::io::Write + ?Sized>(
+    reader: &mut R,
+    writer: &mut W,
+    shall_cancel: &Arc<AtomicBool>,
+) -> std::io::Result<u64> {
+    let mut buf = MaybeUninit::<[u8; 64 * 1024]>::uninit();
+
+    // unsafe {
+    // ??? todo? reader.initializer().initialize(buf.get_mut());
+    // }
+
+    let mut written = 0;
+    loop {
+        let len = match reader.read(
+            unsafe { buf.assume_init_mut() }, /*  unsafe { buf.get_mut() }*/
+        ) {
+            Ok(0) => return Ok(written),
+            Ok(len) => len,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        writer.write_all(unsafe {
+            &buf.assume_init_ref()[..len] /*  &buf.get_ref()[..len]*/
+        })?;
+        written += len as u64;
+        if shall_cancel.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "copy cancelled",
+            ));
+        }
+    }
+}
+
+/// check whether a file name is a supported archive and if so extract it to a temp dir
+///
+/// Supports globs for archives as well like "...zip/**/*.dlt"
+/// Checks whether the archive has been extracted to the temp_dirs already and reuses it if so.
+/// If not it extracts the archive to a temp dir, returns the list of extracted files and adds the
+/// temp dir to the temp_dirs list.
+///
+/// Multi-volume archives are supported and only the first part should be used (e.g. .zip.001).
+pub fn extract_archives(
+    file_name: String,
+    temp_dirs: &mut Vec<(String, TempDir)>,
+    shall_cancel: &Arc<AtomicBool>,
+    log: &slog::Logger,
+) -> Vec<String> {
+    // check whether its a archive file or whether it's a non existing file with a glob pattern
+    let path = std::path::Path::new(&file_name);
+    if let Some((archive_path, glob_pattern)) = archive_get_path_and_glob(path) {
+        let start_time = Instant::now();
+        let (mut archive, can_path) = if is_part_of_multi_volume_archive(&archive_path) {
+            let all_parts = search_dir_for_multi_volume_archive(&archive_path);
+            info!(
+                log,
+                "search for other parts for multi volume archive file got: '{:?}'.", all_parts
+            );
+            let can_path: String = all_parts
+                .first()
+                .unwrap_or(&archive_path)
+                .canonicalize()
+                .map_or_else(
+                    |_| file_name.clone(),
+                    |f| f.to_str().unwrap_or_default().to_owned(),
+                );
+            let all_files: Vec<_> = all_parts.iter().flat_map(File::open).collect();
+            (SeekableChain::new(all_files), can_path)
+        } else {
+            let can_path: String = archive_path.canonicalize().map_or_else(
+                |_| file_name.clone(),
+                |f| f.to_str().unwrap_or_default().to_owned(),
+            );
+            if let Ok(archive_file) = File::open(&archive_path) {
+                (SeekableChain::new(vec![archive_file]), can_path)
+            } else {
+                warn!(
+                    log,
+                    "failed to open archive file '{}'",
+                    archive_path.display()
+                );
+                return vec![file_name];
+            }
+        };
+        // todo could optimize for glob **/*
+        // and/or extract only supported file extensions...
+
+        match list_archive_contents(&mut archive) {
+            Ok(archive_contents) => {
+                archive
+                    .seek(std::io::SeekFrom::Start(0))
+                    .expect("failed to seek");
+                let mut matching_files = vec![];
+                for entry in archive_contents {
+                    if glob_pattern.matches(&entry) && !entry.ends_with('/') {
+                        // we dont need to extract the directories. if there is any file they will be created
+                        matching_files.push(entry);
+                    }
+                }
+                info!(
+                    log,
+                    "found {} matching files in {}:{:?} took {:?}",
+                    matching_files.len(),
+                    archive_path.display(),
+                    matching_files,
+                    start_time.elapsed()
+                );
+                if !matching_files.is_empty() {
+                    // do we have this tempdir yet?
+                    if let Some((_p, d)) = temp_dirs.iter().find(|(p, _d)| p == &can_path) {
+                        info!(
+                            log,
+                            "reuse extracted archive file '{}' in '{}'",
+                            file_name,
+                            d.path().display()
+                        );
+                        matching_files
+                            .iter()
+                            .map(|s| format!("{}/{}", d.path().display(), s))
+                            .collect()
+                    } else {
+                        let temp_dir = TempDir::new().expect("failed to create temp dir");
+                        info!(
+                            log,
+                            "extracting archive file '{}' to '{}'",
+                            file_name,
+                            temp_dir.path().display()
+                        );
+                        let temp_dir_path = temp_dir.path().to_owned();
+                        match extract_to_dir(
+                            &mut archive,
+                            &temp_dir_path,
+                            Some(matching_files.clone()),
+                            shall_cancel,
+                        ) {
+                            Ok(nr_extracted) => {
+                                info!(
+                                    log,
+                                    "extracted {}/{} matching files took {:?}",
+                                    nr_extracted,
+                                    matching_files.len(),
+                                    start_time.elapsed()
+                                );
+                                temp_dirs.push((can_path, temp_dir));
+                                matching_files
+                                    .iter()
+                                    .map(|s| format!("{}/{}", temp_dir_path.display(), s))
+                                    .collect()
+                            }
+                            Err(e) => {
+                                warn!(
+                                    log,
+                                    "failed to extract archive file '{}' due to {:?}", file_name, e
+                                );
+                                vec![file_name]
+                            }
+                        }
+                    }
+                } else {
+                    vec![]
+                }
+            }
+            Err(e) => {
+                warn!(
+                    log,
+                    "failed to list archive contents of '{}' due to {:?}",
+                    archive_path.display(),
+                    e
+                );
+                vec![]
+            }
+        }
+    } else {
+        // not a supported archive
+        vec![file_name]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::utils::seekablechain;
+    use slog::{o, Drain, Logger};
     use std::{io::Cursor, time::Instant};
     use tempfile::tempdir;
 
     #[cfg(feature = "libarchive")]
     use compress_tools::{ArchiveContents, ArchiveIteratorBuilder};
+
+    fn new_logger() -> Logger {
+        let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        Logger::root(drain, o!())
+    }
+
+    #[test]
+    fn test_archive_get_path_and_glob_existing_file() {
+        let path = Path::new("tests/lc_ex002.zip"); // an existing file
+        let result = archive_get_path_and_glob(path);
+        let expected = Some((
+            PathBuf::from("tests/lc_ex002.zip"),
+            glob::Pattern::new("**/*").unwrap(),
+        ));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_archive_get_path_and_glob_existing_directory() {
+        let path = Path::new("tests");
+        let result = archive_get_path_and_glob(path);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_archive_get_path_and_glob_non_existing_file() {
+        let path = Path::new("baz.zip");
+        let result = archive_get_path_and_glob(path);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_archive_get_path_and_glob_nested_file() {
+        let path = Path::new("tests/lc_ex002.zip!/nested/file.txt");
+        let result = archive_get_path_and_glob(path);
+        let expected = Some((
+            PathBuf::from("tests/lc_ex002.zip"),
+            glob::Pattern::new("nested/file.txt").unwrap(),
+        ));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_archive_get_path_and_glob_nested_file_with_glob() {
+        let path = Path::new("tests/lc_ex002.zip/nested/*.txt"); // syntax without "!"
+        let result = archive_get_path_and_glob(path);
+        let expected = Some((
+            PathBuf::from("tests/lc_ex002.zip"),
+            glob::Pattern::new("nested/*.txt").unwrap(),
+        ));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_archive_contents_metadata_file_exists() {
+        let archive_contents = vec!["file1.txt".to_string(), "file2.txt".to_string()];
+        let path = "file2.txt";
+        let result = archive_contents_metadata(&archive_contents, path).unwrap();
+        assert_eq!(result.0, "file");
+    }
+
+    #[test]
+    fn test_archive_contents_metadata_file_not_found() {
+        let archive_contents = vec!["file1.txt".to_string(), "file2.txt".to_string()];
+        let path = "file3.txt";
+        let result = archive_contents_metadata(&archive_contents, path);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "file or dir not found: file3.txt"
+        );
+    }
+
+    #[test]
+    fn test_archive_contents_metadata_dir_exists() {
+        let archive_contents = vec!["dir1/".to_string(), "dir2/".to_string()];
+        let path = "dir2/";
+        let result = archive_contents_metadata(&archive_contents, path).unwrap();
+        assert_eq!(result, ("dir", 0));
+    }
+
+    #[test]
+    fn test_archive_contents_metadata_dir_not_found() {
+        let archive_contents = vec!["dir1/".to_string(), "dir2/".to_string()];
+        let path = "dir3/";
+        let result = archive_contents_metadata(&archive_contents, path);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "file or dir not found: dir3/"
+        );
+    }
+
+    #[test]
+    fn unzip_list_zip() {
+        let start_time = Instant::now();
+        let source = std::fs::File::open("tests/lc_ex002.zip").unwrap();
+        let files = list_archive_contents(source).unwrap();
+        let duration = start_time.elapsed();
+        println!(
+            "list_archive_contents() took {:?} and returned {} file names",
+            duration,
+            files.len()
+        );
+        assert_eq!(files.len(), 2);
+    }
 
     #[cfg(feature = "libarchive")]
     #[test]
@@ -547,6 +970,123 @@ mod tests {
             files.len()
         );
         assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn test_archive_contents_read_dir() {
+        // includes directories only entries
+        let files = vec![
+            "foo/bar.txt".to_string(),
+            "foo/baz.txt".to_string(),
+            "foo/".to_string(),
+            "foo/bar/".to_string(),
+            "foo/bar/baz.txt".to_string(),
+            "foo/bar/baz/".to_string(),
+            "foo/bar/baz/qux.txt".to_string(),
+            "bla".to_string(),
+        ];
+        let entries_root: Vec<_> = archive_contents_read_dir(&files, "").collect();
+        println!("entries_root: {:?}", entries_root);
+        assert_eq!(2, entries_root.len());
+        assert_eq!(
+            entries_root,
+            vec![("foo".to_string(), "dir"), ("bla".to_string(), "file")]
+        );
+        let entries_foo: Vec<_> = archive_contents_read_dir(&files, "foo/").collect();
+        println!("entries_foo: {:?}", entries_foo);
+        assert_eq!(3, entries_foo.len());
+        assert_eq!(
+            entries_foo,
+            vec![
+                ("bar.txt".to_string(), "file"),
+                ("baz.txt".to_string(), "file"),
+                ("bar".to_string(), "dir")
+            ]
+        );
+        let entries_bar: Vec<_> = archive_contents_read_dir(&files, "foo/bar").collect();
+        println!("entries_bar: {:?}", entries_bar);
+        assert_eq!(2, entries_bar.len());
+        assert_eq!(
+            entries_bar,
+            vec![("baz.txt".to_string(), "file"), ("baz".to_string(), "dir")]
+        );
+    }
+
+    #[test]
+    fn test_archive_contents_read_dir_non_dirs() {
+        // 7z e.g. dont include dir only entries
+        let files = vec![
+            "foo/bar.txt".to_string(),
+            "foo/baz.txt".to_string(),
+            "foo/bar/baz.txt".to_string(),
+            "foo/bar/baz/".to_string(),
+            "foo/bar/baz/qux.txt".to_string(),
+            "bla".to_string(),
+        ];
+        let entries_root: Vec<_> = archive_contents_read_dir(&files, "").collect();
+        println!("entries_root: {:?}", entries_root);
+        assert_eq!(2, entries_root.len());
+        assert_eq!(
+            entries_root,
+            vec![("foo".to_string(), "dir"), ("bla".to_string(), "file")]
+        );
+        let entries_foo: Vec<_> = archive_contents_read_dir(&files, "foo/").collect();
+        println!("entries_foo: {:?}", entries_foo);
+        assert_eq!(3, entries_foo.len());
+        assert_eq!(
+            entries_foo,
+            vec![
+                ("bar.txt".to_string(), "file"),
+                ("baz.txt".to_string(), "file"),
+                ("bar".to_string(), "dir")
+            ]
+        );
+        let entries_bar: Vec<_> = archive_contents_read_dir(&files, "foo/bar").collect();
+        println!("entries_bar: {:?}", entries_bar);
+        assert_eq!(2, entries_bar.len());
+        assert_eq!(
+            entries_bar,
+            vec![("baz.txt".to_string(), "file"), ("baz".to_string(), "dir")]
+        );
+    }
+
+    #[test]
+    fn test_archive_contents_read_dir_special_dirs() {
+        // we dont want abs paths
+        let files = vec![
+            "/etc/foo/bar.txt".to_string(),
+            "./foo/baz.txt".to_string(),
+            "../foo/bar/baz.txt".to_string(),
+        ];
+        let entries_root: Vec<_> = archive_contents_read_dir(&files, "").collect();
+        println!("entries_root: {:?}", entries_root);
+        assert_eq!(0, entries_root.len()); // todo might add support for ./...
+
+        let entries_foo: Vec<_> = archive_contents_read_dir(&files, "etc/").collect();
+        println!("entries_foo: {:?}", entries_foo);
+        assert_eq!(0, entries_foo.len());
+
+        let entries_bar: Vec<_> = archive_contents_read_dir(&files, "..").collect();
+        println!("entries_bar: {:?}", entries_bar);
+        assert_eq!(1, entries_bar.len());
+        assert_eq!(entries_bar, vec![("foo".to_string(), "dir")]);
+    }
+
+    #[test]
+    fn test_archive_contents_read_dir_dirs() {
+        // we dont want abs paths
+        let files = vec!["dir1/".to_string(), "dir2/".to_string()];
+        let entries_root: Vec<_> = archive_contents_read_dir(&files, "").collect();
+        println!("entries_root: {:?}", entries_root);
+        assert_eq!(2, entries_root.len());
+        assert_eq!(
+            entries_root,
+            vec![("dir1".to_string(), "dir"), ("dir2".to_string(), "dir")]
+        );
+
+        let entries_dir2: Vec<_> = archive_contents_read_dir(&files, "dir2/").collect();
+        println!("entries_dir2: {:?}", entries_dir2);
+        assert_eq!(0, entries_dir2.len());
     }
 
     #[test]
@@ -641,8 +1181,14 @@ mod tests {
         println!("extracting to tmp_dir {:?}", target_dir);
         let files = list_archive_contents(source).unwrap();
         let source = std::fs::File::open("tests/unzip_ex001.7z").unwrap();
-        let nr_extracted = extract_to_dir(source, target_dir, Some(files[2..4].to_owned()))
-            .expect("extract_to_dir failed");
+        let shall_cancel = Arc::new(AtomicBool::new(false));
+        let nr_extracted = extract_to_dir(
+            source,
+            target_dir,
+            Some(files[2..4].to_owned()),
+            &shall_cancel,
+        )
+        .expect("extract_to_dir failed");
         let duration = start_time.elapsed();
         println!(
             "extract_to_dir() took {:?} and extracted {} files",
@@ -684,7 +1230,9 @@ mod tests {
         source
             .seek(std::io::SeekFrom::Start(0))
             .expect("failed to seek");
-        let nr_extracted = extract_to_dir(source, target_dir, None).expect("extract_to_dir failed");
+        let shall_cancel = Arc::new(AtomicBool::new(false));
+        let nr_extracted =
+            extract_to_dir(source, target_dir, None, &shall_cancel).expect("extract_to_dir failed");
         let duration = start_time.elapsed();
         println!(
             "extract_to_dir() took {:?} and extracted {} files",
@@ -767,5 +1315,37 @@ mod tests {
             start_time.elapsed(),
             extracted
         );
+    }
+
+    #[test]
+    fn extract_archives_1() {
+        let mut temp_dirs = vec![];
+        let shall_cancel = Arc::new(AtomicBool::new(false));
+        let log = new_logger();
+        let files = extract_archives(
+            "tests/lc_ex002.zip".to_string(),
+            &mut temp_dirs,
+            &shall_cancel,
+            &log,
+        );
+        println!("extracted files: {:?}", files);
+        assert_eq!(files.len(), 1);
+        assert_eq!(temp_dirs.len(), 1);
+    }
+
+    #[test]
+    fn extract_archives_2() {
+        let mut temp_dirs = vec![];
+        let shall_cancel = Arc::new(AtomicBool::new(false));
+        let log = new_logger();
+        let files = extract_archives(
+            "tests/test_volume10k.zip.001/*.jpg".to_string(),
+            &mut temp_dirs,
+            &shall_cancel,
+            &log,
+        );
+        println!("extracted files: {:?}", files);
+        assert_eq!(files.len(), 1);
+        assert_eq!(temp_dirs.len(), 1);
     }
 }

@@ -11,10 +11,20 @@ use adlt::{
     },
     utils::{
         eac_stats::EacStats,
-        get_dlt_infos_from_file, get_dlt_message_iterator, get_new_namespace, remote_types,
+        get_dlt_infos_from_file, get_dlt_message_iterator, get_new_namespace,
+        progress::{ProgressNonAsyncFuture, ProgressPoll},
+        remote_types,
         remote_utils::{match_filters, process_stream_new_msgs, StreamContext},
+        seekablechain::SeekableChain,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
-        sync_sender_send_delay_if_full, DltFileInfos, LowMarkBufReader,
+        sync_sender_send_delay_if_full,
+        unzip::{
+            archive_contents_metadata, archive_contents_read_dir, archive_get_path_and_glob,
+            archive_is_supported_filename, archive_supported_fileexts, extract_archives,
+            is_part_of_multi_volume_archive, list_archive_contents,
+            search_dir_for_multi_volume_archive,
+        },
+        DltFileInfos, LowMarkBufReader,
     },
 };
 use clap::{value_parser, Arg, Command};
@@ -26,13 +36,15 @@ use std::{
     hash::BuildHasherDefault,
     io::prelude::*,
     net::TcpListener,
+    path::PathBuf,
     sync::{
-        atomic::AtomicBool,
+        atomic::{AtomicBool, Ordering},
         mpsc::{sync_channel, Receiver, SendError},
         Arc, RwLock,
     },
     time::Instant,
 };
+use tempfile::TempDir;
 use tungstenite::{
     accept_hdr_with_config,
     handshake::server::{Request, Response},
@@ -112,7 +124,10 @@ pub fn remote(
                 // Let's add an additional header to our response to the client.
                 let headers = response.headers_mut();
                 headers.append("adlt-version", clap::crate_version!().parse().unwrap());
-
+                headers.append(
+                    "adlt-archives-supported",
+                    archive_supported_fileexts().join(",").parse().unwrap(),
+                );
                 Ok(response)
             };
 
@@ -235,10 +250,13 @@ pub fn remote(
 
 type SetOfEcuIds = HashSet<DltChar4>;
 type StreamEntry = (SetOfEcuIds, Vec<(u64, String, DltFileInfos)>);
+type ProgressPendingExtract = ProgressNonAsyncFuture<(Vec<StreamEntry>, Vec<(String, TempDir)>)>;
 
 #[derive(Debug)]
 struct FileContext {
+    pending_extract: Option<ProgressPendingExtract>,
     file_streams: Vec<StreamEntry>, // set of files that need to be processed as parallel streams
+    temp_dirs: Vec<(String, TempDir)>, // set of temp dirs for extracted archives content
     namespace: u32,
     sort_by_time: bool,                          // sort by timestamp
     plugins_active: Vec<Box<dyn Plugin + Send>>, // will be moved to parsing_thread
@@ -308,7 +326,11 @@ impl FileContext {
             _ => false, // we default to non sorted
         };
 
-        // check whether at least the first file can be opened:
+        let collect_all_msgs = match &v["collect"] {
+            serde_json::Value::Bool(b) => *b,
+            _ => true, // we default to "do collect"
+        };
+
         if file_names.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -317,95 +339,81 @@ impl FileContext {
         }
         let namespace = get_new_namespace();
 
-        // map input_file_names to name/first msg
-        let file_msgs = file_names.iter().map(|f_name| {
-            let fi = File::open(f_name);
-            match fi {
-                Ok(mut f) => {
-                    let file_ext = std::path::Path::new(f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
-
-                    let dfi = get_dlt_infos_from_file(file_ext, &mut f, 512*1024, namespace);
-                    match dfi {
-                        Ok(dfi) =>{
-                            let m1 = &dfi.first_msg;
-                            if m1.is_none() {
-                                warn!(log, "file {} (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+        // archive support:
+        let have_archives = file_names
+            .iter()
+            .any(|f| archive_get_path_and_glob(std::path::Path::new(f)).is_some());
+        let (pending_extract, all_msgs, input_file_streams) = if have_archives {
+            let log = log.clone();
+            let pending_extract =
+                ProgressNonAsyncFuture::spawn(move |upd_progress, shall_cancel| {
+                    let mut temp_dirs: Vec<(String, TempDir)> = vec![]; // need to keep them till the end. Pair of path/file_name and corresp. temp dir where we extracted to
+                    let initial_file_names_len = file_names.len() as u32;
+                    upd_progress(0, initial_file_names_len);
+                    let mut did_process = 0;
+                    let prev_len = file_names.len();
+                    let file_names: Vec<String> = file_names
+                        .into_iter() // todo might benefit from par_iter...
+                        .flat_map(|file_name| {
+                            if !shall_cancel.load(Ordering::Relaxed) {
+                                let v = extract_archives(
+                                    file_name,
+                                    &mut temp_dirs,
+                                    &shall_cancel,
+                                    &log,
+                                );
+                                did_process += 1;
+                                upd_progress(did_process, initial_file_names_len);
+                                v
+                            } else {
+                                vec![]
                             }
-                            let file_len = dfi.file_len.unwrap_or(0);
-                            (f_name, Some(dfi), file_len)
-                        }
-                        Err(e)=>{
-                            warn!(log, "reading {} got io error '{}'. Skipping!", f_name, e;);
-                            (f_name, None, 0)
-                        }
+                        })
+                        .collect();
+                    if file_names.len() != prev_len || !temp_dirs.is_empty() {
+                        info!(
+                            log,
+                            "have {} files after archive check and {} tempdirs",
+                            file_names.len(),
+                            temp_dirs.len()
+                        );
                     }
-                }
-                _ => {
-                    warn!(log, "couldn't open {}. Skipping!", f_name;);
-                    (f_name, None, 0)
-                }
-            }
-        });
-        // filter/remove the files that dont have a first DLT message:
-        let file_msgs = file_msgs
-            .filter(|(_a, b, _c)| b.is_some() && b.as_ref().unwrap().first_msg.is_some())
-            .map(|(a, b, c)| (a, b.unwrap(), c));
+                    // map input_file_names to name/first msg
+                    let (_sum_file_len, input_file_streams) =
+                        file_names_to_file_streams(file_names, namespace, &log);
 
-        let mut input_file_streams: Vec<StreamEntry> = Vec::with_capacity(file_names.len());
-        let mut sum_file_len: u64 = 0;
-        for (file_name, dfi, file_len) in file_msgs {
-            sum_file_len += file_len;
-            let stream = input_file_streams.iter_mut().find(|e| e.0 == dfi.ecus_seen);
-            match stream {
-                Some((_, l)) => {
-                    l.push((
-                        dfi.first_msg.as_ref().unwrap().reception_time_us,
-                        file_name.to_owned(),
-                        dfi,
-                    ));
-                }
-                None => {
-                    input_file_streams.push((
-                        dfi.ecus_seen.clone(),
-                        vec![(
-                            dfi.first_msg.as_ref().unwrap().reception_time_us,
-                            file_name.to_owned(),
-                            dfi,
-                        )],
-                    ));
-                }
-            }
-        }
-        // now we do need to sort and dedup each stream only:
-        let input_file_streams: Vec<StreamEntry> = input_file_streams
-            .into_iter()
-            .map(|(hashset, mut time_files)| {
-                time_files.sort_by(|a, b| a.0.cmp(&b.0));
-                // time_files.dedup(); // remove duplicates (not needed here)
-                (hashset, time_files)
-            })
-            .collect();
-        info!(log, "sorted input_files by first message reception time and ecus_seen:"; "input_file_streams" => format!("{:?}",&input_file_streams));
+                    // todo: return error here if no files found
+                    // todo: allocate all_msgs with size estimate?
 
-        let collect_all_msgs = match &v["collect"] {
-            serde_json::Value::Bool(b) => *b,
-            _ => true, // we default to "do collect"
+                    // Vec<StreamEntry>, Vec<(String, TempDir)>)
+                    (input_file_streams, temp_dirs)
+                });
+            (Some(pending_extract), Vec::new(), Vec::new())
+        } else {
+            // map input_file_names to name/first msg
+            let (sum_file_len, input_file_streams) =
+                file_names_to_file_streams(file_names, namespace, log);
+            if input_file_streams.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "cannot open files or files contain no DLT messages",
+                ));
+            }
+
+            let all_msgs_len_estimate = sum_file_len / 128; // todo better heuristics? e.g. 20gb dlt -> 117mio msgs
+            info!(
+                log,
+                "FileContext sum_file_len={} -> estimated #msgs = {}",
+                sum_file_len,
+                all_msgs_len_estimate
+            );
+            let all_msgs = Vec::with_capacity(if collect_all_msgs {
+                std::cmp::min(all_msgs_len_estimate as usize, u32::MAX as usize)
+            } else {
+                0
+            });
+            (None, all_msgs, input_file_streams)
         };
-
-        let all_msgs_len_estimate = sum_file_len / 128; // todo better heuristics? e.g. 20gb dlt -> 117mio msgs
-        info!(
-            log,
-            "FileContext sum_file_len={} -> estimated #msgs = {}",
-            sum_file_len,
-            all_msgs_len_estimate
-        );
-
-        if input_file_streams.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "cannot open files or files contain no DLT messages",
-            ));
-        }
 
         // plugins
         let mut plugins_active: Vec<Box<dyn Plugin + Send>> = vec![];
@@ -438,18 +446,16 @@ impl FileContext {
         let plugin_states = plugins_active.iter().map(|p| (0u32, p.state())).collect();
 
         Ok(FileContext {
+            pending_extract,
             file_streams: input_file_streams,
+            temp_dirs: vec![],
             namespace,
             sort_by_time,
             plugins_active,
             plugin_states,
             parsing_thread: None,
             collect_all_msgs,
-            all_msgs: Vec::with_capacity(if collect_all_msgs {
-                std::cmp::min(all_msgs_len_estimate as usize, u32::MAX as usize)
-            } else {
-                0
-            }),
+            all_msgs,
             streams: Vec::new(),
             paused: false,
             last_lcs_w_refresh_index: 0,
@@ -459,6 +465,96 @@ impl FileContext {
             did_inform_parser_processing_finished: false,
         })
     }
+
+    fn create_parser_thread(&mut self, log: &slog::Logger) {
+        let plugins_active = std::mem::take(&mut self.plugins_active);
+        self.parsing_thread = Some(create_parser_thread(
+            log.clone(),
+            self.file_streams.clone(),
+            self.namespace,
+            self.sort_by_time,
+            plugins_active,
+        ));
+    }
+}
+
+type InputFileStream = (u64, String, DltFileInfos);
+type TupleSumFileLenInputFileStreams = (u64, Vec<(HashSet<DltChar4>, Vec<InputFileStream>)>);
+
+fn file_names_to_file_streams(
+    file_names: Vec<String>,
+    namespace: u32,
+    log: &slog::Logger,
+) -> TupleSumFileLenInputFileStreams {
+    let file_msgs = file_names.iter().map(|f_name| {
+        let fi = File::open(f_name);
+        match fi {
+            Ok(mut f) => {
+                let file_ext = std::path::Path::new(f_name).extension().and_then(|s|s.to_str()).unwrap_or_default();
+
+                let dfi = get_dlt_infos_from_file(file_ext, &mut f, 512*1024, namespace);
+                match dfi {
+                    Ok(dfi) =>{
+                        let m1 = &dfi.first_msg;
+                        if m1.is_none() {
+                            warn!(log, "file {} (ext: '{}') doesn't contain a DLT message in first 0.5MB. Skipping!", f_name, file_ext;);
+                        }
+                        let file_len = dfi.file_len.unwrap_or(0);
+                        (f_name, Some(dfi), file_len)
+                    }
+                    Err(e)=>{
+                        warn!(log, "reading {} got io error '{}'. Skipping!", f_name, e;);
+                        (f_name, None, 0)
+                    }
+                }
+            }
+            _ => {
+                warn!(log, "couldn't open {}. Skipping!", f_name;);
+                (f_name, None, 0)
+            }
+        }
+    });
+    // filter/remove the files that dont have a first DLT message:
+    let file_msgs = file_msgs
+        .filter(|(_a, b, _c)| b.is_some() && b.as_ref().unwrap().first_msg.is_some())
+        .map(|(a, b, c)| (a, b.unwrap(), c));
+
+    let mut input_file_streams: Vec<StreamEntry> = Vec::with_capacity(file_names.len());
+    let mut sum_file_len: u64 = 0;
+    for (file_name, dfi, file_len) in file_msgs {
+        sum_file_len += file_len;
+        let stream = input_file_streams.iter_mut().find(|e| e.0 == dfi.ecus_seen);
+        match stream {
+            Some((_, l)) => {
+                l.push((
+                    dfi.first_msg.as_ref().unwrap().reception_time_us,
+                    file_name.to_owned(),
+                    dfi,
+                ));
+            }
+            None => {
+                input_file_streams.push((
+                    dfi.ecus_seen.clone(),
+                    vec![(
+                        dfi.first_msg.as_ref().unwrap().reception_time_us,
+                        file_name.to_owned(),
+                        dfi,
+                    )],
+                ));
+            }
+        }
+    }
+    // now we do need to sort and dedup each stream only:
+    let input_file_streams: Vec<StreamEntry> = input_file_streams
+        .into_iter()
+        .map(|(hashset, mut time_files)| {
+            time_files.sort_by(|a, b| a.0.cmp(&b.0));
+            // time_files.dedup(); // remove duplicates (not needed here)
+            (hashset, time_files)
+        })
+        .collect();
+    info!(log, "sorted input_files by first message reception time and ecus_seen:"; "input_file_streams" => format!("{:?}",&input_file_streams));
+    (sum_file_len, input_file_streams)
 }
 
 /// process incoming text message sent from the client
@@ -519,26 +615,21 @@ fn process_incoming_text_message<T: Read + Write>(
                     .unwrap(); // todo
             } else {
                 match FileContext::from(log, command, params) {
-                    Ok(mut s) => {
-                        let plugins_active_str = serde_json::json!(s
+                    Ok(mut fc) => {
+                        let plugins_active_str = serde_json::json!(fc
                             .plugins_active
                             .iter()
                             .map(|p| p.name())
                             .collect::<Vec<&str>>());
 
-                        // setup parsing thread
-                        // todo think about it. we do need to move the plugins now out as we pass them to a different thread
-                        // and they are not + Sync (but only +Send)
-                        let plugins_active = std::mem::take(&mut s.plugins_active);
-                        s.parsing_thread = Some(create_parser_thread(
-                            log.clone(),
-                            s.file_streams.clone(),
-                            s.namespace,
-                            s.sort_by_time,
-                            plugins_active,
-                        ));
+                        if fc.pending_extract.is_none() {
+                            // setup parsing thread
+                            // todo think about it. we do need to move the plugins now out as we pass them to a different thread
+                            // and they are not + Sync (but only +Send)
+                            fc.create_parser_thread(log);
+                        } // else we do it once the extract is done in ... todo
 
-                        file_context.replace(s);
+                        file_context.replace(fc);
 
                         // lifecycle detection thread
                         // sorting thread (if wanted by prev. set options or default options)
@@ -583,6 +674,10 @@ fn process_incoming_text_message<T: Read + Write>(
         "close" => {
             if file_context.is_some() {
                 let old_fc = file_context.take().unwrap();
+                if let Some(pending_extract) = old_fc.pending_extract {
+                    info!(log, "close: cancelling pending extract");
+                    pending_extract.cancel();
+                }
                 if let Some(parsing_thread) = old_fc.parsing_thread {
                     parsing_thread
                         .shall_stop
@@ -1103,20 +1198,28 @@ fn process_fs_cmd(
     ) {
         info!(log, "process_fs_cmd(cmd:'{}', path:'{}')", cmd, path,);
         match cmd {
-            "stat" => match std::fs::symlink_metadata(path) {
-                // todo size/mtime/ctime for the traversed dest?)
-                Ok(attr) => Ok(serde_json::json!({"stat":{
-                    "type":type_for_filetype(&attr.file_type(), &path.into()),
-                    "size":attr.len(),
-                    "mtime":attr.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis() as u64, // to u64 as json windows cannot convert u128
-                    "ctime":attr.created().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis() as u64,
-                }})),
-                Err(e) => Ok(serde_json::json!({"err":format!("stat failed with '{}'", e)})),
-            },
-            "readDirectory" => match std::fs::read_dir(path) {
-                Ok(entries) => Ok(entries
-                    .filter_map(|e| {
-                        e.ok().and_then(|e| {
+            "stat" => {
+                match std::fs::symlink_metadata(path) {
+                    // todo size/mtime/ctime for the traversed dest?)
+                    Ok(attr) => Ok(serde_json::json!({"stat":{
+                        "type":type_for_filetype(&attr.file_type(), &path.into()),
+                        "size":attr.len(),
+                        "mtime":attr.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis() as u64, // to u64 as json windows cannot convert u128
+                        "ctime":attr.created().unwrap_or(std::time::SystemTime::UNIX_EPOCH).duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis() as u64,
+                    }})),
+                    Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        let r = fs_cmd_archive(path, log, cmd);
+                        info!(log, "fs_cmd_archive(cmd:'{}')={:?}", cmd, r);
+                        r
+                    }
+                    Err(e) => Ok(serde_json::json!({"err":format!("stat failed with '{}'", e)})),
+                }
+            }
+            "readDirectory" => {
+                match std::fs::read_dir(path) {
+                    Ok(entries) => Ok(entries
+                        .filter_map(|e| {
+                            e.ok().and_then(|e| {
                             if let Some(file_name) = e.path().file_name() {
                                 let file_type = e.file_type().ok(); // Convert the Result to an Option
                                 Some(serde_json::json!({
@@ -1130,12 +1233,19 @@ fn process_fs_cmd(
                                 None
                             }
                         })
-                    })
-                    .collect()),
-                Err(e) => {
-                    Ok(serde_json::json!({"err":format!("readDirectory failed with '{}'", e)}))
+                        })
+                        .collect()),
+                    Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // see whether its an archive path...
+                        let r = fs_cmd_archive(path, log, cmd);
+                        info!(log, "fs_cmd_archive(cmd:'{}')={:?}", cmd, r);
+                        r
+                    }
+                    Err(e) => {
+                        Ok(serde_json::json!({"err":format!("readDirectory failed with '{}'", e)}))
+                    }
                 }
-            },
+            }
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("cmd '{}' unknown", cmd),
@@ -1146,6 +1256,103 @@ fn process_fs_cmd(
         Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "params misses cmd or path",
+        )
+        .into())
+    }
+}
+
+fn fs_cmd_archive(
+    full_path: &str,
+    log: &slog::Logger,
+    cmd: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    // we expect "path/to.archive!/path/within/archive"
+    // file path can be any uri/url
+    // as separator the first !/ is used...
+
+    let uri = full_path.splitn(2, "!/").collect::<Vec<&str>>();
+    if uri.len() != 2 && !full_path.ends_with('!') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "path '{}' not in expected format 'path/to.archive!/path/within/archive'",
+                full_path
+            ),
+        )
+        .into());
+    }
+    let (archive_path, path_within) = match uri.len() {
+        2 => (uri[0], uri[1]),
+        1 => (&uri[0][..uri[0].len() - 1], ""),
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("path '{}' not in expected format", full_path),
+            )
+            .into())
+        }
+    };
+    //let url = Url::parse(uri[0]);
+    info!(
+        log,
+        "fs_cmd_archive(cmd:'{}', archive_path:'{}', within:'{}')", cmd, archive_path, path_within
+    );
+    let archive_path = PathBuf::from(archive_path);
+    if archive_path.exists() {
+        if archive_is_supported_filename(&archive_path) {
+            let mut source = if is_part_of_multi_volume_archive(&archive_path) {
+                let paths = search_dir_for_multi_volume_archive(&archive_path);
+                let sources = paths.into_iter().flat_map(std::fs::File::open).collect();
+                SeekableChain::new(sources)
+            } else {
+                SeekableChain::new(vec![std::fs::File::open(archive_path)?])
+            };
+            return match cmd {
+                "readDirectory" => {
+                    let files = list_archive_contents(&mut source).unwrap();
+                    // info!(log, "got files:{:?}", files);
+                    let entries: Vec<_> = archive_contents_read_dir(&files, path_within)
+                        .map(|(name, entry_type)| {
+                            serde_json::json!({
+                                "name": name,
+                                "type": entry_type,
+                            })
+                        })
+                        .collect();
+                    Ok(serde_json::json!(entries))
+                }
+                "stat" => {
+                    let files = list_archive_contents(&mut source).unwrap();
+                    match archive_contents_metadata(&files, path_within) {
+                        Ok((meta_type, meta_size)) => {
+                            Ok(serde_json::json!({"stat":{
+                                "type":meta_type,
+                                "size":meta_size,
+                                "mtime":std::time::SystemTime::UNIX_EPOCH.duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis() as u64, // to u64 as json windows cannot convert u128
+                                "ctime":std::time::SystemTime::UNIX_EPOCH.duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis() as u64,
+                            }}))
+                        }
+                        Err(e) => {
+                            Ok(serde_json::json!({"err":format!("stat failed with '{}'", e)}))
+                        }
+                    }
+                }
+                _ => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("cmd '{}' not supported", cmd),
+                )
+                .into()),
+            };
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("path '{}' not a supported archive", archive_path.display()),
+        )
+        .into())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("path '{}' does not exist", archive_path.display()),
         )
         .into())
     }
@@ -1423,6 +1630,65 @@ fn process_file_context<T: Read + Write>(
     let mut got_new_msgs = false;
     let mut parser_thread_finished = false;
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+
+    if let Some(progress) = &mut fc.pending_extract {
+        match progress.poll() {
+            ProgressPoll::Progress((cur, max)) => {
+                debug!(
+                    log,
+                    "process_file_context: extract_progress: {}/{}", cur, max
+                );
+                websocket.write_message(Message::Binary(
+                    bincode::encode_to_vec(
+                        remote_types::BinType::Progress(remote_types::BinProgress {
+                            cur_progress: cur,
+                            max_progress: max,
+                            action: std::borrow::Cow::Borrowed("extracting archives"),
+                        }),
+                        BINCODE_CONFIG,
+                    )
+                    .unwrap(), // todo
+                ))?;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                return Ok(());
+            }
+            ProgressPoll::Done((file_streams, mut temp_dirs)) => {
+                let (cur, max) = progress.cur_progress();
+                info!(
+                    log,
+                    "process_file_context: pending_extract done. #file_streams={} last progress: {}/{}", file_streams.len(), cur, max
+                );
+                websocket.write_message(Message::Binary(
+                    bincode::encode_to_vec(
+                        remote_types::BinType::Progress(remote_types::BinProgress {
+                            cur_progress: cur,
+                            max_progress: max,
+                            action: std::borrow::Cow::Borrowed("extracting archives"),
+                        }),
+                        BINCODE_CONFIG,
+                    )
+                    .unwrap(), // todo
+                ))?;
+                fc.pending_extract = None;
+                assert!(fc.file_streams.is_empty());
+                assert!(fc.parsing_thread.is_none());
+
+                fc.file_streams = file_streams;
+                fc.temp_dirs.append(&mut temp_dirs);
+                fc.create_parser_thread(log);
+            }
+            ProgressPoll::Err(_) => {
+                fc.pending_extract = None;
+                // todo will never have a parser thread... is the error below enough?
+                //websocket
+                //    .write_message(Message::Text(format!("err: extract_failed {}", e)))?;
+                return Err(tungstenite::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "extract_failed",
+                )));
+            }
+        }
+    };
 
     if let Some(pt) = &fc.parsing_thread {
         let rx = &pt.rx;
@@ -1719,6 +1985,9 @@ fn process_file_context<T: Read + Write>(
             .unwrap(), // todo
         ))?;
         fc.did_inform_parser_processing_finished = true;
+
+        // we release the tmpdirs as well:
+        fc.temp_dirs.clear();
     }
     Ok(())
 }
@@ -2188,6 +2457,12 @@ mod tests {
                             BINCODE_CONFIG,
                         ) {
                             match btype {
+                                BinType::Progress(p) => {
+                                    println!(
+                                        "got progress: {} {}/{}",
+                                        p.action, p.cur_progress, p.max_progress
+                                    );
+                                }
                                 BinType::FileInfo(s) => {
                                     println!("got file info: nr_msgs={}", s.nr_msgs);
                                     file_info_nr_msgs = s.nr_msgs;
@@ -2372,11 +2647,27 @@ mod tests {
         let t = std::thread::spawn(move || {
             let mut ws;
             let start_time = Instant::now();
-
+            let mut adlt_version = None;
+            let mut adlt_archives_supported = None;
             loop {
                 match tungstenite::client::connect(format!("wss://127.0.0.1:{}", port)) {
                     Ok(p) => {
                         ws = p.0;
+                        for (ref header, value) in p.1.headers() {
+                            println!("header: {:?}={:?}", header, value);
+                            match header.as_str() {
+                                "adlt-version" => {
+                                    adlt_version = value.to_str().map(|v| v.to_owned()).ok()
+                                }
+                                "adlt-archives-supported" => {
+                                    adlt_archives_supported =
+                                        value.to_str().map(|v| v.to_owned()).ok()
+                                }
+                                _ => {
+                                    println!(" ignored header: {:?}={:?}", header, value);
+                                }
+                            }
+                        }
                         break;
                     }
                     Err(_e) => {
@@ -2388,8 +2679,12 @@ mod tests {
                     }
                 }
             }
+            assert!(adlt_version.is_some());
+            assert!(adlt_archives_supported.is_some());
             // open a file:
-            let test_file = std::path::PathBuf::new().join("tests").join("lc_ex002.dlt");
+            let test_file = std::path::PathBuf::new()
+                .join("tests")
+                .join("lc_ex002.zip!/tests/lc_ex002.dlt");
             ws.write_message(tungstenite::protocol::Message::Text(format!(
                 r#"open {{"files":[{}], "plugins":[{{"name":"Rewrite","rewrites":[]}}]}}"#,
                 serde_json::json!(test_file.to_str().unwrap()),
@@ -2438,6 +2733,12 @@ mod tests {
                             >(&d, BINCODE_CONFIG)
                             {
                                 match btype {
+                                    BinType::Progress(p) => {
+                                        println!(
+                                            "got binary msg Progress: {} {}/{}",
+                                            p.action, p.cur_progress, p.max_progress
+                                        );
+                                    }
                                     BinType::FileInfo(s) => {
                                         println!("got binary msg FileInfo: {}", s.nr_msgs);
                                         got_fileinfo = s.nr_msgs == expected_msgs;
@@ -2611,7 +2912,7 @@ mod tests {
         );
         assert!(res.is_ok());
         let res = res.unwrap();
-        //println!("res={}", serde_json::to_string_pretty(&res).unwrap());
+        println!("res={}", serde_json::to_string_pretty(&res).unwrap());
         assert!(res.is_array());
         let res = res.as_array().unwrap();
         assert!(!res.is_empty());
@@ -2620,6 +2921,56 @@ mod tests {
         let first = first.as_object().unwrap();
         assert!(first.contains_key("name"));
         assert!(first.contains_key("type"));
+        // check that all entries have a name and type
+        for entry in res {
+            assert!(entry.is_object());
+            let entry = entry.as_object().unwrap();
+            assert!(entry.contains_key("name"));
+            assert!(entry.contains_key("type"));
+        }
+    }
+
+    #[test]
+    fn test_process_fs_cmd_read_dir_archive() {
+        let log = new_logger();
+        let res = process_fs_cmd(
+            &log,
+            serde_json::json!({"cmd":"readDirectory", "path":format!("{}/tests/lc_ex002.zip!/tests", std::env::current_dir().unwrap().to_str().unwrap())})
+                .as_object()
+                .unwrap(),
+        );
+        println!("res={:?}", res);
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        //println!("res={}", serde_json::to_string_pretty(&res).unwrap());
+        assert!(res.is_array());
+        let res = res.as_array().unwrap();
+        assert!(!res.is_empty());
+        // check that all entries have a name and type
+        for entry in res {
+            assert!(entry.is_object());
+            let entry = entry.as_object().unwrap();
+            assert!(entry.contains_key("name"));
+            assert!(entry.contains_key("type"));
+        }
+    }
+
+    #[test]
+    fn test_process_fs_cmd_read_dir_archive_root() {
+        let log = new_logger();
+        let res = process_fs_cmd(
+            &log,
+            serde_json::json!({"cmd":"readDirectory", "path":format!("{}/tests/lc_ex002.zip!", std::env::current_dir().unwrap().to_str().unwrap())})
+                .as_object()
+                .unwrap(),
+        );
+        println!("res={:?}", res);
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        //println!("res={}", serde_json::to_string_pretty(&res).unwrap());
+        assert!(res.is_array());
+        let res = res.as_array().unwrap();
+        assert!(!res.is_empty());
         // check that all entries have a name and type
         for entry in res {
             assert!(entry.is_object());
