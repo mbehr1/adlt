@@ -2,6 +2,22 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.58.0 - 2024-07-21
+#### Continuous Integration
+- strip release binary for macos arm as well - (0aa3c71) - Matthias Behr
+- update runners to latest except for mac intel - (3ed6c5c) - Matthias Behr
+#### Documentation
+- **(readme)** add fuzz instructions - (8cb89d8) - Matthias Behr
+#### Features
+- **(unzip)** add support for remote - (6a6decc) - Matthias Behr
+- **(unzip)** add feature unzip using zip/libarchive - (0761c55) - Matthias Behr
+#### Miscellaneous Chores
+- fix clippy warning - (bacf303) - Matthias Behr
+#### Tests
+- **(fuzz)** add first fuzz tests - (0c033a9) - Matthias Behr
+
+- - -
+
 ## v0.57.1 - 2024-05-21
 #### Bug Fixes
 - **(someip)** impr log output for decoding errors - (3dd90e4) - Matthias Behr
