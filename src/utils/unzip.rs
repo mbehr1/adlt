@@ -45,6 +45,9 @@ use std::{
 ///
 /// If the path does and exist and is a supported archive then that file with the
 /// global wildcard pattern "**/*" is returned.
+///
+/// Take care: you cannot rely solely on glob_pattern.matches but have to compare against
+/// glob_patter.as_str() as well! (as e.g. the "glob_pattern" can be a filename with [] inside)
 pub fn archive_get_path_and_glob(path: &Path) -> Option<(PathBuf, glob::Pattern)> {
     if !path.exists() {
         if path.as_os_str().to_string_lossy().contains("!/") {
@@ -55,8 +58,11 @@ pub fn archive_get_path_and_glob(path: &Path) -> Option<(PathBuf, glob::Pattern)
                 let archive = Path::new(parts[0]);
                 let glob_pattern = parts[1];
                 if archive.exists() && !archive.is_dir() && archive_is_supported_filename(archive) {
-                    // todo: is this ok for all valid file names inside an archive?
                     if let Ok(glob_pattern) = glob::Pattern::new(glob_pattern) {
+                        return Some((archive.to_path_buf(), glob_pattern));
+                    } else if let Ok(glob_pattern) =
+                        glob::Pattern::new(&glob::Pattern::escape(glob_pattern))
+                    {
                         return Some((archive.to_path_buf(), glob_pattern));
                     }
                 }
@@ -713,7 +719,9 @@ pub fn extract_archives(
                     .expect("failed to seek");
                 let mut matching_files = vec![];
                 for entry in archive_contents {
-                    if glob_pattern.matches(&entry) && !entry.ends_with('/') {
+                    if (entry == glob_pattern.as_str() || glob_pattern.matches(&entry))
+                        && !entry.ends_with('/')
+                    {
                         // we dont need to extract the directories. if there is any file they will be created
                         matching_files.push(entry);
                     }
@@ -849,6 +857,34 @@ mod tests {
             glob::Pattern::new("nested/file.txt").unwrap(),
         ));
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_archive_get_path_and_glob_nested_file_with_glob_chars() {
+        let path = Path::new("tests/lc_ex002.zip!/nested/file[01].txt");
+        let result = archive_get_path_and_glob(path);
+        let expected = Some((
+            PathBuf::from("tests/lc_ex002.zip"),
+            glob::Pattern::new("nested/file[01].txt").unwrap(),
+        ));
+        assert_eq!(result, expected);
+        let result = result.unwrap();
+        assert!(
+            result.1.matches("nested/file[01].txt") || result.1.as_str() == "nested/file[01].txt"
+        );
+    }
+
+    #[test]
+    fn test_archive_get_path_and_glob_nested_file_with_invalid_glob_chars() {
+        let path = Path::new("tests/lc_ex002.zip!/nested/file[0-1-2.txt");
+        let result = archive_get_path_and_glob(path);
+        let expected = Some((
+            PathBuf::from("tests/lc_ex002.zip"),
+            glob::Pattern::new(&glob::Pattern::escape("nested/file[0-1-2.txt")).unwrap(),
+        ));
+        assert_eq!(result, expected);
+        let result = result.unwrap();
+        assert!(result.1.matches("nested/file[0-1-2.txt"));
     }
 
     #[test]
