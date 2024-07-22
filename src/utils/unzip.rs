@@ -25,8 +25,19 @@ use super::cloneable_seekable_reader::{CloneableSeekableReader, HasLength};
 use compress_tools::{
     list_archive_files, ArchiveContents, ArchiveIterator, ArchiveIteratorBuilder,
 };
-#[cfg(feature = "libarchive")]
-use libc::S_IFDIR;
+#[cfg(all(feature = "libarchive", target_os = "windows"))]
+const S_IFDIR: u16 = 16384;
+
+#[cfg(all(feature = "libarchive", target_os = "macos"))]
+const S_IFDIR: u16 = 16384;
+
+#[cfg(all(
+    feature = "libarchive",
+    not(target_os = "windows"),
+    not(target_os = "macos")
+))]
+const S_IFDIR: u32 = 16384;
+
 #[cfg(feature = "libarchive")]
 use std::{
     io::{BufWriter, Write},
