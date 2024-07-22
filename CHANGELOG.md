@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.58.1 - 2024-07-22
+#### Bug Fixes
+- **(archive)** support archive file names with glob pattern chars - (b6bb638) - Matthias Behr
+
+- - -
+
 ## v0.58.0 - 2024-07-21
 #### Continuous Integration
 - strip release binary for macos arm as well - (0aa3c71) - Matthias Behr
