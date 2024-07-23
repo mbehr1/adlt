@@ -109,6 +109,7 @@ pub fn archive_supported_fileexts() -> &'static [&'static str] {
     if cfg!(feature = "libarchive") {
         &[
             ".zip", ".zip.001", ".7z", ".7z.001", ".rar", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz",
+            ".bz2",
         ]
     } else {
         &[".zip", ".zip.001"]
@@ -605,11 +606,12 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                     if let Some(writer) = &mut file_writer {
                         writer.flush()?;
                         nr_extracted += 1;
-                        if bytes_expected != 0 {
+                        if bytes_expected > 0 {
+                            // we allow <0 as for some files the size is not known (0) upfront
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
                                 format!(
-                                    "not enough data {nr_extracted} bytes missing for file {}",
+                                    "not enough data {bytes_expected} bytes missing for file #{nr_extracted} {}",
                                     cur_file_name.unwrap_or_else(|| "unknown file".into())
                                 ),
                             ));
