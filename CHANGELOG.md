@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.59.0 - 2024-07-23
+#### Bug Fixes
+- **(unzip)** single archive files and reuse - (6835986) - Matthias Behr
+- **(unzip)** support libarchive files with unknown size - (949c019) - Matthias Behr
+- use const instead of libc for S_IFDIR - (b210976) - Matthias Behr
+#### Continuous Integration
+- use gha cache for vcpkg - (acb5c69) - Matthias Behr
+- try different way to cache vcpkg for win - (e0575e6) - Matthias Behr
+#### Features
+- **(unzip)** enable libarchive for win x86_64 - (ac6f385) - Matthias Behr
+
+- - -
+
 ## v0.58.1 - 2024-07-22
 #### Bug Fixes
 - **(archive)** support archive file names with glob pattern chars - (b6bb638) - Matthias Behr
