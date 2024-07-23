@@ -5,6 +5,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use slog::{info, warn};
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Read, Seek},
     mem::MaybeUninit,
@@ -493,7 +494,7 @@ fn sanitize_destination_path(dest: &Path) -> Result<&Path, std::io::Error> {
 /// * `files_filter``: if Some, only extract the files with the given paths/names
 ///
 /// # Returns
-/// Returns the number of files extracted
+/// Returns list of the extracted files (relative names to target_dir)
 ///
 /// # Note
 /// Any files in the target dir will be overwritten!
@@ -501,13 +502,36 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
     source: RS,
     target_dir: &Path,
     files_filter: Option<Vec<String>>,
+    rename_map: &HashMap<String, String>, // from -> to
     shall_cancel: &Arc<AtomicBool>,
-) -> Result<usize, std::io::Error> {
+) -> Result<Vec<PathBuf>, std::io::Error> {
+    // skip existing files from files_filter: (but report as extracted)
+    // this is intended for extracting some files into the same tempdir with one tempdir per archive
+    let mut extracted: Vec<PathBuf> = Vec::new();
+
+    let files_filter = if let Some(files) = files_filter {
+        let mut files_filter = Vec::with_capacity(files.len());
+        for file in files {
+            let new_file_name = if let Some(new_file_name) = rename_map.get(&file) {
+                new_file_name
+            } else {
+                &file
+            };
+            let target_file = target_dir.join(new_file_name);
+            if !target_file.exists() {
+                files_filter.push(file); // need the unmapped name here
+            } else {
+                extracted.push(new_file_name.into());
+            }
+        }
+        Some(files_filter)
+    } else {
+        None
+    };
+
     // try first with zip lib...
     let source = CloneableSeekableReader::new(source);
-
     if let Ok(mut zip_archive) = zip::ZipArchive::new(source.clone()) {
-        let mut nr_extracted = 0;
         for i in 0..zip_archive.len() {
             if shall_cancel.load(Ordering::Relaxed) {
                 return Err(std::io::Error::new(
@@ -527,7 +551,15 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                         // println!("creating dir: {}", target_dir.display());
                         std::fs::create_dir_all(target_dir)?;
                     } else if file.is_file() {
-                        let target_file = target_dir.join(file_name);
+                        let new_file_name = if let Some(new_file_name) =
+                            rename_map.get(file_name.to_string_lossy().as_ref())
+                        {
+                            PathBuf::from(&new_file_name)
+                        } else {
+                            file_name
+                        };
+                        let target_file = target_dir.join(&new_file_name);
+                        // todo skip existing files!
                         if let Some(target_dir) = target_file.parent() {
                             std::fs::create_dir_all(target_dir)?;
                             let mut target_file = std::fs::File::create(target_file)?;
@@ -535,13 +567,13 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                             //std::io::copy(&mut file, &mut target_file)?;
                             // todo or better a cancelable reader? (check what's faster)
                             cancelable_copy(&mut file, &mut target_file, shall_cancel)?;
-                            nr_extracted += 1;
+                            extracted.push(new_file_name);
                         }
                     } // ignore symlinks
                 }
             }
         }
-        return Ok(nr_extracted);
+        return Ok(extracted);
     }
     #[cfg(feature = "libarchive")]
     {
@@ -560,7 +592,6 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
         let mut file_writer: Option<BufWriter<_>> = None;
         let mut cur_file_name = None;
         let mut bytes_expected = 0;
-        let mut nr_extracted = 0;
         for content in archive {
             if shall_cancel.load(Ordering::Relaxed) {
                 return Err(std::io::Error::new(
@@ -577,14 +608,18 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                         //println!("creating dir: {}", target_dir.display());
                         std::fs::create_dir_all(target_dir)?;
                     } else {
-                        let file_name = sanitize_destination_path(Path::new(&name))?;
+                        let new_name = rename_map.get(&name).unwrap_or(&name).to_string();
+                        let file_name = sanitize_destination_path(Path::new(&new_name))?;
                         let target_file = target_dir.join(file_name);
                         if let Some(target_dir) = target_file.parent() {
+                            // todo skip existing files!
                             std::fs::create_dir_all(target_dir)?;
                             let target_file = std::fs::File::create(target_file)?;
                             bytes_expected = stat.st_size;
                             file_writer = Some(std::io::BufWriter::new(target_file));
-                            cur_file_name = Some(name);
+                            cur_file_name = Some(new_name);
+                        } else {
+                            cur_file_name = None;
                         }
                     }
                 }
@@ -596,8 +631,8 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             format!(
-                                "Unexpected data chunk (no file writer) for file {}",
-                                cur_file_name.unwrap_or_else(|| "unknown file".into())
+                                "Unexpected data chunk (no file writer) for file {:?}",
+                                cur_file_name // else(|| "unknown file".into())
                             ),
                         ));
                     }
@@ -605,17 +640,18 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                 ArchiveContents::EndOfEntry => {
                     if let Some(writer) = &mut file_writer {
                         writer.flush()?;
-                        nr_extracted += 1;
+                        let cur_name = cur_file_name.take().unwrap(); // always exists with file_writer
                         if bytes_expected > 0 {
                             // we allow <0 as for some files the size is not known (0) upfront
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
                                 format!(
-                                    "not enough data {bytes_expected} bytes missing for file #{nr_extracted} {}",
-                                    cur_file_name.unwrap_or_else(|| "unknown file".into())
+                                    "not enough data {bytes_expected} bytes missing for file {}",
+                                    cur_name
                                 ),
                             ));
                         }
+                        extracted.push(PathBuf::from(cur_name));
                     } // else return err! todo
                     file_writer = None;
                 }
@@ -626,7 +662,7 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
             }
         }
         // todo verify bytes_expected here again
-        Ok(nr_extracted)
+        Ok(extracted)
     }
     #[cfg(not(feature = "libarchive"))]
     {
@@ -680,6 +716,8 @@ fn cancelable_copy<R: std::io::Read + ?Sized, W: std::io::Write + ?Sized>(
 /// temp dir to the temp_dirs list.
 ///
 /// Multi-volume archives are supported and only the first part should be used (e.g. .zip.001).
+///
+/// .bz2, .gz (non direntry archives) with single "data" file are extracted into their name without .bz2/.gz extension.
 pub fn extract_archives(
     file_name: String,
     temp_dirs: &mut Vec<(String, TempDir)>,
@@ -725,18 +763,39 @@ pub fn extract_archives(
         // todo could optimize for glob **/*
         // and/or extract only supported file extensions...
 
+        // special support for .bz2/.gz files with just a single entry "data"
+        let archive_name = archive_path
+            .file_stem()
+            .map(|f| f.to_string_lossy())
+            .unwrap_or("data".into());
+        let mut rename_map: HashMap<String, String> = HashMap::new();
+
         match list_archive_contents(&mut archive) {
             Ok(archive_contents) => {
                 archive
                     .seek(std::io::SeekFrom::Start(0))
                     .expect("failed to seek");
                 let mut matching_files = vec![];
-                for entry in archive_contents {
-                    if (entry == glob_pattern.as_str() || glob_pattern.matches(&entry))
-                        && !entry.ends_with('/')
+                if archive_contents.len() == 1 && archive_contents[0] == "data" {
+                    // special case for .bz2/.gz files with just a single entry "data"
+                    if glob_pattern.as_str() == "data" {
+                        // no rename
+                        matching_files.push("data".to_owned());
+                    } else if archive_name == glob_pattern.as_str()
+                        || glob_pattern.matches(&archive_name)
                     {
-                        // we dont need to extract the directories. if there is any file they will be created
+                        let entry = archive_contents[0].to_owned();
+                        rename_map.insert(entry.to_owned(), archive_name.to_string());
                         matching_files.push(entry);
+                    }
+                } else {
+                    for entry in archive_contents {
+                        if (entry == glob_pattern.as_str() || glob_pattern.matches(&entry))
+                            && !entry.ends_with('/')
+                        {
+                            // we dont need to extract the directories. if there is any file they will be created
+                            matching_files.push(entry);
+                        }
                     }
                 }
                 info!(
@@ -749,53 +808,50 @@ pub fn extract_archives(
                 );
                 if !matching_files.is_empty() {
                     // do we have this tempdir yet?
-                    if let Some((_p, d)) = temp_dirs.iter().find(|(p, _d)| p == &can_path) {
-                        info!(
-                            log,
-                            "reuse extracted archive file '{}' in '{}'",
-                            file_name,
-                            d.path().display()
-                        );
-                        matching_files
-                            .iter()
-                            .map(|s| format!("{}/{}", d.path().display(), s))
-                            .collect()
-                    } else {
-                        let temp_dir = TempDir::new().expect("failed to create temp dir");
-                        info!(
-                            log,
-                            "extracting archive file '{}' to '{}'",
-                            file_name,
-                            temp_dir.path().display()
-                        );
-                        let temp_dir_path = temp_dir.path().to_owned();
-                        match extract_to_dir(
-                            &mut archive,
-                            &temp_dir_path,
-                            Some(matching_files.clone()),
-                            shall_cancel,
-                        ) {
-                            Ok(nr_extracted) => {
-                                info!(
-                                    log,
-                                    "extracted {}/{} matching files took {:?}",
-                                    nr_extracted,
-                                    matching_files.len(),
-                                    start_time.elapsed()
-                                );
+                    let (temp_dir_path, new_temp_dir) =
+                        if let Some(temp_dir) = temp_dirs.iter().find(|(p, _d)| p == &can_path) {
+                            (temp_dir.1.path().to_owned(), None)
+                        } else {
+                            let temp_dir = TempDir::new().expect("failed to create temp dir");
+                            (temp_dir.path().to_owned(), Some(temp_dir))
+                        };
+                    //let temp_dir = TempDir::new().expect("failed to create temp dir");
+                    info!(
+                        log,
+                        "extracting archive file '{}' to '{}'",
+                        file_name,
+                        temp_dir_path.display()
+                    );
+                    //let temp_dir_path = temp_dir.path().to_owned();
+                    match extract_to_dir(
+                        &mut archive,
+                        &temp_dir_path,
+                        Some(matching_files.clone()),
+                        &rename_map,
+                        shall_cancel,
+                    ) {
+                        Ok(extracted) => {
+                            info!(
+                                log,
+                                "extracted {}/{} matching files took {:?}",
+                                extracted.len(),
+                                matching_files.len(),
+                                start_time.elapsed()
+                            );
+                            if let Some(temp_dir) = new_temp_dir {
                                 temp_dirs.push((can_path, temp_dir));
-                                matching_files
-                                    .iter()
-                                    .map(|s| format!("{}/{}", temp_dir_path.display(), s))
-                                    .collect()
                             }
-                            Err(e) => {
-                                warn!(
-                                    log,
-                                    "failed to extract archive file '{}' due to {:?}", file_name, e
-                                );
-                                vec![file_name]
-                            }
+                            extracted
+                                .iter()
+                                .map(|p| temp_dir_path.join(p).to_string_lossy().to_string())
+                                .collect()
+                        }
+                        Err(e) => {
+                            warn!(
+                                log,
+                                "failed to extract archive file '{}' due to {:?}", file_name, e
+                            );
+                            vec![file_name]
                         }
                     }
                 } else {
@@ -1231,19 +1287,21 @@ mod tests {
         let files = list_archive_contents(source).unwrap();
         let source = std::fs::File::open("tests/unzip_ex001.7z").unwrap();
         let shall_cancel = Arc::new(AtomicBool::new(false));
-        let nr_extracted = extract_to_dir(
+        let extracted = extract_to_dir(
             source,
             target_dir,
             Some(files[2..4].to_owned()),
+            &HashMap::new(),
             &shall_cancel,
         )
         .expect("extract_to_dir failed");
         let duration = start_time.elapsed();
         println!(
             "extract_to_dir() took {:?} and extracted {} files",
-            duration, nr_extracted
+            duration,
+            extracted.len()
         );
-        assert_eq!(nr_extracted, 2);
+        assert_eq!(extracted.len(), 2);
         // verify content:
         let target_dir = target_dir.join("tests");
         let target_files = std::fs::read_dir(target_dir).unwrap();
@@ -1280,14 +1338,15 @@ mod tests {
             .seek(std::io::SeekFrom::Start(0))
             .expect("failed to seek");
         let shall_cancel = Arc::new(AtomicBool::new(false));
-        let nr_extracted =
-            extract_to_dir(source, target_dir, None, &shall_cancel).expect("extract_to_dir failed");
+        let extracted = extract_to_dir(source, target_dir, None, &HashMap::new(), &shall_cancel)
+            .expect("extract_to_dir failed");
         let duration = start_time.elapsed();
         println!(
             "extract_to_dir() took {:?} and extracted {} files",
-            duration, nr_extracted
+            duration,
+            extracted.len()
         );
-        assert_eq!(nr_extracted, 1);
+        assert_eq!(extracted.len(), 1);
     }
 
     #[cfg(feature = "libarchive")]
@@ -1396,5 +1455,35 @@ mod tests {
         println!("extracted files: {:?}", files);
         assert_eq!(files.len(), 1);
         assert_eq!(temp_dirs.len(), 1);
+    }
+
+    #[cfg(feature = "libarchive")]
+    #[test]
+    fn extract_archives_bz2() {
+        let mut temp_dirs = vec![];
+        let shall_cancel = Arc::new(AtomicBool::new(false));
+        let log = new_logger();
+
+        for file_name_glob in [
+            "tests/lc_ex005.dlt.bz2",
+            "tests/lc_ex005.dlt.bz2!/**/*.dlt",
+            "tests/lc_ex005.dlt.bz2!/lc_ex005.dlt",
+        ] {
+            let files = extract_archives(
+                file_name_glob.to_string(),
+                &mut temp_dirs,
+                &shall_cancel,
+                &log,
+            );
+            println!("extracted files for '{}': {:?}", file_name_glob, files);
+            assert_eq!(files.len(), 1);
+            assert!(
+                files[0].ends_with("/lc_ex005.dlt"),
+                "failed for '{}', files[0]={}",
+                file_name_glob,
+                files[0]
+            );
+            assert_eq!(temp_dirs.len(), 1, "files={:?}", files); // should stay at 1 as we reuse!
+        }
     }
 }

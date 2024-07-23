@@ -1305,12 +1305,22 @@ fn fs_cmd_archive(
                 let sources = paths.into_iter().flat_map(std::fs::File::open).collect();
                 SeekableChain::new(sources)
             } else {
-                SeekableChain::new(vec![std::fs::File::open(archive_path)?])
+                SeekableChain::new(vec![std::fs::File::open(&archive_path)?])
             };
             return match cmd {
                 "readDirectory" => {
                     let files = list_archive_contents(&mut source).unwrap();
                     // info!(log, "got files:{:?}", files);
+
+                    // special handling for e.g. bz2, .gz... where a single file is within the archive with "unknown" name ("data"):
+                    if files.len() == 1 && files[0] == "data" {
+                        let archive_name = archive_path
+                            .file_stem()
+                            .map(|f| f.to_string_lossy())
+                            .unwrap_or("data".into());
+                        return Ok(serde_json::json!([{"name": archive_name ,"type":"file"}]));
+                    }
+
                     let entries: Vec<_> = archive_contents_read_dir(&files, path_within)
                         .map(|(name, entry_type)| {
                             serde_json::json!({
@@ -1323,6 +1333,12 @@ fn fs_cmd_archive(
                 }
                 "stat" => {
                     let files = list_archive_contents(&mut source).unwrap();
+                    // special handling for e.g. bz2, .gz... where a single file is within the archive with "unknown" name ("data"):
+                    if files.len() == 1 && files[0] == "data" {
+                        return Ok(
+                            serde_json::json!({"stat":{"size": 42 ,"type":"file", "mtime":0, "ctime":0}}),
+                        );
+                    }
                     match archive_contents_metadata(&files, path_within) {
                         Ok((meta_type, meta_size)) => {
                             Ok(serde_json::json!({"stat":{
