@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.60.0 - 2024-07-24
+#### Features
+- use cache for list_archive_contents - (a8b3907) - Matthias Behr
+
+- - -
+
 ## v0.59.0 - 2024-07-23
 #### Bug Fixes
 - **(unzip)** single archive files and reuse - (6835986) - Matthias Behr
