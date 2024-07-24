@@ -21,7 +21,7 @@ use adlt::{
         unzip::{
             archive_contents_metadata, archive_contents_read_dir, archive_get_path_and_glob,
             archive_is_supported_filename, archive_supported_fileexts, extract_archives,
-            is_part_of_multi_volume_archive, list_archive_contents,
+            is_part_of_multi_volume_archive, list_archive_contents_cached,
             search_dir_for_multi_volume_archive,
         },
         DltFileInfos, LowMarkBufReader,
@@ -1309,7 +1309,9 @@ fn fs_cmd_archive(
             };
             return match cmd {
                 "readDirectory" => {
-                    let files = list_archive_contents(&mut source).unwrap();
+                    let files =
+                        list_archive_contents_cached(&mut source, &archive_path.to_string_lossy())
+                            .unwrap();
                     // info!(log, "got files:{:?}", files);
 
                     // special handling for e.g. bz2, .gz... where a single file is within the archive with "unknown" name ("data"):
@@ -1332,7 +1334,9 @@ fn fs_cmd_archive(
                     Ok(serde_json::json!(entries))
                 }
                 "stat" => {
-                    let files = list_archive_contents(&mut source).unwrap();
+                    let files =
+                        list_archive_contents_cached(&mut source, &archive_path.to_string_lossy())
+                            .unwrap();
                     // special handling for e.g. bz2, .gz... where a single file is within the archive with "unknown" name ("data"):
                     if files.len() == 1 && files[0] == "data" {
                         return Ok(
