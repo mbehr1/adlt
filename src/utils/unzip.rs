@@ -2,6 +2,7 @@
 /// [] check whether extracted files have proper metadata (time...)
 use lazy_static::lazy_static;
 
+use cached::proc_macro::cached;
 use regex::Regex;
 use slog::{info, warn};
 use std::{
@@ -223,6 +224,21 @@ pub fn group_by_archive_multi_vol(filenames: Vec<String>) -> Vec<Vec<String>> {
         }
     }
     groups
+}
+
+#[cached(
+    size = 100,
+    time = 60,
+    time_refresh = true,
+    result = true,
+    key = "String",
+    convert = r#"{ _cache_key.to_string() }"#
+)]
+pub fn list_archive_contents_cached(
+    source: impl Read + Seek + super::cloneable_seekable_reader::HasLength,
+    _cache_key: &str,
+) -> Result<Vec<String>, std::io::Error> {
+    list_archive_contents(source)
 }
 
 pub fn list_archive_contents<RS: Read + Seek + super::cloneable_seekable_reader::HasLength>(
@@ -770,7 +786,7 @@ pub fn extract_archives(
             .unwrap_or("data".into());
         let mut rename_map: HashMap<String, String> = HashMap::new();
 
-        match list_archive_contents(&mut archive) {
+        match list_archive_contents_cached(&mut archive, &archive_path.to_string_lossy()) {
             Ok(archive_contents) => {
                 archive
                     .seek(std::io::SeekFrom::Start(0))
@@ -1075,6 +1091,52 @@ mod tests {
             files.len()
         );
         assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn unzip_list_mult_vol_cached() {
+        // part 1, read all into a vec:
+        let parts = vec![
+            std::fs::File::open("tests/test_volume10k.zip.001").unwrap(),
+            std::fs::File::open("tests/test_volume10k.zip.002").unwrap(),
+            std::fs::File::open("tests/test_volume10k.zip.003").unwrap(),
+            std::fs::File::open("tests/test_volume10k.zip.004").unwrap(),
+            std::fs::File::open("tests/test_volume10k.zip.005").unwrap(),
+            std::fs::File::open("tests/test_volume10k.zip.006").unwrap(),
+            std::fs::File::open("tests/test_volume10k.zip.007").unwrap(),
+        ];
+        let mut zip_data = Vec::new();
+        for mut part in &parts {
+            part.read_to_end(&mut zip_data).unwrap();
+        }
+        // Wrap `zip_data` in a Cursor to provide it with `Read` and `Seek` capabilities
+        let cursor = Cursor::new(zip_data);
+        let start_time = Instant::now();
+        let files = list_archive_contents_cached(cursor, "vol10k").unwrap();
+        let duration = start_time.elapsed();
+        println!(
+            "list_archive_contents_cached() took {:?} and returned {} file names",
+            duration,
+            files.len()
+        );
+
+        // provide wrong data to show that the cache is in use
+        let parts = vec![std::fs::File::open("tests/test_volume10k.zip.003").unwrap()];
+        let mut zip_data = Vec::new();
+        for mut part in &parts {
+            part.read_to_end(&mut zip_data).unwrap();
+        }
+        // Wrap `zip_data` in a Cursor to provide it with `Read` and `Seek` capabilities
+        let cursor = Cursor::new(zip_data);
+        let start_time = Instant::now();
+        let files_cached = list_archive_contents_cached(cursor, "vol10k").unwrap();
+        let duration = start_time.elapsed();
+        println!(
+            "list_archive_contents_cached() took {:?} and returned {} file names",
+            duration,
+            files_cached.len()
+        );
+        assert_eq!(files, files_cached);
     }
 
     #[test]
