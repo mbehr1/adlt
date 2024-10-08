@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.61.0 - 2024-10-08
+#### Features
+- **(remote)** one_pass streams - (e12b3e1) - Matthias Behr
+#### Miscellaneous Chores
+- clippy warnings - (41c6edc) - Matthias Behr
+
+- - -
+
 ## v0.60.0 - 2024-07-24
 #### Features
 - use cache for list_archive_contents - (a8b3907) - Matthias Behr
