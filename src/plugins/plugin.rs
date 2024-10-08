@@ -80,15 +80,16 @@ type ApplyCommandFn = fn(
 ///
 /// The state consists of a json object (value) with at least the members:
 /// - name: <name of the plugin>
+///
 /// optional:
 /// - treeItems: Array of objects with
 ///  - label:String
 ///  - children -> json objects with similar structure
-///  optional members:
+///    optional members:
 ///  - tooltip:String
 ///  - description:String
 ///  - iconPath:String (see https://code.visualstudio.com/api/references/icons-in-labels#icon-listing)
-///  to ease presentation in a treeview (https://code.visualstudio.com/api/references/vscode-api#TreeItem)
+///    to ease presentation in a treeview (https://code.visualstudio.com/api/references/vscode-api#TreeItem)
 ///
 /// Two other members are used to interact with a plugin:
 /// - apply_command : optional fn that will be called e.g. from remote plugin_cmd. Current use-case: FileTransferPlugin "save"

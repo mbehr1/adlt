@@ -291,7 +291,8 @@ impl ExportPlugin {
     ///
     /// 1. the lci information is from a "matured" lifecycle (i.e. we have seen all (or at least most) messages of it)
     /// 2. we do the check very early for the lc as we determine it from the first messages that have a "not seen yet"
-    /// lifecycle.id.
+    ///    lifecycle.id.
+    ///
     /// So the lc lifecycle the start can move to earlier and the end will grow to later.
     ///  
     fn keep_lifecycle(lci: &LifecycleInfo, ecu: &DltChar4, lc: &Lifecycle) -> bool {

@@ -736,7 +736,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     match output_style {
                         OutputStyle::HeaderOnly => {
                             msg.header_as_text_to_write( &mut writer_screen)?;
-                            writer_screen.write_all(&[b'\n'])?;
+                            writer_screen.write_all(b"\n")?;
                             did_output = true;
                         }
                         OutputStyle::Ascii => {
@@ -746,9 +746,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                         }
                         OutputStyle::Hex => {
                             msg.header_as_text_to_write(&mut writer_screen)?;
-                            writer_screen.write_all(&[b' ',b'['])?;
+                            writer_screen.write_all(b" [")?;
                             buf_as_hex_to_io_write(&mut writer_screen, &msg.payload)?;
-                            writer_screen.write_all(&[b']',b'\n'])?;
+                            writer_screen.write_all(b"]\n")?;
                             did_output = true;
                         }
                         _ => {
@@ -861,13 +861,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 error!(log, "plugin_thread join got Err {:?}", s);
                 Vec::new()
             }
-            Ok(s) => {
-                if let Ok(plugins) = s {
-                    plugins
-                } else {
-                    Vec::new()
-                }
-            }
+            Ok(s) => s.unwrap_or_default(),
         }
     } else {
         Vec::new()
@@ -965,11 +959,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                         writeln!(
                             writer_screen,
                             " {}",
-                            if let Some(warn) = warning.as_str() {
-                                warn
-                            } else {
-                                "<unknown type of warning!>"
-                            }
+                            warning.as_str().unwrap_or("<unknown type of warning!>")
                         )?;
                     }
                 }
