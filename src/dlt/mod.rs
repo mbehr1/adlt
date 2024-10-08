@@ -726,8 +726,11 @@ impl DltMessage {
     /// - standard header
     /// - extended header
     /// - payload
+    ///
     /// Doesn't try to do "atomic" writes, might fail on io errors with partial writes.
+    ///
     /// session_id not supported yet.
+    ///
     /// Payload endian format is taken from the msg.
     pub fn to_write(&self, writer: &mut impl std::io::Write) -> Result<(), std::io::Error> {
         let storage_header = DltStorageHeader::from_msg(self);
@@ -784,9 +787,9 @@ impl DltMessage {
                 }
             }
             if self.is_verbose() {
-                writer.write_all(&[b' ', b'V'])?;
+                writer.write_all(b" V")?;
             } else {
-                writer.write_all(&[b' ', b'N'])?;
+                writer.write_all(b" N")?;
             }
         } else {
             writer.write_all(b"--- --- N -")?;

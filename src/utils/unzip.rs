@@ -53,6 +53,7 @@ use std::{
 /// Two formats are supported:
 ///  - foo.zip/... and
 ///  - foo.zip!/...
+///
 /// The functions does this by checking whether any ancestor the of path does exist.
 /// So it's not a parsing of it but needs a real file on disk.
 ///
