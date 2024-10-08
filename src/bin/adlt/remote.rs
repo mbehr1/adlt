@@ -171,12 +171,10 @@ pub fn remote(
             loop {
                 // 1st step any new messages to process
                 if let Some(ref mut fc) = file_context {
-                    if !fc.paused {
-                        let r = process_file_context(&log, fc, &mut websocket);
-                        if r.is_err() {
-                            warn!(log, "ws process_file_context returned err {:?}", r);
-                            break;
-                        }
+                    let r = process_file_context(&log, fc, &mut websocket);
+                    if r.is_err() {
+                        warn!(log, "ws process_file_context returned err {:?}", r);
+                        break;
                     }
                 }
 
@@ -252,6 +250,13 @@ type SetOfEcuIds = HashSet<DltChar4>;
 type StreamEntry = (SetOfEcuIds, Vec<(u64, String, DltFileInfos)>);
 type ProgressPendingExtract = ProgressNonAsyncFuture<(Vec<StreamEntry>, Vec<(String, TempDir)>)>;
 
+#[derive(Debug, PartialEq)]
+enum CollectMode {
+    All,
+    OnePassStreams,
+    None,
+}
+
 #[derive(Debug)]
 struct FileContext {
     pending_extract: Option<ProgressPendingExtract>,
@@ -262,8 +267,10 @@ struct FileContext {
     plugins_active: Vec<Box<dyn Plugin + Send>>, // will be moved to parsing_thread
     plugin_states: Vec<(u32, Arc<RwLock<PluginState>>)>,
     parsing_thread: Option<ParserThreadType>,
-    collect_all_msgs: bool,
+    collect_mode: CollectMode,
     all_msgs: Vec<adlt::dlt::DltMessage>,
+    /// drained/removed from the start of all_msgs.. Used for collect_mode=OnePassStreams
+    drained_all_msgs: usize,
     streams: Vec<StreamContext>,
     paused: bool,
     /// we did send lifecycles with that lcs_w_refresh_idx
@@ -326,9 +333,32 @@ impl FileContext {
             _ => false, // we default to non sorted
         };
 
-        let collect_all_msgs = match &v["collect"] {
-            serde_json::Value::Bool(b) => *b,
-            _ => true, // we default to "do collect"
+        let collect_mode: CollectMode = match &v["collect"] {
+            serde_json::Value::Bool(b) => {
+                if *b {
+                    CollectMode::All
+                } else {
+                    CollectMode::None
+                }
+            }
+            serde_json::Value::String(s) => match s.as_str() {
+                "all" | "true" => CollectMode::All,
+                "one_pass_streams" => CollectMode::OnePassStreams,
+                "none" | "false" => CollectMode::None,
+                s => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("invalid value ({s}) for 'collect'. Use 'all', 'one_pass_streams' or 'none'."),
+                    ))
+                }
+            },
+            _ => CollectMode::All, // we default to "do collect"
+        };
+        // we default to not paused except for OnePassStreams
+        let paused = match collect_mode {
+            CollectMode::All => false,
+            CollectMode::OnePassStreams => true,
+            CollectMode::None => false,
         };
 
         if file_names.is_empty() {
@@ -407,10 +437,12 @@ impl FileContext {
                 sum_file_len,
                 all_msgs_len_estimate
             );
-            let all_msgs = Vec::with_capacity(if collect_all_msgs {
-                std::cmp::min(all_msgs_len_estimate as usize, u32::MAX as usize)
-            } else {
-                0
+            let all_msgs = Vec::with_capacity(match collect_mode {
+                CollectMode::All => {
+                    std::cmp::min(all_msgs_len_estimate as usize, u32::MAX as usize)
+                }
+                CollectMode::OnePassStreams => 1024 * 1024, // todo better heuristics?
+                CollectMode::None => 0,
             });
             (None, all_msgs, input_file_streams)
         };
@@ -454,10 +486,11 @@ impl FileContext {
             plugins_active,
             plugin_states,
             parsing_thread: None,
-            collect_all_msgs,
+            collect_mode,
             all_msgs,
+            drained_all_msgs: 0,
             streams: Vec::new(),
-            paused: false,
+            paused,
             last_lcs_w_refresh_index: 0,
             eac_stats,
             eac_next_send_time: std::time::Instant::now() + std::time::Duration::from_secs(2), // after 2 secs the first update
@@ -569,7 +602,7 @@ fn file_names_to_file_streams(
 ///     - `sort`: "index" (default) or "time"
 ///     - `type`: "snapshot" (dont update on new incoming dlt messages) or "stream" (default, stream new messages to client on any incoming new DLT messages parsed )
 ///     - `window`: Array as pair of start_idx (incl.) end_idx (non-incl.) todo add command to update window for a stream. Default [0...usize::MAX]
-///     Returns a stream_id. And guarantues that no msg is streamed before the answer is send with that stream_id.
+///       Returns a stream_id. And guarantues that no msg is streamed before the answer is send with that stream_id.
 /// - `stop` stream_id
 ///   - Stop streaming from the requested stream_id.
 /// - `close`
@@ -726,38 +759,53 @@ fn process_incoming_text_message<T: Read + Write>(
         "stream" | "query" => {
             match file_context {
                 Some(fc) => {
-                    if fc.collect_all_msgs {
-                        let stream = StreamContext::from(log, command, params);
-                        match stream {
-                            Ok(stream) => {
-                                websocket
-                                    .write_message(Message::Text(format!(
-                                        "ok: {} {{\"id\":{}, \"number_filters\":[{},{},{}]}}",
-                                        command,
-                                        stream.id,
-                                        stream.filters[FilterKind::Positive].len(),
-                                        stream.filters[FilterKind::Negative].len(),
-                                        stream.filters[FilterKind::Event].len()
-                                    )))
-                                    .unwrap(); // todo
-                                fc.streams.push(stream);
-                            }
-                            Err(e) => {
-                                websocket
-                                    .write_message(Message::Text(format!(
-                                        "err: {} failed with err '{}' from '{}'!",
-                                        command, e, params
-                                    )))
-                                    .unwrap(); // todo
+                    match fc.collect_mode {
+                        CollectMode::All | CollectMode::OnePassStreams => {
+                            // todo additional checks for 1pass streams like: need to be paused, no msgs skipped yet,...
+                            let stream = StreamContext::from(log, command, params);
+                            match stream {
+                                Ok(stream) => {
+                                    if !stream.one_pass
+                                        && fc.collect_mode == CollectMode::OnePassStreams
+                                    {
+                                        websocket
+                                            .write_message(Message::Text(format!(
+                                                "err: {} failed as open option 'collect:'one_pass_streams'' was used. Only one_pass streams supported.",
+                                                command
+                                            )))
+                                            .unwrap(); // todo
+                                    } else {
+                                        websocket
+                                            .write_message(Message::Text(format!(
+                                            "ok: {} {{\"id\":{}, \"number_filters\":[{},{},{}]}}",
+                                            command,
+                                            stream.id,
+                                            stream.filters[FilterKind::Positive].len(),
+                                            stream.filters[FilterKind::Negative].len(),
+                                            stream.filters[FilterKind::Event].len()
+                                        )))
+                                            .unwrap(); // todo
+                                        fc.streams.push(stream);
+                                    }
+                                }
+                                Err(e) => {
+                                    websocket
+                                        .write_message(Message::Text(format!(
+                                            "err: {} failed with err '{}' from '{}'!",
+                                            command, e, params
+                                        )))
+                                        .unwrap(); // todo
+                                }
                             }
                         }
-                    } else {
-                        websocket
+                        CollectMode::None => {
+                            websocket
                         .write_message(Message::Text(format!(
                             "err: {} failed as open option 'collect:false' was used. Stream not supported then.",
                             command
                         )))
                         .unwrap(); // todo
+                        }
                     }
                 }
                 None => {
@@ -777,10 +825,11 @@ fn process_incoming_text_message<T: Read + Write>(
                 Ok(id) => {
                     match file_context {
                         Some(fc) => {
+                            // todo add check for !stream.one_pass
                             if let Some(pos) = fc.streams.iter().position(|x| x.id == id) {
                                 match command {
                                     "stream_search" => {
-                                        // search within the stram for all messages matching the filters:
+                                        // search within the stream for all messages matching the filters:
                                         let stream = &fc.streams[pos];
                                         if let Err(e) = process_stream_search_params(
                                             log,
@@ -1124,7 +1173,7 @@ fn process_incoming_text_message<T: Read + Write>(
 /// # Returns
 ///
 /// * A `&str` representing the type of the file. Possible values are "dir", "file", "symlink_dir", "symlink_file", "symlink" and "unknown".
-/// For symlinks the type of the target is returned (symlink_dir, symlink_file or symlink).
+///   For symlinks the type of the target is returned (symlink_dir, symlink_file or symlink).
 ///
 /// # Example
 ///
@@ -1710,6 +1759,9 @@ fn process_file_context<T: Read + Write>(
         }
     };
 
+    if fc.paused {
+        return Ok(());
+    }
     if let Some(pt) = &fc.parsing_thread {
         let rx = &pt.rx;
         loop {
@@ -1718,8 +1770,11 @@ fn process_file_context<T: Read + Write>(
             match rm {
                 Ok(msg) => {
                     fc.eac_stats.add_msg(&msg);
-                    if fc.collect_all_msgs {
-                        fc.all_msgs.push(msg);
+                    match fc.collect_mode {
+                        CollectMode::All | CollectMode::OnePassStreams => {
+                            fc.all_msgs.push(msg);
+                        }
+                        _ => {}
                     }
                     got_new_msgs = true;
                 }
@@ -1741,10 +1796,10 @@ fn process_file_context<T: Read + Write>(
     // inform about new msgs
     if got_new_msgs && websocket.can_write() {
         // todo debounce this a bit? (eg with eac stats?)
-        let nr_msgs = if fc.collect_all_msgs {
-            fc.all_msgs.len() as u32
-        } else {
-            fc.eac_stats.nr_msgs()
+        let nr_msgs = match fc.collect_mode {
+            CollectMode::All => fc.all_msgs.len() as u32,
+            CollectMode::OnePassStreams => (fc.all_msgs.len() + fc.drained_all_msgs) as u32,
+            CollectMode::None => fc.eac_stats.nr_msgs(),
         };
         // send on new msgs or once if finished
         websocket.write_message(Message::Binary(
@@ -1845,14 +1900,15 @@ fn process_file_context<T: Read + Write>(
 
     let mut stream_marked_as_done = false;
     // in any stream any messages to send?
-    let all_msgs_len = fc.all_msgs.len();
+    let all_msgs_len = fc.all_msgs.len() + fc.drained_all_msgs;
     for stream in &mut fc.streams {
         let last_all_msgs_last_processed_len =
             std::cmp::min(stream.all_msgs_last_processed_len, all_msgs_len);
+        // assert!(last_all_msgs_last_processed_len >= fc.drained_all_msgs);
         process_stream_new_msgs(
             stream,
             last_all_msgs_last_processed_len,
-            &fc.all_msgs[last_all_msgs_last_processed_len..],
+            &fc.all_msgs[last_all_msgs_last_processed_len - fc.drained_all_msgs..],
             3_000_000,
         );
 
@@ -1901,7 +1957,8 @@ fn process_file_context<T: Read + Write>(
                         } else {
                             i
                         };
-                        let msg = &fc.all_msgs[msg_idx];
+                        // assert!(msg_idx >= fc.drained_all_msgs);
+                        let msg = &fc.all_msgs[msg_idx - fc.drained_all_msgs];
                         let payload_as_text = msg.payload_as_text().unwrap_or_default();
                         let bin_msg = remote_types::BinDltMsg {
                             index: msg.index,
@@ -1954,7 +2011,7 @@ fn process_file_context<T: Read + Write>(
                     } else {
                         i
                     };
-                    fc.all_msgs[msg_idx]
+                    fc.all_msgs[msg_idx - fc.drained_all_msgs]
                         .header_as_text_to_write(&mut writer)
                         .unwrap();
                     let data = writer.into_inner().unwrap();
@@ -1967,9 +2024,15 @@ fn process_file_context<T: Read + Write>(
                 }
             }
             stream.msgs_sent.end = new_end;
+            // todo for one_pass streams drain the filtered_msgs as well!
+
             //info!(log, "stream #{} did send {:?}", stream.id, stream.msgs_sent);
         }
-        if ((!got_new_msgs && (stream.all_msgs_last_processed_len >= all_msgs_len)) // no new msgs and all processed
+        // for queries (not streams), check whether query is done:
+        if ((
+            ((!got_new_msgs && !(fc.collect_mode==CollectMode::OnePassStreams))
+                ||(parser_thread_finished && fc.collect_mode == CollectMode::OnePassStreams)) 
+            && (stream.all_msgs_last_processed_len >= all_msgs_len)) // no new msgs and all processed
             || (stream.msgs_sent.end >= stream.msgs_to_send.end)) // or window size achieved
             && !stream.is_stream
         {
@@ -1988,12 +2051,33 @@ fn process_file_context<T: Read + Write>(
         fc.streams.retain(|stream| !stream.is_done);
     }
 
+    if fc.collect_mode == CollectMode::OnePassStreams {
+        // drain messages that are not needed any longer
+        // from active streams determine min of all_msgs_last_processed_len
+        let min_all_msgs_last_processed_len = fc
+            .streams
+            .iter()
+            .map(|s| s.all_msgs_last_processed_len)
+            .min()
+            .unwrap_or(all_msgs_len);
+        // we do assume that the streams dont need to send that msgs later on...
+        // todo add assert
+
+        // assert!(min_all_msgs_last_processed_len >= fc.drained_all_msgs);
+        let amount_to_drain = min_all_msgs_last_processed_len.saturating_sub(fc.drained_all_msgs);
+        if amount_to_drain > 0 {
+            debug!(log, "draining {} msgs", amount_to_drain);
+            fc.drained_all_msgs += amount_to_drain;
+            fc.all_msgs.drain(0..amount_to_drain);
+        }
+    }
+
     if parser_thread_finished && !fc.did_inform_parser_processing_finished {
         // we want this to be the last msg (so once lifecycle and eac are sent)
-        let nr_msgs = if fc.collect_all_msgs {
-            fc.all_msgs.len() as u32
-        } else {
-            fc.eac_stats.nr_msgs()
+        let nr_msgs = match fc.collect_mode {
+            CollectMode::All => fc.all_msgs.len() as u32,
+            CollectMode::OnePassStreams => (fc.all_msgs.len() + fc.drained_all_msgs) as u32,
+            CollectMode::None => fc.eac_stats.nr_msgs(),
         };
         // send on new msgs or once if finished
         websocket.write_message(Message::Binary(
@@ -2571,11 +2655,198 @@ mod tests {
         process_incoming_text_message(&log, r#"query {}"#.to_string(), &mut fc, &mut ws);
 
         let mut fc = fc.unwrap();
-        assert!(!fc.collect_all_msgs);
+        assert!(matches!(fc.collect_mode, CollectMode::None));
 
         let a = process_file_context(&log, &mut fc, &mut ws);
         assert!(a.is_ok(), "a={:?}", a);
         assert!(fc.all_msgs.is_empty());
+
+        // wait >2s to send eac info to the client as well
+        std::thread::sleep(Duration::from_millis(2010));
+        loop {
+            let a = process_file_context(&log, &mut fc, &mut ws);
+            assert!(a.is_ok(), "a={:?}", a);
+            assert!(fc.all_msgs.is_empty());
+
+            // the example file is small so within >2s we expect all msgs to be processed:
+            if fc.eac_stats.nr_msgs() >= 52451 {
+                break;
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert_eq!(fc.eac_stats.nr_msgs(), 52451);
+        let (remote_file_info_nr_msgs, remote_eac, remote_lcs, remote_text_msgs) =
+            t.join().unwrap();
+        assert!(remote_text_msgs.iter().any(|t| t.starts_with("ok: open ")));
+        assert!(remote_text_msgs
+            .iter()
+            .any(|t| t.starts_with("err: stream failed")));
+        assert!(remote_text_msgs
+            .iter()
+            .any(|t| t.starts_with("err: query failed")));
+
+        assert_eq!(remote_file_info_nr_msgs, 52451);
+        let remote_eac = remote_eac.unwrap();
+        assert_eq!(remote_eac.len(), 1);
+        assert_eq!(remote_eac.iter().map(|eac| eac.nr_msgs).sum::<u32>(), 52451);
+        let remote_lcs = remote_lcs.unwrap();
+        assert_eq!(remote_lcs.len(), 2);
+        assert_eq!(remote_lcs.iter().map(|lc| lc.nr_msgs).sum::<u32>(), 52451);
+    }
+
+    #[test]
+    /// test a remote "open" command with 'collect:"one_pass_streams"' that can be used to
+    /// use streams that cannot be seeked, searched,... but no messages are collected
+    /// so it has little memory usage and is used e.g. by fba-cli to execute once all fishbone queries
+
+    fn process_file_context_one_pass_streams() {
+        let log = new_logger();
+        let port = pick_unused_port().expect("no ports free");
+        let server = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+
+        // spawn a thread to connect to the server
+        let t = std::thread::spawn(move || {
+            let mut ws = tungstenite::client::connect(format!("ws://127.0.0.1:{}", port))
+                .unwrap()
+                .0;
+            println!("got client websocket");
+            if let tungstenite::stream::MaybeTlsStream::<std::net::TcpStream>::Plain(stream) =
+                ws.get_mut()
+            {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+            }
+            let mut file_info_nr_msgs = 0;
+            let mut last_eac = None;
+            let mut last_lcs: Option<Vec<BinLifecycle>> = None;
+            let mut text_msgs: Vec<String> = vec![];
+            while let Ok(msg) = ws.read_message() {
+                match msg {
+                    Message::Binary(d) => {
+                        if let Ok((btype, _)) = bincode::decode_from_slice::<remote_types::BinType, _>(
+                            &d,
+                            BINCODE_CONFIG,
+                        ) {
+                            match btype {
+                                BinType::Progress(p) => {
+                                    println!(
+                                        "got progress: {} {}/{}",
+                                        p.action, p.cur_progress, p.max_progress
+                                    );
+                                }
+                                BinType::FileInfo(s) => {
+                                    println!("got file info: nr_msgs={}", s.nr_msgs);
+                                    file_info_nr_msgs = s.nr_msgs;
+                                }
+                                BinType::Lifecycles(lcs) => {
+                                    println!(
+                                        "got {} lifecycles: {:? }",
+                                        lcs.len(),
+                                        lcs.iter()
+                                            .map(|lc| format!(
+                                                "{}:{} #msgs={}",
+                                                lc.id, lc.ecu, lc.nr_msgs
+                                            ))
+                                            .collect::<Vec<String>>()
+                                    );
+                                    if let Some(last_lcs) = &mut last_lcs {
+                                        // merge
+                                        for lc in lcs {
+                                            if let Some(last_lc) = last_lcs
+                                                .iter_mut()
+                                                .find(|last_lc| last_lc.id == lc.id)
+                                            {
+                                                last_lc.nr_msgs = lc.nr_msgs;
+                                            } else {
+                                                last_lcs.push(lc);
+                                            }
+                                        }
+                                    } else {
+                                        last_lcs = Some(lcs);
+                                    }
+                                }
+                                BinType::EacInfo(eac) => {
+                                    println!("got eac: {:?}", eac.len());
+                                    last_eac = Some(eac);
+                                }
+                                BinType::PluginState(ps) => {
+                                    println!("got plugin state: {:?}", ps);
+                                }
+                                BinType::StreamInfo(si) => {
+                                    println!(
+                                        "got stream info: nr_file_msgs_total={}",
+                                        si.nr_file_msgs_total
+                                    );
+                                }
+                                BinType::DltMsgs((stream_id, msgs)) => {
+                                    println!(
+                                        "got dlt msgs: stream_id={} msgs={}",
+                                        stream_id,
+                                        msgs.len()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Message::Text(s) => {
+                        println!("got text msg: {}", s);
+                        text_msgs.push(s);
+                    }
+                    _ => {
+                        println!("got other msg: {:?}", msg);
+                    }
+                }
+            }
+            ws.write_message(tungstenite::protocol::Message::Text("quit".to_string()))
+                .unwrap();
+            println!("closed client websocket");
+            (file_info_nr_msgs, last_eac, last_lcs, text_msgs)
+        });
+
+        let stream = server.incoming().next().unwrap().unwrap();
+        println!("got incoming stream");
+        let mut ws = tungstenite::accept(stream).unwrap();
+        println!("got incoming websocket");
+
+        let mut fc = None;
+        process_incoming_text_message(
+            &log, // lc_ex002 changes later to merged lifecycles... (so use _ex004)
+            r#"open {"sort":true, "collect":"one_pass_streams", "files":["tests/lc_ex004.dlt"]}"#
+                .to_string(),
+            &mut fc,
+            &mut ws,
+        );
+        assert!(fc.is_some());
+
+        if let Some(fc) = &mut fc {
+            assert!(matches!(fc.collect_mode, CollectMode::OnePassStreams));
+            assert!(fc.paused)
+        }
+
+        // check that generic streams/queries are rejected:
+        process_incoming_text_message(&log, r#"stream {}"#.to_string(), &mut fc, &mut ws);
+        process_incoming_text_message(&log, r#"query {}"#.to_string(), &mut fc, &mut ws);
+
+        // as fc is paused it should be a no op
+        if let Some(fc) = &mut fc {
+            let a = process_file_context(&log, fc, &mut ws);
+            assert!(a.is_ok(), "a={:?}", a);
+            assert!(fc.all_msgs.is_empty());
+        }
+
+        // now add a stream and unpause:
+        process_incoming_text_message(
+            &log,
+            r#"stream {"one_pass":true, "binary":true}"#.to_string(),
+            &mut fc,
+            &mut ws,
+        );
+        let mut fc = fc.unwrap();
+
+        assert!(matches!(fc.collect_mode, CollectMode::OnePassStreams));
+        fc.paused = false;
 
         // wait >2s to send eac info to the client as well
         std::thread::sleep(Duration::from_millis(2010));

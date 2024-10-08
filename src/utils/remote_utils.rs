@@ -10,6 +10,7 @@ pub struct StreamContext {
     pub id: u32,
     pub is_done: bool,   // stop message is sent
     pub is_stream: bool, // else one-time query
+    pub one_pass: bool,  // supports no window changes, no search,...
     pub binary: bool,
     pub filters_active: bool,
     pub filters: FilterKindContainer<Vec<Filter>>,
@@ -87,7 +88,12 @@ impl StreamContext {
             }
         }
 
-        let binary = match &v["binary"] {
+        let one_pass = *match &v["one_pass"] {
+            serde_json::Value::Bool(b) => b,
+            _ => &false,
+        };
+
+        let binary = *match &v["binary"] {
             serde_json::Value::Bool(b) => b,
             _ => {
                 if is_stream {
@@ -108,7 +114,8 @@ impl StreamContext {
             id: NEXT_STREAM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             is_done: false,
             is_stream,
-            binary: *binary,
+            one_pass,
+            binary,
             filters,
             filters_active,
             filtered_msgs: Vec::new(),
