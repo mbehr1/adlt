@@ -22,6 +22,7 @@ on:
     # Enable when testing release infrastructure on a branch.
     branches:
       - ci/release*
+      - ci/build_*
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 jobs:
@@ -69,7 +70,7 @@ jobs:
       RUST_BACKTRACE: 1
     strategy:
       matrix:
-        build: [linux, linux-arm, linux-aarch64, macos, macos-arm, win-msvc]
+        build: [linux, linux-arm, linux-aarch64, macos, macos-arm, win-msvc, win32-arm64]
         include:
           - build: linux
             os: ubuntu-latest
@@ -97,6 +98,11 @@ jobs:
             rust: stable
             target: x86_64-pc-windows-msvc
             features: --features="libarchive"
+          - build: win32-arm64
+            os: windows-latest # win on arm runners are not available yet as standard runners
+            rust: stable
+            target: aarch64-pc-windows-msvc # arm64ec-pc-windows-msvc # aarch64-pc-windows-msvc might use as well if we have non x86 dependencies
+            # features: --features="libarchive"
 
     steps:
       - name: Checkout repository
@@ -126,7 +132,7 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
-      - name: Install packages (Windows x86_64)
+      - name: Install packages (Windows x86_64 or arm64)
         if: matrix.os == 'windows-latest'
         run: vcpkg integrate install; vcpkg install libarchive:x64-windows-static
         env:
@@ -141,7 +147,7 @@ jobs:
       - name: Use Cross
         shell: bash
         run: |
-          cargo install cross --vers 0.2.1
+          cargo install cross --vers 0.2.5
           echo "CARGO=cross" >> $GITHUB_ENV
           echo "TARGET_FLAGS=--target ${{ matrix.target }}" >> $GITHUB_ENV
           echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
