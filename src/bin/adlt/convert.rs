@@ -677,6 +677,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
             // debug function: verify sort order
             let mut last_timestamp_by_lc_map= BTreeMap::<adlt::lifecycle::LifecycleId, (u32, HashMap::<DltChar4,(u32,adlt::dlt::DltMessageIndexType)>)>::new();
+            let mut last_msg_index = 0;
             // debug function: verify lcs timestamp
             let mut last_lc_timestamp_by_ecu_apid_ctid_map = BTreeMap::<(u32, u32, u32), (u32, u32)>::new();
 
@@ -697,25 +698,33 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                 if msg.index >= index_first && msg.index <= index_last {
                     // debug function: verify sort order
                     if debug_verify_sort {
-                        // verify that msg.calculated_time is monotonicaly ascending per lc:
-                        if !msg.is_ctrl_request() {
-                            let last_timestamp = last_timestamp_by_lc_map.entry(msg.lifecycle).or_insert_with(|| (msg.timestamp_dms, std::collections::HashMap::new()));
-                            if msg.timestamp_dms < last_timestamp.0 {
-                                warn!(log, "sort order check: wrong timestamp order for ecu {} at idx {} {:?}:{:?} lc {} got {} prev {}",msg.ecu, msg.index, msg.apid() , msg.ctid(), msg.lifecycle, msg.timestamp_dms, last_timestamp.0);
-                            }
-                            last_timestamp.0  = msg.timestamp_dms;
-                            // check for the apid as well:
-                            if let Some(apid)=msg.apid() {
-                                let last_apid_tmsp = last_timestamp.1.entry(*apid).or_insert((msg.timestamp_dms,msg.index));
-                                if msg.timestamp_dms < last_apid_tmsp.0 {
-                                    if msg.is_ctrl_response() {
-                                        info!(log, "sort order check: wrong timestamp order for apid {}/{}:{:?} at idx {} lc {} got {} prev {} at idx {}", msg.ecu, apid, msg.ctid(), msg.index, msg.lifecycle, msg.timestamp_dms, last_apid_tmsp.0, last_apid_tmsp.1 );
-                                    }else{
-                                        warn!(log, "sort order check: wrong timestamp order for apid {}/{}:{:?} at idx {} lc {} got {} prev {} at idx {}", msg.ecu, apid, msg.ctid(), msg.index, msg.lifecycle, msg.timestamp_dms, last_apid_tmsp.0, last_apid_tmsp.1 );
-                                    }
+                        if sort_by_time {
+                            // verify that msg.calculated_time is monotonicaly ascending per lc:
+                            if !msg.is_ctrl_request() {
+                                let last_timestamp = last_timestamp_by_lc_map.entry(msg.lifecycle).or_insert_with(|| (msg.timestamp_dms, std::collections::HashMap::new()));
+                                if msg.timestamp_dms < last_timestamp.0 {
+                                    warn!(log, "sort order check: wrong timestamp order for ecu {} at idx {} {:?}:{:?} lc {} got {} prev {}",msg.ecu, msg.index, msg.apid() , msg.ctid(), msg.lifecycle, msg.timestamp_dms, last_timestamp.0);
                                 }
-                                *last_apid_tmsp = (msg.timestamp_dms, msg.index);
+                                last_timestamp.0  = msg.timestamp_dms;
+                                // check for the apid as well:
+                                if let Some(apid)=msg.apid() {
+                                    let last_apid_tmsp = last_timestamp.1.entry(*apid).or_insert((msg.timestamp_dms,msg.index));
+                                    if msg.timestamp_dms < last_apid_tmsp.0 {
+                                        if msg.is_ctrl_response() {
+                                            info!(log, "sort order check: wrong timestamp order for apid {}/{}:{:?} at idx {} lc {} got {} prev {} at idx {}", msg.ecu, apid, msg.ctid(), msg.index, msg.lifecycle, msg.timestamp_dms, last_apid_tmsp.0, last_apid_tmsp.1 );
+                                        }else{
+                                            warn!(log, "sort order check: wrong timestamp order for apid {}/{}:{:?} at idx {} lc {} got {} prev {} at idx {}", msg.ecu, apid, msg.ctid(), msg.index, msg.lifecycle, msg.timestamp_dms, last_apid_tmsp.0, last_apid_tmsp.1 );
+                                        }
+                                    }
+                                    *last_apid_tmsp = (msg.timestamp_dms, msg.index);
+                                }
                             }
+                        }else{
+                            // verify that msg.index is ascending
+                            if msg.index < last_msg_index {
+                                warn!(log, "sort order check: wrong index order at idx {} prev {}", msg.index, last_msg_index);
+                            }
+                            last_msg_index = msg.index;
                         }
                     }
                     if debug_verify_lcs {
