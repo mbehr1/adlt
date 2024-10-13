@@ -752,6 +752,25 @@ where
             if remove_last_lc {
                 let _removed = ecu_lcs.remove(ecu_lcs_len - 1);
                 // assert!(!buffered_lcs.contains(&removed.id));
+                if buffered_lcs.is_empty() && !buffered_msgs.is_empty() {
+                    // need to send the buffered msgs now before the current msg
+                    let mut last_lc_id = 0;
+                    while !buffered_msgs.is_empty() {
+                        let msg = buffered_msgs.pop_front().unwrap();
+                        let msg_lc = msg.lifecycle;
+                        if msg_lc != last_lc_id {
+                            last_lc_id = msg_lc;
+                            mark_lc_id_to_refresh(msg_lc, &mut lcs_to_refresh);
+                        }
+                        if let Err(e) = outflow(msg) {
+                            println!(
+                                "parse_lifecycles_buffered_from_stream .send 4 got err={}",
+                                e
+                            );
+                            break; // exit. the receiver has stopped
+                        }
+                    }
+                }
             }
         } else {
             // msg.ecu not known yet:
