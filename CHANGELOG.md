@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.61.1 - 2024-10-13
+#### Bug Fixes
+- **(lifecycle)** prefer RESUME than idlt lc detection - (3ce9801) - Matthias Behr
+- msgs from merged lifecycles are buffered too long - (8d2b60e) - Matthias Behr
+#### Continuous Integration
+- build win32-arm64 - (8455648) - Matthias Behr
+
+- - -
+
 ## v0.61.0 - 2024-10-08
 #### Features
 - **(remote)** one_pass streams - (e12b3e1) - Matthias Behr
