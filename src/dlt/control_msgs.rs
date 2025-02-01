@@ -180,10 +180,94 @@ pub fn parse_ctrl_log_info_payload(
     }
 }
 
+/// parse the payload for SERVICE UNREGISTER_CONTEXT
+///
+/// It's a user defined format. dlt-daemon uses: https://github.com/COVESA/dlt-daemon/blob/d5b425b1e33804d4067cd017ccb718e077fd5ba5/include/dlt/dlt_common.h#L657
+///
+/// returns: apid, ctid and communication interface (comid)
+pub fn parse_ctrl_unregister_context_payload(
+    payload: &[u8],
+) -> Option<(DltChar4, DltChar4, DltChar4)> {
+    if payload.len() == 12 {
+        let apid = DltChar4::from_buf(&payload[0..4]);
+        let ctid = DltChar4::from_buf(&payload[4..8]);
+        let comid = DltChar4::from_buf(&payload[8..12]);
+        Some((apid, ctid, comid))
+    } else {
+        None
+    }
+}
+
+/// parse the payload for SERVICE CONNECTION_INFO
+///
+/// It's a user defined format. dlt-daemon uses: https://github.com/COVESA/dlt-daemon/blob/d5b425b1e33804d4067cd017ccb718e077fd5ba5/include/dlt/dlt_common.h#L668
+///
+/// returns: new state (1 = disconnected, 2 = connected) and communication interface (comid)
+pub fn parse_ctrl_connection_info_payload(payload: &[u8]) -> Option<(u8, DltChar4)> {
+    if payload.len() == 5 {
+        let state: u8 = payload[0];
+        let comid = DltChar4::from_buf(&payload[1..5]);
+        Some((state, comid))
+    } else {
+        None
+    }
+}
+
+/// parse the payload for SERVICE TIMEZONE
+///
+/// It's a user defined format. dlt-daemon uses: https://github.com/COVESA/dlt-daemon/blob/d5b425b1e33804d4067cd017ccb718e077fd5ba5/include/dlt/dlt_common.h#L679
+///
+/// returns: timezone offset in seconds (tm_gmtoff), and "is daylight saving time" (tm_isdst) from localtime_r
+pub fn parse_ctrl_timezone_payload(is_big_endian: bool, payload: &[u8]) -> Option<(i32, bool)> {
+    if payload.len() == 5 {
+        let gmt_off: i32 = parse_payload_int(is_big_endian, payload, 0).unwrap(); // tm.gmtoff
+        let is_dst: bool = payload[4] > 0; // tm.is_dst
+        Some((gmt_off, is_dst))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_ctrl_log_info_payload;
+    use super::{
+        parse_ctrl_log_info_payload, parse_ctrl_timezone_payload,
+        parse_ctrl_unregister_context_payload,
+    };
     use crate::dlt::DltChar4;
+
+    #[test]
+    fn test_parse_ctrl_timezone_payload() {
+        // Example payload data for testing
+        let payload = vec![0, 0, 0, 100, 1];
+
+        // Call the function to test
+        let result = parse_ctrl_timezone_payload(true, &payload);
+        assert!(result.is_some());
+        let (gmt_off, is_dst) = result.unwrap();
+        assert_eq!(gmt_off, 100);
+        assert!(is_dst);
+    }
+
+    #[test]
+    fn unregister_context_payload_valid() {
+        let payload = [
+            b'A', b'P', b'I', b'D', b'C', b'T', b'I', b'D', b'C', b'O', b'M', b'I',
+        ];
+        let result = parse_ctrl_unregister_context_payload(&payload);
+        assert!(result.is_some());
+        let (apid, ctid, comid) = result.unwrap();
+        assert_eq!(apid, DltChar4::from_buf(b"APID"));
+        assert_eq!(ctid, DltChar4::from_buf(b"CTID"));
+        assert_eq!(comid, DltChar4::from_buf(b"COMI"));
+    }
+
+    #[test]
+    fn unregister_context_payload_invalid() {
+        let payload = [b'A', b'P', b'I', b'D', b'C', b'T', b'I', b'D'];
+        let result = parse_ctrl_unregister_context_payload(&payload);
+        assert!(result.is_none());
+    }
 
     #[test]
     fn ctrl_info_payload_valid() {
