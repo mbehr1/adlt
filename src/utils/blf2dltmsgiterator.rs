@@ -330,7 +330,7 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
     }
 }
 
-impl<'a, R> Iterator for BLF2DltMsgIterator<'a, R>
+impl<R> Iterator for BLF2DltMsgIterator<'_, R>
 where
     R: BufRead + Seek,
 {

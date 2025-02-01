@@ -18,7 +18,6 @@ use std::{
 /// a reader/parser for generic (text) log files to DLT msgs
 ///
 /// Needed: an absolute timestamp, a log level, a tag and a log message
-
 pub struct GenLog2DltMsgIterator<'a, R> {
     lines: Lines<R>,
     pub index: DltMessageIndexType,
@@ -190,7 +189,7 @@ impl<'a, R: BufRead> GenLog2DltMsgIterator<'a, R> {
     }
 }
 
-impl<'a, R: BufRead> Iterator for GenLog2DltMsgIterator<'a, R> {
+impl<R: BufRead> Iterator for GenLog2DltMsgIterator<'_, R> {
     type Item = DltMessage;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(msg) = self.msgs_deque.pop_front() {

@@ -7,24 +7,24 @@ struct MinHeapEntry<'a> {
     it: Box<dyn Iterator<Item = DltMessage> + 'a>,
 }
 
-impl<'a> Ord for MinHeapEntry<'a> {
+impl Ord for MinHeapEntry<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         // self.m.reception_time_us.cmp(&other.m.reception_time_us) // regular, we do need reverse
         other.m.reception_time_us.cmp(&self.m.reception_time_us) // reversed
     }
 }
 
-impl<'a> PartialOrd for MinHeapEntry<'a> {
+impl PartialOrd for MinHeapEntry<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<'a> PartialEq for MinHeapEntry<'a> {
+impl PartialEq for MinHeapEntry<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.m.reception_time_us == other.m.reception_time_us
     }
 }
-impl<'a> Eq for MinHeapEntry<'a> {}
+impl Eq for MinHeapEntry<'_> {}
 
 /// Iterator that processes other iterators in "parallel"
 /// i.e. it merges the msgs by reception time.
@@ -74,7 +74,7 @@ impl<'a> SortingMultiReaderIterator<'a> {
     }
 }
 
-impl<'a> Iterator for SortingMultiReaderIterator<'a> {
+impl Iterator for SortingMultiReaderIterator<'_> {
     type Item = DltMessage;
     fn next(&mut self) -> Option<Self::Item> {
         let heap_entry = self.min_heap.pop();
