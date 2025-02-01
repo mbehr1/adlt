@@ -2,11 +2,22 @@ pub mod control_msgs;
 use chrono::{Local, TimeZone};
 use encoding_rs::WINDOWS_1252;
 use lazy_static::lazy_static;
+use nohash_hasher::BuildNoHashHasher;
 use serde::ser::{Serialize, Serializer};
-use std::{borrow::Cow, convert::TryInto, fmt, fmt::Write, str::FromStr};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    convert::TryInto,
+    fmt::{self, Write},
+    str::FromStr,
+    sync::LazyLock,
+};
 
 use crate::utils::{is_non_printable_char_wo_rnt, US_PER_SEC};
-use control_msgs::{parse_ctrl_log_info_payload, parse_ctrl_sw_version_payload};
+use control_msgs::{
+    parse_ctrl_connection_info_payload, parse_ctrl_log_info_payload, parse_ctrl_sw_version_payload,
+    parse_ctrl_timezone_payload, parse_ctrl_unregister_context_payload,
+};
 
 /// todo use perfo ideas from https://lise-henry.github.io/articles/optimising_strings.html
 /// todo use crate ryu for float to str conversations (numtoa seems outdated)
@@ -572,32 +583,70 @@ static LOG_LEVEL_STRS: [&str; 7] = ["", "fatal", "error", "warn", "info", "debug
 static TRACE_TYPE_STRS: [&str; 6] = ["", "variable", "func_in", "func_out", "state", "vfb"];
 static NW_TYPE_STRS: [&str; 7] = ["", "ipc", "can", "flexray", "most", "ethernet", "someip"];
 static CONTROL_TYPE_STRS: [&str; 4] = ["", "request", "response", "time"];
-static SERVICE_ID_NAMES: [&str; 21] = [
-    "",
-    "set_log_level",
-    "set_trace_status",
-    "get_log_info",
-    "get_default_log_level",
-    "store_config",
-    "reset_to_factory_default",
-    "set_com_interface_status",
-    "set_com_interface_max_bandwidth",
-    "set_verbose_mode",
-    "set_message_filtering",
-    "set_timing_packets",
-    "get_local_time",
-    "use_ecu_id",
-    "use_session_id",
-    "use_timestamp",
-    "use_extended_header",
-    "set_default_log_level",
-    "set_default_trace_status",
-    "get_software_version",
-    "message_buffer_overflow",
-];
 
 pub const SERVICE_ID_GET_LOG_INFO: u32 = 3;
 pub const SERVICE_ID_GET_SOFTWARE_VERSION: u32 = 19;
+
+// user services as from dlt-daemon:
+pub const SERVICE_ID_UNREGISTER_CONTEXT: u32 = 0xF01;
+pub const SERVICE_ID_CONNECTION_INFO: u32 = 0xF02;
+pub const SERVICE_ID_TIMEZONE: u32 = 0xF03;
+pub const SERVICE_ID_MARKER: u32 = 0xF04;
+pub const SERVICE_ID_OFFLINE_LOGSTORAGE: u32 = 0xF05;
+pub const SERVICE_ID_PASSIVE_NODE_CONNECT: u32 = 0xF06;
+pub const SERVICE_ID_PASSIVE_NODE_CONNECTION_STATUS: u32 = 0xF07;
+pub const SERVICE_ID_SET_ALL_LOG_LEVEL: u32 = 0xF08;
+pub const SERVICE_ID_SET_ALL_TRACE_STATUS: u32 = 0xF09;
+pub const SERVICE_ID_RESERVED_B: u32 = 0xF0B;
+pub const SERVICE_ID_RESERVED_C: u32 = 0xF0C;
+pub const SERVICE_ID_RESERVED_D: u32 = 0xF0D;
+pub const SERVICE_ID_RESERVED_E: u32 = 0xF0E;
+
+type HashMapNoHash<K, V> = HashMap<K, V, BuildNoHashHasher<K>>;
+static SERVICE_ID_NAMES: LazyLock<HashMapNoHash<u32, &'static str>> = LazyLock::new(|| {
+    let mut map = HashMapNoHash::default();
+    map.extend([
+        (1, "set_log_level"),
+        (2, "set_trace_status"),
+        (SERVICE_ID_GET_LOG_INFO, "get_log_info"),
+        (4, "get_default_log_level"),
+        (5, "store_config"),
+        (6, "reset_to_factory_default"),
+        (7, "set_com_interface_status"),
+        (8, "set_com_interface_max_bandwidth"),
+        (9, "set_verbose_mode"),
+        (10, "set_message_filtering"),
+        (11, "set_timing_packets"),
+        (12, "get_local_time"),
+        (13, "use_ecu_id"),
+        (14, "use_session_id"),
+        (15, "use_timestamp"),
+        (16, "use_extended_header"),
+        (17, "set_default_log_level"),
+        (18, "set_default_trace_status"),
+        (SERVICE_ID_GET_SOFTWARE_VERSION, "get_software_version"),
+        (20, "message_buffer_overflow"),
+        // user services as from dlt-daemon:
+        (SERVICE_ID_UNREGISTER_CONTEXT, "unregister_context"),
+        (SERVICE_ID_CONNECTION_INFO, "connection_info"),
+        (SERVICE_ID_TIMEZONE, "timezone"),
+        (SERVICE_ID_MARKER, "MARKER"),
+        (SERVICE_ID_OFFLINE_LOGSTORAGE, "offline_logstorage"),
+        (SERVICE_ID_PASSIVE_NODE_CONNECT, "passive_node_connect"),
+        (
+            SERVICE_ID_PASSIVE_NODE_CONNECTION_STATUS,
+            "passive_node_connection_status",
+        ),
+        (SERVICE_ID_SET_ALL_LOG_LEVEL, "set_all_log_level"),
+        (SERVICE_ID_SET_ALL_TRACE_STATUS, "set_all_trace_status"),
+        (0xF0A, "undefined"),
+        (SERVICE_ID_RESERVED_B, "reserved_b"),
+        (SERVICE_ID_RESERVED_C, "reserved_c"),
+        (SERVICE_ID_RESERVED_D, "reserved_d"),
+        (SERVICE_ID_RESERVED_E, "reserved_e"),
+    ]);
+    map
+});
 
 static CTRL_RESPONSE_STRS: [&str; 9] = [
     "ok",
@@ -1056,8 +1105,8 @@ impl DltMessage {
             match self.mstp() {
                 DltMessageType::Control(ct) => {
                     let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
-                    if message_id > 0 && message_id < SERVICE_ID_NAMES.len() as u32 {
-                        write!(&mut text, "[{}", SERVICE_ID_NAMES[message_id as usize])?;
+                    if let Some(service_name) = SERVICE_ID_NAMES.get(&message_id) {
+                        write!(&mut text, "[{}", service_name)?;
                     } else if ct != DltMessageControlType::Time {
                         write!(&mut text, "[service({})", message_id)?;
                     }
@@ -1100,15 +1149,58 @@ impl DltMessage {
                                             Err(err) => write!(&mut text, " got err={:?}", err)?,
                                         }
                                     }
-                                    _ => {
-                                        if payload.len() > 1 {
-                                            write!(&mut text, " ")?;
-                                            crate::utils::buf_as_hex_to_write(
+                                    SERVICE_ID_UNREGISTER_CONTEXT => {
+                                        if let Some((apid, ctid, comid)) =
+                                            parse_ctrl_unregister_context_payload(payload)
+                                        {
+                                            write!(
                                                 &mut text,
-                                                payload.get(1..).unwrap(),
+                                                " {{\"apid\":\"{}\",\"ctid\":\"{}\",\"comid\":\"{}\"}}",
+                                                apid, ctid, comid
                                             )?;
+                                        } else {
+                                            write!(&mut text, " ")?;
+                                            crate::utils::buf_as_hex_to_write(&mut text, payload)?;
                                         }
                                     }
+                                    SERVICE_ID_CONNECTION_INFO => {
+                                        if let Some((state, comid)) =
+                                            parse_ctrl_connection_info_payload(payload)
+                                        {
+                                            write!(
+                                                &mut text,
+                                                " {{\"state\":\"{}\",\"comid\":\"{}\"}}",
+                                                match state {
+                                                    1 => "disconnected",
+                                                    2 => "connected",
+                                                    _ => "unknown",
+                                                },
+                                                comid
+                                            )?;
+                                        } else {
+                                            write!(&mut text, " ")?;
+                                            crate::utils::buf_as_hex_to_write(&mut text, payload)?;
+                                        }
+                                    }
+                                    SERVICE_ID_TIMEZONE => {
+                                        if let Some((gmt_off, is_dst)) =
+                                            parse_ctrl_timezone_payload(is_big_endian, payload)
+                                        {
+                                            write!(
+                                                &mut text,
+                                                " {{\"gmt_off_secs\":{},\"is_dst\":{}}}",
+                                                gmt_off,
+                                                if is_dst { "true" } else { "false" }
+                                            )?;
+                                        } else {
+                                            write!(&mut text, " ")?;
+                                            crate::utils::buf_as_hex_to_write(&mut text, payload)?;
+                                        }
+                                    }
+                                    _ => {
+                                        write!(&mut text, " ")?;
+                                        crate::utils::buf_as_hex_to_write(&mut text, payload)?;
+                                    } // todo add SERVICE_ID_OFFLINE_LOGSTORAGE, SERVICE_ID_PASSIVE_NODE_CONNECT, SERVICE_ID_PASSIVE_NODE_CONNECTION_STATUS, SERVICE_ID_SET_ALL_LOG_LEVEL, SERVICE_ID_SET_ALL_TRACE_STATUS
                                 }
                             }
                         }
@@ -1323,7 +1415,7 @@ pub struct DltArg<'a> {
     pub payload_raw: &'a [u8], // data within is
 }
 
-impl<'a> DltArg<'a> {
+impl DltArg<'_> {
     pub fn is_string(&self) -> bool {
         self.type_info & DLT_TYPE_INFO_STRG > 0
     }
@@ -1772,7 +1864,7 @@ mod tests {
         #[test]
         #[should_panic]
         fn dltchar4_from_invalid2() {
-            assert_eq!(format!("{}", DltChar4::from_buf(&[b'a', b'b'])), "ab"); // is invalid as too short so for now panic as we treat this a logical and not a data error!
+            assert_eq!(format!("{}", DltChar4::from_buf(b"ab")), "ab"); // is invalid as too short so for now panic as we treat this a logical and not a data error!
         }
 
         #[test]
