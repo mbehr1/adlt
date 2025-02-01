@@ -30,7 +30,7 @@ impl<'a, R> DltMessageIterator<'a, R> {
     }
 }
 
-impl<'a, R> Iterator for DltMessageIterator<'a, R>
+impl<R> Iterator for DltMessageIterator<'_, R>
 where
     R: BufRead,
 {

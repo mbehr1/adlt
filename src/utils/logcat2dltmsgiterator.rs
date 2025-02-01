@@ -291,7 +291,7 @@ lazy_static! {
 
 }
 
-impl<'a, R> Iterator for LogCat2DltMsgIterator<'a, R>
+impl<R> Iterator for LogCat2DltMsgIterator<'_, R>
 where
     R: BufRead,
 {

@@ -282,7 +282,6 @@ pub struct DltFileInfos {
 /// assert!(dfi.first_msg.is_some());
 /// assert!(dfi.ecus_seen.contains(&DltChar4::from_buf(b"CAN1")));
 /// ```
-
 pub fn get_dlt_infos_from_file(
     file_ext: &str,
     file: &mut std::fs::File,

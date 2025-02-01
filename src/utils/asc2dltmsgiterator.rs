@@ -224,7 +224,7 @@ fn parse_signed_time_str(timestamp: &str) -> i64 {
     }
 }
 
-impl<'a, R> Iterator for Asc2DltMsgIterator<'a, R>
+impl<R> Iterator for Asc2DltMsgIterator<'_, R>
 where
     R: BufRead,
 {

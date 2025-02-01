@@ -615,7 +615,6 @@ fn file_names_to_file_streams(
 ///   - change the window for an existing stream
 /// - `plugin_cmd`
 ///   - execute a command for a plugin (e.g. FileTransfer save file)
-
 fn process_incoming_text_message<T: Read + Write>(
     log: &slog::Logger,
     t: String,
@@ -2699,7 +2698,6 @@ mod tests {
     /// test a remote "open" command with 'collect:"one_pass_streams"' that can be used to
     /// use streams that cannot be seeked, searched,... but no messages are collected
     /// so it has little memory usage and is used e.g. by fba-cli to execute once all fishbone queries
-
     fn process_file_context_one_pass_streams() {
         let log = new_logger();
         let port = pick_unused_port().expect("no ports free");

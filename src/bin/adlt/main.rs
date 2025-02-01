@@ -55,20 +55,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         o!("version"=>clap::crate_version!(), "log_level"=>format!("{}",min_log_level)),
     );
 
-    return match matches.subcommand() {
+    match matches.subcommand() {
         Some(("convert", sub_m)) => {
             convert::convert(&log, sub_m, std::io::BufWriter::new(std::io::stdout()))
                 .map_err(|e| e.into())
                 .map(|_x| ())
         } // dont return anything here
         Some(("remote", sub_m)) => remote::remote(&log, sub_m, false),
-        _ => {
-            return Err(Box::new(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "unknown subcommand",
-            )));
-        }
-    };
+        _ => Err(Box::new(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "unknown subcommand",
+        ))),
+    }
     // return Ok(());
     /*
     let input_file_name = matches.value_of("file").unwrap();
