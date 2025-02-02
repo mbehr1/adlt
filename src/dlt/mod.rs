@@ -1168,16 +1168,15 @@ impl DltMessage {
                                         if let Some((state, comid)) =
                                             parse_ctrl_connection_info_payload(payload)
                                         {
-                                            write!(
-                                                &mut text,
-                                                " {{\"state\":\"{}\",\"comid\":\"{}\"}}",
-                                                match state {
+                                            let val = serde_json::json!({
+                                                "state": match state {
                                                     1 => "disconnected",
                                                     2 => "connected",
                                                     _ => "unknown",
                                                 },
-                                                comid
-                                            )?;
+                                                "comid": comid
+                                            });
+                                            write!(&mut text, " {}", val)?;
                                         } else {
                                             write!(&mut text, " ")?;
                                             crate::utils::buf_as_hex_to_write(&mut text, payload)?;
@@ -2977,6 +2976,47 @@ mod tests {
             m.payload_as_text().unwrap(),
             r##"[unregister_context ok] 41 50 49 44 43 54 49 44 43 4f"##
         );
+    }
+
+    #[test]
+    fn control_msgs_connection_info() {
+        let m = DltMessage::get_testmsg_control(
+            false,
+            1,
+            &[0x02, 0x0f, 0, 0, 0, 2, b'A', b'"', b'\\', b'"'],
+        );
+        assert!(m.is_ctrl_response());
+
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            r##"[connection_info ok] {"comid":"A\"\\\"","state":"connected"}"##
+        );
+
+        // wrong len -> dump only bytes:
+        let m = DltMessage::get_testmsg_control(false, 1, &[0x02, 0x0f, 0, 0, 0, 1]);
+        assert!(m.is_ctrl_response());
+
+        assert_eq!(m.payload_as_text().unwrap(), "[connection_info ok] 01");
+    }
+
+    #[test]
+    fn control_msgs_timezone() {
+        let m = DltMessage::get_testmsg_control(
+            false,
+            1,
+            &[0x03, 0x0f, 0, 0, 0, 0xf0, 0xff, 0xff, 0xff, 0],
+        );
+
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            r##"[timezone ok] {"gmt_off_secs":-16,"is_dst":false}"##
+        );
+
+        // wrong len -> dump only bytes:
+        let m = DltMessage::get_testmsg_control(false, 1, &[0x03, 0x0f, 0, 0, 0, 1]);
+        assert!(m.is_ctrl_response());
+
+        assert_eq!(m.payload_as_text().unwrap(), "[timezone ok] 01");
     }
 
     #[test]
