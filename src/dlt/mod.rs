@@ -1153,11 +1153,12 @@ impl DltMessage {
                                         if let Some((apid, ctid, comid)) =
                                             parse_ctrl_unregister_context_payload(payload)
                                         {
-                                            write!(
-                                                &mut text,
-                                                " {{\"apid\":\"{}\",\"ctid\":\"{}\",\"comid\":\"{}\"}}",
-                                                apid, ctid, comid
-                                            )?;
+                                            let val = serde_json::json!({
+                                                "apid": apid,
+                                                "ctid": ctid,
+                                                "comid": comid
+                                            });
+                                            write!(&mut text, " {}", val)?;
                                         } else {
                                             write!(&mut text, " ")?;
                                             crate::utils::buf_as_hex_to_write(&mut text, payload)?;
@@ -2943,6 +2944,39 @@ mod tests {
         assert_eq!(m.payload_as_text().unwrap(), "[get_software_version ok]");
         let m = DltMessage::get_testmsg_control(true, 1, &[0, 0, 0]);
         assert_eq!(m.payload_as_text().unwrap(), "[<args missing>]");
+    }
+
+    #[test]
+    fn control_msgs_unregister_context() {
+        let m = DltMessage::get_testmsg_control(
+            false,
+            1,
+            &[
+                0x01, 0x0f, 0, 0, 0, b'A', b'"', b'I', b'"', b'C', b'T', b'I', b'D', b'C', b'O',
+                b'M', b'I',
+            ],
+        );
+        assert!(m.is_ctrl_response());
+
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            r##"[unregister_context ok] {"apid":"A\"I\"","comid":"COMI","ctid":"CTID"}"##
+        );
+
+        // wrong len -> dump only bytes:
+        let m = DltMessage::get_testmsg_control(
+            false,
+            1,
+            &[
+                0x01, 0x0f, 0, 0, 0, b'A', b'P', b'I', b'D', b'C', b'T', b'I', b'D', b'C', b'O',
+            ],
+        );
+        assert!(m.is_ctrl_response());
+
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            r##"[unregister_context ok] 41 50 49 44 43 54 49 44 43 4f"##
+        );
     }
 
     #[test]
