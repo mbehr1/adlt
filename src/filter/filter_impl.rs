@@ -1472,6 +1472,17 @@ mod tests {
             let r = Filter::from_quick_xml_reader(&mut Reader::from_str(r#"<filter></filter>"#));
             assert!(r.is_ok(), "got err {:?}", r.err());
             assert_eq!(r.unwrap().kind, FilterKind::Positive);
+
+            // invalid one:
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(r#"<filter>"#));
+            assert!(r.is_err());
+
+            // invalid regex:
+            let r = Filter::from_quick_xml_reader(&mut Reader::from_str(
+                r#"<filter><enablepayloadtext>1</enablepayloadtext><enableregexp_Payload>1</enableregexp_Payload><payloadtext>^(.*</payloadtext></filter>"#,
+            ));
+            assert!(r.is_ok(), "got err {:?}", r.err());
+            assert!(r.unwrap().payload_regex.is_none()); // this is bad... better throw an error?
         }
 
         #[test]
