@@ -231,14 +231,13 @@ pub fn parse_ctrl_timezone_payload(is_big_endian: bool, payload: &[u8]) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_ctrl_log_info_payload, parse_ctrl_timezone_payload,
-        parse_ctrl_unregister_context_payload,
+        parse_ctrl_connection_info_payload, parse_ctrl_log_info_payload,
+        parse_ctrl_timezone_payload, parse_ctrl_unregister_context_payload,
     };
     use crate::dlt::DltChar4;
 
     #[test]
     fn test_parse_ctrl_timezone_payload() {
-        // Example payload data for testing
         let payload = vec![0, 0, 0, 100, 1];
 
         // Call the function to test
@@ -247,6 +246,14 @@ mod tests {
         let (gmt_off, is_dst) = result.unwrap();
         assert_eq!(gmt_off, 100);
         assert!(is_dst);
+    }
+    #[test]
+    fn test_parse_ctrl_timezone_payload_invalid() {
+        let payload = vec![0, 0, 0, 100, 1, 1]; // too long
+
+        // Call the function to test
+        let result = parse_ctrl_timezone_payload(true, &payload);
+        assert!(result.is_none());
     }
 
     #[test]
@@ -353,5 +360,33 @@ mod tests {
         // status RESPONSE DATA OVERFLOW
         let v = parse_ctrl_log_info_payload(9, false, &[2, 3, 4]);
         assert_eq!(v.len(), 0);
+    }
+
+    #[test]
+    fn connection_info_payload_valid() {
+        let payload = [1, b'C', b'O', b'M', b'I'];
+        let result = parse_ctrl_connection_info_payload(&payload);
+        assert!(result.is_some());
+        let (state, comid) = result.unwrap();
+        assert_eq!(state, 1);
+        assert_eq!(comid, DltChar4::from_buf(b"COMI"));
+    }
+
+    #[test]
+    fn connection_info_payload_invalid() {
+        // wrong size
+        let payload = [1, b'C', b'O', b'M'];
+        let result = parse_ctrl_connection_info_payload(&payload);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn connection_info_payload_valid_connected() {
+        let payload = [2, b'C', b'O', b'N', 0];
+        let result = parse_ctrl_connection_info_payload(&payload);
+        assert!(result.is_some());
+        let (state, comid) = result.unwrap();
+        assert_eq!(state, 2);
+        assert_eq!(comid, DltChar4::from_buf(b"CON\0"));
     }
 }
