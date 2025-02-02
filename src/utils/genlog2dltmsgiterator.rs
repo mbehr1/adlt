@@ -239,7 +239,7 @@ impl<R: BufRead> Iterator for GenLog2DltMsgIterator<'_, R> {
                         let payload = vec![];
                         let mtin: u8 = log_level as u8;
 
-                        let reception_time = date_time.timestamp_micros();
+                        let reception_time = date_time.and_utc().timestamp_micros();
                         let reception_time_us = if reception_time < 0 {
                             0
                         } else {

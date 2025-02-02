@@ -295,7 +295,7 @@ mod tests {
         let namespace = get_new_namespace();
         let first_reception_time_us = asc_parse_date("Thu Apr 20 10:25:26 AM 2023")
             .ok()
-            .map(|a| a.timestamp_micros() as u64);
+            .map(|a| a.and_utc().timestamp_micros() as u64);
 
         let its = files.into_iter().map(|file_name| {
             let buf_reader = LowMarkBufReader::new(
@@ -342,7 +342,7 @@ mod tests {
         let namespace = get_new_namespace();
         let first_reception_time_us = asc_parse_date("Thu Apr 20 10:25:26 AM 2023")
             .ok()
-            .map(|a| a.timestamp_micros() as u64);
+            .map(|a| a.and_utc().timestamp_micros() as u64);
         let its = files.into_iter().map(|file_name| {
             let buf_reader = LowMarkBufReader::new(
                 File::open(file_name).unwrap(),

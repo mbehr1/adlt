@@ -204,12 +204,12 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
         let mut msgs = Vec::new();
         // text is supposed to be an xml:
         let mut reader = Reader::from_str(text);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
         let mut scope: Vec<String> = Vec::with_capacity(8);
         let channels = vec!["channels".to_string()];
         loop {
-            match reader.read_event(&mut buf) {
+            match reader.read_event_into(&mut buf) {
                 Err(e) => {
                     if let Some(log) = self.log {
                         slog::warn!(log, "xml parse error"; "error" => format!("{:?}", e));
@@ -218,7 +218,7 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
                 Ok(Event::Eof) => break,
                 Ok(Event::Start(e)) => {
                     // println!("start: {:?}", e);
-                    let scope_name = String::from_utf8(e.local_name().to_vec()).unwrap_or_default();
+                    let scope_name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
 
                     let mut ch_nr = None;
                     let mut ch_type = None;
@@ -226,19 +226,19 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
 
                     if scope_name == "channel" && scope.ends_with(&channels) {
                         for attr in e.attributes().flatten() {
-                            match attr.key {
+                            match attr.key.as_ref() {
                                 b"number" => {
                                     ch_nr = attr
-                                        .unescape_and_decode_value(&reader)
+                                        .unescape_value()
                                         .unwrap_or_default()
                                         .parse::<u16>()
                                         .ok();
                                 }
                                 b"type" => {
-                                    ch_type = attr.unescape_and_decode_value(&reader).ok();
+                                    ch_type = attr.unescape_value().ok();
                                 }
                                 b"network" => {
-                                    ch_network = attr.unescape_and_decode_value(&reader).ok();
+                                    ch_network = attr.unescape_value().ok();
                                 }
                                 _ => {
                                     println!("unknown channel attr: {:?}", attr);
@@ -292,12 +292,12 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
                                 };
                                 msgs.push(dlt_msg);
                             } else if let Some(log) = self.log {
-                                slog::warn!(log, "ignoring channel type"; "type" => ch_type, "network" => ch_network, "nr" => ch_nr);
+                                slog::warn!(log, "ignoring channel type"; "type" => ch_type.to_string(), "network" => ch_network.to_string(), "nr" => ch_nr);
                             }
                         } else {
                             for attr in e.attributes() {
                                 if let Some(log) = self.log {
-                                    slog::warn!(log, "unknown channel attr: {:?}", attr; "type" => &ch_type, "network" => &ch_network, "nr" => &ch_nr);
+                                    slog::warn!(log, "unknown channel attr: {:?}", attr; "type" => ch_type.as_deref(), "network" => ch_network.as_deref(), "nr" => &ch_nr);
                                 } else {
                                     println!("unknown channel attr: {:?}", attr);
                                 }
@@ -305,12 +305,13 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
                         }
                     }
 
-                    scope.push(scope_name);
+                    scope.push(scope_name.to_string());
                 }
                 Ok(Event::End(e)) => {
                     //println!("end: {:?}", e);
-                    let scope_name = String::from_utf8(e.local_name().to_vec()).unwrap_or_default();
                     if let Some(last) = scope.pop() {
+                        let scope_name =
+                            String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                         if last != scope_name {
                             if let Some(log) = self.log {
                                 slog::warn!(log, "xml parse error"; "error" => "scope mismatch");

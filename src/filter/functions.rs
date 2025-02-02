@@ -69,15 +69,15 @@ pub fn filter_as_streams<F: Fn(DltMessage) -> SendMsgFnReturnType>(
 pub fn filters_from_dlf<B: std::io::BufRead>(reader: B) -> Result<Vec<Filter>, quick_xml::Error> {
     let mut filters = Vec::new();
     let mut reader = quick_xml::Reader::from_reader(reader);
-    reader.trim_text(false); // we dont want whitespace to be trimmed
+    reader.config_mut().trim_text(false);
 
     let mut found_dltfilter_start = false;
     let mut found_dltfilter_end = false;
 
     let mut buf = Vec::new();
     loop {
-        match reader.read_event(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e)) => match e.local_name() {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(ref e)) => match e.local_name().as_ref() {
                 b"dltfilter" => {
                     found_dltfilter_start = true;
                     found_dltfilter_end = false;
@@ -96,7 +96,7 @@ pub fn filters_from_dlf<B: std::io::BufRead>(reader: B) -> Result<Vec<Filter>, q
                 }
             },
             Ok(quick_xml::events::Event::End(ref e)) => {
-                if let b"dltfilter" = e.local_name() {
+                if let b"dltfilter" = e.local_name().as_ref() {
                     found_dltfilter_end = true;
                 }
             }
@@ -109,7 +109,9 @@ pub fn filters_from_dlf<B: std::io::BufRead>(reader: B) -> Result<Vec<Filter>, q
     }
 
     if !found_dltfilter_start || !found_dltfilter_end {
-        return Err(quick_xml::Error::TextNotFound);
+        return Err(quick_xml::Error::IllFormed(
+            quick_xml::errors::IllFormedError::MissingEndTag("dltfilter".to_string()),
+        ));
     }
 
     Ok(filters)
