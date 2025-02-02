@@ -5,6 +5,8 @@ name: Code Coverage
 jobs:
   grcov:
     runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
     steps:
       - name: Install Dependencies
         run: |
@@ -13,21 +15,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly
+          toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - name: Test
-        run: cargo test --all-features --no-fail-fast
-        env:
-          CARGO_INCREMENTAL: '0'
-          RUSTFLAGS: '-Cinstrument-coverage -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-          RUSTDOCFLAGS: '-Cinstrument-coverage -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-      - id: coverage
-        uses: actions-rs/grcov@v0.1
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate code coverage
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
       - name: show lcov file ls
-        run: ls -al ${{ steps.coverage.outputs.report }}
+        run: ls -al lcov.info
       - uses: codecov/codecov-action@v3 # v4 needs docker volume... seems not compatible with grcov v0.1
         with:
-          files: ${{ steps.coverage.outputs.report }}
+          files: lcov.info
           # disable_search: true
           fail_ci_if_error: true # optional (default = false)
           verbose: true # optional (default = false)
