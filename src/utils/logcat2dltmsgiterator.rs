@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
 use regex::{CaptureLocations, Regex};
 use slog::{debug, error, info};
@@ -74,13 +74,13 @@ impl<'a, R: BufRead> LogCat2DltMsgIterator<'a, R> {
             )
         }
 
-        let recorded_start_time_us = file_modified_time_us
-            .unwrap_or_else(|| (chrono::Utc::now().naive_utc().timestamp_micros()) as u64);
+        let recorded_start_time_us =
+            file_modified_time_us.unwrap_or_else(|| (chrono::Utc::now().timestamp_micros()) as u64);
 
         let ref_date =
-            NaiveDateTime::from_timestamp_opt(1 + (recorded_start_time_us / US_PER_SEC) as i64, 0)
+            DateTime::from_timestamp(1 + (recorded_start_time_us / US_PER_SEC) as i64, 0)
                 .unwrap_or_default()
-                .date();
+                .date_naive();
 
         let max_threadtime_treat_as_timestamp_start =
             NaiveDate::from_ymd_opt(chrono::Datelike::year(&ref_date), 1, 1).unwrap_or_default();
@@ -398,7 +398,8 @@ where
                                 (timestamp_us, self.recorded_start_time_us + timestamp_us)
                             } else {
                                 // here we'd need to use the max timestamp_us from the case a) as first timestamp
-                                let recorded_time_us = threadtime.timestamp_micros() as u64;
+                                let recorded_time_us =
+                                    threadtime.and_utc().timestamp_micros() as u64;
                                 let timestamp_us = if let Some(timestamp_reference) =
                                     self.threadtime_timestamp_reference
                                 {

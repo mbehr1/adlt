@@ -360,12 +360,13 @@ pub fn get_dlt_infos_from_read<R: Read>(
 pub const US_PER_SEC: u64 = 1_000_000;
 
 pub fn utc_time_from_us(time_us: u64) -> chrono::NaiveDateTime {
-    chrono::NaiveDateTime::from_timestamp_opt(
-        // todo get rid of all those mult/%...
-        (time_us / US_PER_SEC) as i64,
-        1_000u32 * (time_us % 1_000_000) as u32,
-    )
-    .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
+    chrono::DateTime::from_timestamp_micros(if time_us <= (i64::MAX as u64) {
+        time_us as i64
+    } else {
+        i64::MAX
+    })
+    .unwrap_or_default()
+    .naive_utc()
 }
 
 /// Checks if a string contains any regular expression special characters.
@@ -1195,7 +1196,7 @@ mod tests {
 
         // and an invalid one:
         let utc_time = utc_time_from_us((i64::MAX as u64) + 42); // seems internally an i64 is used as it can reflect time before 1.1.1970 as well
-        assert_eq!(utc_time.timestamp(), 0);
+        assert_eq!(utc_time.and_utc().timestamp(), 0);
         assert_eq!(utc_time.date().day(), 1);
         assert_eq!(utc_time.date().month(), 1);
         assert_eq!(utc_time.date().year(), 1970);

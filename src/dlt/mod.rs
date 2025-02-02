@@ -2249,7 +2249,7 @@ mod tests {
             let m = DltMessage::for_test_rcv_tms_ms(0, 1);
             let rt = m.reception_time();
             // all those tests are a bit useless...
-            assert_eq!(rt.timestamp_millis(), 1640995200000);
+            assert_eq!(rt.and_utc().timestamp_millis(), 1640995200000);
             assert_eq!(m.mcnt(), m.standard_header.mcnt);
             assert_eq!(m.mstp(), DltMessageType::Log(DltMessageLogType::Fatal));
             assert!(!m.is_ctrl_request());

@@ -97,7 +97,7 @@ impl<'a, R: BufRead> Asc2DltMsgIterator<'a, R> {
             lines_processed: 0,
             lines_skipped: 0,
             log,
-            date_us: (chrono::Utc::now().naive_utc().timestamp_micros()) as u64, // init to avoid underrun if only neg timestamps are provided
+            date_us: (chrono::Utc::now().timestamp_micros()) as u64, // init to avoid underrun if only neg timestamps are provided
             timestamp_offset_dms: 0,
             first_neg_timestamp_us: 0,
             capture_locations_can: RE_MSG.capture_locations(),
@@ -456,7 +456,7 @@ where
                         if let Some(date) = captures.get(1) {
                             let nt = asc_parse_date(date.as_str());
                             if let Ok(nt) = nt {
-                                let nt_us = nt.timestamp_micros() as u64;
+                                let nt_us = nt.and_utc().timestamp_micros() as u64;
                                 self.date_us = nt_us;
                                 self.first_neg_timestamp_us = 0; // reset here if mult. files get concatenated
                                 if let Some(timestamp_reference_time_us) =
@@ -774,7 +774,7 @@ date Thu Apr 20 10:26:43 AM 2023
             .as_bytes();
         let timestamp_reference_time = asc_parse_date("Thu Apr 20 10:25:26 AM 2023")
             .ok()
-            .map(|a| a.timestamp_micros() as u64);
+            .map(|a| a.and_utc().timestamp_micros() as u64);
 
         let mut it = Asc2DltMsgIterator::new(
             0,

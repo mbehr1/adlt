@@ -396,31 +396,31 @@ impl Filter {
 
         let mut last_entry = None;
         loop {
-            match reader.read_event(&mut buf) {
-                Ok(quick_xml::events::Event::Start(ref e)) => match e.local_name() {
+            match reader.read_event_into(&mut buf) {
+                Ok(quick_xml::events::Event::Start(ref e)) => match e.local_name().as_ref() {
                     b"filter" => {} // ignore filter start (no nested ones)
                     _ => {
-                        last_entry = Some(String::from_utf8(e.local_name().to_vec()).unwrap());
+                        last_entry =
+                            Some(String::from_utf8_lossy(e.local_name().as_ref()).into_owned());
                     }
                 },
-                Ok(quick_xml::events::Event::Text(t)) => {
-                    let text = String::from_utf8(t.unescaped()?.to_vec());
-                    if text.is_err() {
-                        return Err(quick_xml::Error::TextNotFound);
+                Ok(quick_xml::events::Event::Text(t)) => match t.unescape() {
+                    Ok(text) => {
+                        if last_entry.is_some() {
+                            attrs.insert(last_entry.take().unwrap().to_string(), text.to_string());
+                        }
                     }
-                    if last_entry.is_some() {
-                        attrs.insert(last_entry.take().unwrap(), text.unwrap());
-                    }
-                }
+                    Err(e) => return Err(e),
+                },
                 Ok(quick_xml::events::Event::End(ref e)) => {
-                    if let b"filter" = e.local_name() {
+                    if let b"filter" = e.local_name().as_ref() {
                         break;
                     }
                 }
                 Ok(quick_xml::events::Event::Eof) => {
-                    return Err(quick_xml::Error::UnexpectedEof(
-                        "</filter> missing!".to_string(),
-                    ))
+                    return Err(quick_xml::Error::IllFormed(
+                        quick_xml::errors::IllFormedError::MissingEndTag("filter".to_string()),
+                    ));
                 }
                 Err(e) => return Err(e),
                 _ => {}
@@ -486,10 +486,12 @@ impl Filter {
                             .case_insensitive(true)
                             .build()
                             .map_err(|e| {
-                                quick_xml::Error::UnexpectedEof(format!(
-                                    "regex error parsing escaped '{}':{:?}",
-                                    s, e
-                                ))
+                                quick_xml::Error::IllFormed(
+                                    quick_xml::errors::IllFormedError::MissingEndTag(format!(
+                                        "regex error parsing escaped '{}':{:?}",
+                                        s, e
+                                    )),
+                                )
                             })?,
                     );
                 }
