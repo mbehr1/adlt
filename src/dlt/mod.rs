@@ -1102,6 +1102,7 @@ impl DltMessage {
                 None => (&[] as &[u8], false),
             };
 
+            // todo support PRS_Dlt_01040 (control messages with multiple service ids using noar > 1 (if they can be used for responses!)
             match self.mstp() {
                 DltMessageType::Control(ct) => {
                     let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
@@ -1115,7 +1116,7 @@ impl DltMessage {
                         DltMessageControlType::Response => {
                             // todo dump first byte as response result
                             if !payload.is_empty() {
-                                let retval = payload.first().unwrap();
+                                let retval = &payload[0];
                                 if *retval < 5u8 || *retval == 8u8 {
                                     write!(
                                         &mut text,
@@ -3017,6 +3018,24 @@ mod tests {
         assert!(m.is_ctrl_response());
 
         assert_eq!(m.payload_as_text().unwrap(), "[timezone ok] 01");
+    }
+
+    #[test]
+    fn control_msgs_unknown() {
+        let m = DltMessage::get_testmsg_control(false, 1, &[0xff, 0x0e, 0, 0]);
+        assert_eq!(m.payload_as_text().unwrap(), "[service(3839)]");
+
+        let m = DltMessage::get_testmsg_control(false, 1, &[0xff, 0x0e, 0, 0, 1]);
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            "[service(3839) not_supported] " // the space is a bit weird... but current impl is like that for empty payload
+        );
+
+        let m = DltMessage::get_testmsg_control(false, 1, &[0xff, 0x0e, 0, 0, 1, 2]);
+        assert_eq!(
+            m.payload_as_text().unwrap(),
+            "[service(3839) not_supported] 02"
+        );
     }
 
     #[test]
