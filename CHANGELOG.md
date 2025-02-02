@@ -2,6 +2,23 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.61.2 - 2025-02-02
+#### Bug Fixes
+- **(control_msgs)** first payload byte was missing - (a0c9f1c) - Matthias Behr
+#### Continuous Integration
+- **(coverage)** use cargo-llvm-cov - (672f085) - Matthias Behr
+- **(grcov)** remove usage of unsupported Zprofile flag - (e10f5d0) - Matthias Behr
+#### Miscellaneous Chores
+- **(clippy)** resolve clippy warnings - (88af287) - Matthias Behr
+- **(test)** unit test for filter::from_quick_xml_reader - (ef5327a) - Matthias Behr
+- **(tests)** unit test for unknown service - (8338d98) - Matthias Behr
+- **(tests)** unit test for service ids - (09c69ab) - Matthias Behr
+- **(tests)** incr coverage and add corner case support - (6d8c2c4) - Matthias Behr
+- **(tests)** more coverage - (b13a649) - Matthias Behr
+- **(updates)** update crates - (791e0c6) - Matthias Behr
+
+- - -
+
 ## v0.61.1 - 2024-10-13
 #### Bug Fixes
 - **(lifecycle)** prefer RESUME than idlt lc detection - (3ce9801) - Matthias Behr
