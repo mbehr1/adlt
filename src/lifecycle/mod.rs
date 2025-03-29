@@ -727,7 +727,7 @@ where
                                     }
                                     remove_last_lc = true;
                                 } else {
-                                    println!("merge needed but not all msgs buffered anymore! (todo!):\n {:?}\n {:?} msg #{}", prev_lc, lc2, last_msg_index);
+                                    // TODO silence this output for now! (fails e.g. with l./e./230726_dltp logs!) println!("merge needed but not all msgs buffered anymore! (todo!):\n {:?}\n {:?} msg #{}", prev_lc, lc2, last_msg_index);
                                     // we keep the lc2 for now and buffer the msgs
                                     // todo, needed? buffered_lcs.insert(lc2.id);
                                 }
