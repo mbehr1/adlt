@@ -224,12 +224,8 @@ fn bin_remote_validport_connect() {
 
 use bincode::config;
 
-const BINCODE_CONFIG: config::Configuration<
-    config::LittleEndian,
-    config::Fixint,
-    config::WriteFixedArrayLength,
-    config::NoLimit,
-> = config::legacy(); // todo choose local endianess
+const BINCODE_CONFIG: config::Configuration<config::LittleEndian, config::Fixint, config::NoLimit> =
+    config::legacy(); // todo choose local endianess
 
 #[test]
 fn bin_remote_ex002_open() {
