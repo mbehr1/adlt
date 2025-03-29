@@ -1889,7 +1889,7 @@ mod tests {
             ecu: DltChar4::from_str("ECU1").unwrap(),
         };
         let exth = DltExtendedHeader {
-            verb_mstp_mtin: 0x3 << 1 | (0x02 << 4),
+            verb_mstp_mtin: (0x3 << 1) | (0x02 << 4),
             noar,
             apid: DltChar4::from_buf(b"DA1\0"),
             ctid: DltChar4::from_buf(b"DC1\0"),

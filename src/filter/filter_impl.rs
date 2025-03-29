@@ -1048,7 +1048,7 @@ mod tests {
             apid: DltChar4::from_buf(b"APID"),
             noar: 0,
             ctid: DltChar4::from_buf(b"CTID"),
-            verb_mstp_mtin: 1u8 << 4 | 3u8 << 1,
+            verb_mstp_mtin: (1u8 << 4) | (3u8 << 1),
         });
         // still match, msg has more, but filter has mtin 0
         assert!(f.matches(&m));
@@ -1077,14 +1077,14 @@ mod tests {
             apid: DltChar4::from_buf(b"APID"),
             noar: 0,
             ctid: DltChar4::from_buf(b"CTID"),
-            verb_mstp_mtin: 1u8 << 4 | 3u8 << 1,
+            verb_mstp_mtin: (1u8 << 4) | (3u8 << 1),
         });
         assert!(f.matches(&m));
         m.extended_header = Some(DltExtendedHeader {
             apid: DltChar4::from_buf(b"APID"),
             noar: 0,
             ctid: DltChar4::from_buf(b"CTID"),
-            verb_mstp_mtin: 1u8 << 4 | 3u8 << 1 | 1,
+            verb_mstp_mtin: (1u8 << 4) | (3u8 << 1) | 1,
         });
         assert!(f.matches(&m));
     }

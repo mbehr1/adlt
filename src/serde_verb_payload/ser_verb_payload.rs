@@ -1,12 +1,22 @@
 use serde::{ser, Serialize};
 
 use crate::dlt::{
-    DLT_SCOD_UTF8, DLT_TYLE_16BIT, DLT_TYLE_32BIT, DLT_TYLE_64BIT, DLT_TYLE_8BIT,
+    DLT_SCOD_ASCII, DLT_SCOD_UTF8, DLT_TYLE_16BIT, DLT_TYLE_32BIT, DLT_TYLE_64BIT, DLT_TYLE_8BIT,
     DLT_TYPE_INFO_BOOL, DLT_TYPE_INFO_FLOA, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_SINT,
     DLT_TYPE_INFO_STRG, DLT_TYPE_INFO_UINT,
 };
 
 use super::error::{Error, Result};
+
+/// Wrapper when a different type shall be used for serialization
+///
+/// Currently only used for DltScodAscii to serialize as DLT_SCOD_ASCII
+/// instead of utf8 string (DLT_SCOD_UTF8)
+#[derive(serde::Serialize)]
+pub enum DltVerbArgTypeWrapper<'a> {
+    #[allow(dead_code)]
+    DltScodAscii(&'a serde_bytes::Bytes), // needs to be incl. the 0 termination!
+}
 
 /// Serialize data as verbose dlt message payload
 ///
@@ -242,17 +252,36 @@ impl ser::Serializer for &mut Serializer {
     // Serialize this to as payload as TODO!
     fn serialize_newtype_variant<T>(
         self,
-        _name: &'static str,
-        _variant_index: u32,
+        name: &'static str,
+        variant_index: u32,
         variant: &'static str,
         value: &T,
     ) -> Result<()>
     where
         T: ?Sized + Serialize,
     {
-        variant.serialize(&mut *self)?;
-        value.serialize(&mut *self)?;
-        Err(Error::Nyi)
+        if variant_index == 0 && name == "DltVerbArgTypeWrapper" {
+            // remember current pos for self.output
+            let prev_len = self.output.len();
+            value.serialize(&mut *self)?;
+
+            // if type_info @ prev_len is DLT_TYPE_INFO_RAWD (from [u8])
+            // change it now to DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII
+            let expected_type_info = DLT_TYPE_INFO_RAWD;
+            let new_type_info = DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII;
+            if self.output.len() - prev_len >= 4
+                && self.output[prev_len..(prev_len + 4)] == expected_type_info.to_ne_bytes()
+            {
+                self.output[prev_len..(prev_len + 4)].copy_from_slice(&new_type_info.to_ne_bytes());
+                Ok(())
+            } else {
+                Err(Error::UnsupportedType)
+            }
+        } else {
+            variant.serialize(&mut *self)?;
+            value.serialize(&mut *self)?;
+            Err(Error::Nyi)
+        }
     }
 
     // Now we get to the serialization of compound types.
@@ -525,11 +554,11 @@ impl ser::SerializeStructVariant for &mut Serializer {
 #[cfg(test)]
 mod tests {
     use crate::dlt::{
-        DltChar4, DltExtendedHeader, DltMessage, DltStandardHeader, DLT_STD_HDR_BIG_ENDIAN,
-        DLT_STD_HDR_VERSION,
+        DltChar4, DltExtendedHeader, DltMessage, DltStandardHeader, DLT_SCOD_ASCII, DLT_SCOD_UTF8,
+        DLT_STD_HDR_BIG_ENDIAN, DLT_STD_HDR_VERSION, DLT_TYPE_INFO_STRG,
     };
 
-    use super::to_payload;
+    use super::{to_payload, DltVerbArgTypeWrapper};
 
     #[test]
     fn test_u16() {
@@ -654,6 +683,32 @@ mod tests {
             "payload={:?}",
             payload
         );
+    }
+
+    #[test]
+    fn test_macro_string_utf8() {
+        let (noar, payload) = dlt_args!("foo").unwrap();
+        assert_eq!(noar, 1);
+        // expected len: type_info (4) + len (2) + string (3) + null term (1)
+        assert_eq!(payload.len(), (4 + 2 + 4) as usize, "payload={:?}", payload);
+
+        // verify type_info to be DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8
+        let expected_type_info = DLT_TYPE_INFO_STRG | DLT_SCOD_UTF8;
+        assert_eq!(payload[0..4], expected_type_info.to_ne_bytes());
+    }
+
+    #[test]
+    fn test_macro_string_ascii() {
+        let asci = DltVerbArgTypeWrapper::DltScodAscii(serde_bytes::Bytes::new(b"foo\0"));
+        let res = dlt_args!(asci);
+        let (noar, payload) = res.unwrap();
+        assert_eq!(noar, 1);
+        // expected len: type_info (4) + len (2) + string (3) + null term (1)
+        assert_eq!(payload.len(), (4 + 2 + 4) as usize, "payload={:?}", payload);
+
+        // verify type_info to be DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII
+        let expected_type_info = DLT_TYPE_INFO_STRG | DLT_SCOD_ASCII;
+        assert_eq!(payload[0..4], expected_type_info.to_ne_bytes());
     }
 
     #[test]
