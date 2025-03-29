@@ -58,7 +58,6 @@ use bincode::config;
 const BINCODE_CONFIG: config::Configuration<
     config::LittleEndian,
     config::Fixint,
-    config::WriteFixedArrayLength,
     config::NoLimit,
 > = config::legacy(); // todo choose local endianess
 
