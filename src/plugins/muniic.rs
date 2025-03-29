@@ -759,7 +759,7 @@ fn get_method_or_attribute<'a>(
 ) -> Option<&'a MethodOrAttribute> {
     config
         .method_or_attribute_map
-        .entry((interface_id as u64) << 32 | (id as u64))
+        .entry(((interface_id as u64) << 32) | (id as u64))
         .or_insert_with(|| {
             let interface = if let Some(interface_hash_map) = json_config.map.get(&interface_id) {
                 let interface_hash = interface_hash_map

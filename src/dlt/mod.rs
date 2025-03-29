@@ -693,7 +693,9 @@ impl DltMessage {
             Some(e) => {
                 // could return e.mstp() == DltMessageType::Control(DltMessageControlType::Request)
                 (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
-            (e.verb_mstp_mtin>>4 & 0x0f) == 1
+            //((e.verb_mstp_mtin>>4) & 0x0f) == 1
+            // the upper 4 bits are always zero after shifting!
+            e.verb_mstp_mtin>>4 == 1
                 // mtin == MTIN_CTRL.CONTROL_REQUEST
             }
             None => false,
@@ -707,7 +709,7 @@ impl DltMessage {
             Some(e) => {
                 // could return e.mstp() == DltMessageType::Control(DltMessageControlType::Response)
                 (e.verb_mstp_mtin >> 1) & 0x07 ==  3 && // TYPE_CONTROL
-                (e.verb_mstp_mtin>>4 & 0x0f) == 2
+                e.verb_mstp_mtin>>4 == 2
                 // mtin == MTIN_CTRL.CONTROL_RESPONSE
             }
             None => false,
@@ -1293,7 +1295,7 @@ impl DltMessage {
             ecu: DltChar4::from_str("ECU1").unwrap(),
         };
         let exth = DltExtendedHeader {
-            verb_mstp_mtin: 0x3 << 1 | (0x02 << 4),
+            verb_mstp_mtin: (0x3 << 1) | (0x02 << 4),
             noar,
             apid: DltChar4::from_buf(b"DA1\0"),
             ctid: DltChar4::from_buf(b"DC1\0"),
@@ -1851,7 +1853,7 @@ mod tests {
     use std::io::Write;
 
     use super::*;
-    use crate::{to_endian_vec, utils::*};
+    use crate::{dlt_args, serde_verb_payload::DltVerbArgTypeWrapper, to_endian_vec, utils::*};
 
     mod dlt_char4 {
         use super::*;
@@ -3174,5 +3176,89 @@ mod tests {
         let (parsed, m2) = parse_dlt_with_serial_header(1, &file[vec_m1.len() - 1..]).unwrap();
         assert_eq!(parsed, vec_m2.len());
         assert_eq!(m2.mcnt(), 2);
+    }
+
+    use std::fs::File;
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_dlt_v1_verb_msg(
+        is_big_endian: bool,
+        reception_time_us: u64,
+        ecu: DltChar4,
+        apid: DltChar4,
+        ctid: DltChar4,
+        timestamp_dms: Option<u32>,
+        mcnt: u8,
+        payload: (u8, Vec<u8>),
+    ) -> DltMessage {
+        DltMessage {
+            index: 0,
+            reception_time_us,
+            ecu,
+            timestamp_dms: timestamp_dms.unwrap_or(0),
+            standard_header: DltStandardHeader {
+                htyp: if is_big_endian {
+                    DLT_STD_HDR_VERSION | DLT_STD_HDR_BIG_ENDIAN
+                } else {
+                    DLT_STD_HDR_VERSION
+                } | if timestamp_dms.is_some() {
+                    DLT_STD_HDR_HAS_TIMESTAMP
+                } else {
+                    0
+                },
+                len: 0, // will be overwritten at to_write (and not needed after creation/parsing)
+                mcnt,   // TODO count as u8,
+            },
+            extended_header: Some(DltExtendedHeader {
+                verb_mstp_mtin: 1,
+                noar: payload.0,
+                apid,
+                ctid,
+            }),
+            lifecycle: 0,
+            payload: payload.1,
+            payload_text: None,
+        }
+    }
+
+    #[test]
+    fn create_dlt_file_ascii() {
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("test_ascii_utf8_strings.dlt");
+        if let Ok(mut fi) = File::create(test_dir) {
+            let m = create_dlt_v1_verb_msg(
+                false, // cfg!(target_endian = "big")
+                0,
+                DltChar4::from_buf(b"ECU1"),
+                DltChar4::from_buf(b"adlt"),
+                DltChar4::from_buf(b"txta"),
+                None,
+                0,
+                dlt_args!(
+                    "next arg is an ascii string with 'übe':",
+                    DltVerbArgTypeWrapper::DltScodAscii(serde_bytes::Bytes::new(b"\xfcbe\0"))
+                )
+                .unwrap(),
+            );
+            m.to_write(&mut fi).unwrap();
+            let m = create_dlt_v1_verb_msg(
+                false, // cfg!(target_endian = "big")
+                0,
+                DltChar4::from_buf(b"ECU1"),
+                DltChar4::from_buf(b"adlt"),
+                DltChar4::from_buf(b"txta"),
+                None,
+                0,
+                dlt_args!(
+                    "next arg is an ascii string with '€÷¢µ©':",
+                    DltVerbArgTypeWrapper::DltScodAscii(serde_bytes::Bytes::new(
+                        b"\x80\xf7\xa2\xb5\xa9\0"
+                    ))
+                )
+                .unwrap(),
+            );
+            m.to_write(&mut fi).unwrap();
+        }
     }
 }
