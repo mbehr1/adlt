@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.61.3 - 2025-03-29
+#### Bug Fixes
+- **(lc)** remove one println - (1cdcc9a) - Matthias Behr
+#### Miscellaneous Chores
+- **(deps)** update bincode to final 2.0.1 - (5c2c954) - Matthias Behr
+- clippy warnings and serialize SCOD_ASCII - (5da3ae8) - Matthias Behr
+
+- - -
+
 ## v0.61.2 - 2025-02-02
 #### Bug Fixes
 - **(control_msgs)** first payload byte was missing - (a0c9f1c) - Matthias Behr
