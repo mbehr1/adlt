@@ -1699,7 +1699,7 @@ fn process_file_context<T: Read + Write>(
     log: &slog::Logger,
     fc: &mut FileContext,
     websocket: &mut WebSocket<T>,
-) -> Result<(), tungstenite::Error> {
+) -> Result<(), Box<tungstenite::Error>> {
     let mut got_new_msgs = false;
     let mut parser_thread_finished = false;
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
@@ -1755,10 +1755,9 @@ fn process_file_context<T: Read + Write>(
                 // todo will never have a parser thread... is the error below enough?
                 //websocket
                 //    .write_message(Message::Text(format!("err: extract_failed {}", e)))?;
-                return Err(tungstenite::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(Box::new(tungstenite::Error::Io(std::io::Error::other(
                     "extract_failed",
-                )));
+                ))));
             }
         }
     };
@@ -2490,7 +2489,7 @@ mod tests {
         let lc_pt = ptt.lc_thread.join().unwrap();
         let lc_dur = start.elapsed();
         println!("lc_thread took {:?}", lc_dur);
-        assert!(lc_pt.len() > 0);
+        assert!(!lc_pt.is_empty());
         if let Some(st) = ptt.sort_thread {
             let st_pt = st.join().unwrap();
             let st_dur = start.elapsed();
@@ -2535,7 +2534,7 @@ mod tests {
         let lc_pt = ptt.lc_thread.join().unwrap();
         let lc_dur = start.elapsed();
         println!("lc_thread took {:?}", lc_dur);
-        assert!(lc_pt.len() > 0);
+        assert!(!lc_pt.is_empty());
         if let Some(st) = ptt.sort_thread {
             let st_pt = st.join().unwrap();
             let st_dur = start.elapsed();

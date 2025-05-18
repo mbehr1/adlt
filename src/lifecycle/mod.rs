@@ -129,11 +129,7 @@ impl Lifecycle {
     pub fn resume_time(&self) -> u64 {
         if let Some(resume_lc) = &self.resume_lc {
             self.start_time + self.min_timestamp_us
-                - if resume_lc.start_time < self.start_time {
-                    self.start_time - resume_lc.start_time
-                } else {
-                    0
-                }
+                - self.start_time.saturating_sub(resume_lc.start_time)
         } else {
             self.start_time
         }
@@ -162,11 +158,7 @@ impl Lifecycle {
     /// of this lc vs. the resumed one.
     pub fn suspend_duration(&self) -> u64 {
         if let Some(resume_lc) = &self.resume_lc {
-            if resume_lc.start_time < self.start_time {
-                self.start_time - resume_lc.start_time
-            } else {
-                0
-            }
+            self.start_time.saturating_sub(resume_lc.start_time)
         } else {
             0
         }
@@ -319,11 +311,7 @@ impl Lifecycle {
             && (msg_lc_start <= cur_end_time/*|| msg_lc_start <= self.last_reception_time disabled as part of fixing lc_ex006 (idlts)*/))
             || !msg.standard_header.has_timestamp();
 
-        let would_move_start_time_us = if msg_lc_start < self.start_time {
-            self.start_time - msg_lc_start
-        } else {
-            0
-        };
+        let would_move_start_time_us = self.start_time.saturating_sub(msg_lc_start);
 
         if is_part_of_cur_lc
             && would_move_start_time_us > max_buffering_delay_us

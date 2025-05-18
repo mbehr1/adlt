@@ -117,11 +117,7 @@ pub fn get_apid_for_tag(namespace: u32, tag: &str) -> DltChar4 {
                                     acc
                                 }
                             });
-                            let mut needed_other = if nr_underscore < 3 {
-                                3 - nr_underscore
-                            } else {
-                                0
-                            };
+                            let mut needed_other = 3u32.saturating_sub(nr_underscore);
                             let mut abbrev = String::with_capacity(4);
                             let mut take_next = true;
                             for c in trimmed_tag.chars() {
@@ -151,8 +147,7 @@ pub fn get_apid_for_tag(namespace: u32, tag: &str) -> DltChar4 {
                                     acc
                                 }
                             });
-                            let mut needed_lowercase =
-                                if nr_capital < 4 { 4 - nr_capital } else { 0 };
+                            let mut needed_lowercase = 4u32.saturating_sub(nr_capital);
                             let mut abbrev = String::with_capacity(4);
                             for c in trimmed_tag.chars() {
                                 if c.is_ascii_uppercase() {

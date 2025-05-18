@@ -137,25 +137,19 @@ impl<R: Read> Seek for LowMarkBufReader<R> {
                         "LowMarkBufReader nok seek to {:?} < abs_pos {}",
                         pos, self.abs_pos
                     );
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!(
-                            "LowMarkBufReader unsupported Seek {:?} < abs_pos {}",
-                            pos, self.abs_pos
-                        ),
-                    ))
+                    Err(std::io::Error::other(format!(
+                        "LowMarkBufReader unsupported Seek {:?} < abs_pos {}",
+                        pos, self.abs_pos
+                    )))
                 } else if n > (self.abs_pos + self.cap) as u64 {
                     println!(
                         "LowMarkBufReader nok seek to {:?} >= abs_pos {} + cap",
                         pos, self.abs_pos
                     );
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!(
-                            "LowMarkBufReader unsupported Seek {:?} >= abs_pos {} +cap {}",
-                            pos, self.abs_pos, self.cap
-                        ),
-                    ))
+                    Err(std::io::Error::other(format!(
+                        "LowMarkBufReader unsupported Seek {:?} >= abs_pos {} +cap {}",
+                        pos, self.abs_pos, self.cap
+                    )))
                 } else {
                     /*println!(
                         "LowMarkBufReader.seek to {:?} at pos {} / abs_pos {}",
@@ -174,13 +168,10 @@ impl<R: Read> Seek for LowMarkBufReader<R> {
                     "LowMarkBufReader unsupported Seek {:?} at abs_pos {}",
                     pos, self.abs_pos
                 );
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!(
-                        "LowMarkBufReader unsupported Seek {:?} at abs_pos {}",
-                        pos, self.abs_pos
-                    ),
-                ))
+                Err(std::io::Error::other(format!(
+                    "LowMarkBufReader unsupported Seek {:?} at abs_pos {}",
+                    pos, self.abs_pos
+                )))
             }
         }
     }
