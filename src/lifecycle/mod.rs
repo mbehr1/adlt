@@ -999,20 +999,35 @@ where
             lc
         })
         .collect();
+
+    // sort_by requires a total order.
+    // but we still have resumes detected "best effort" that sometimes lead to weird cases (see lc_ex004) where
+    // the resume lc start time is moving to earlier than the lc it resumed from
+    // we ensure a total order by using the resume_lc start time+1 for the sort order if it's later than the lc start time
+
     sorted_lcs.sort_by(|a, b| {
+        let mut b_start_time = b.start_time;
         if let Some(b_resume_lc) = &b.resume_lc {
             if b_resume_lc.id == a.id {
                 // b is a resume of a so a must be earlier
                 return std::cmp::Ordering::Less;
             }
+            if b_resume_lc.start_time > b.start_time {
+                b_start_time = b_resume_lc.start_time + 1;
+            }
         }
+        let mut a_start_time = a.start_time;
         if let Some(a_resume_lc) = &a.resume_lc {
             if a_resume_lc.id == b.id {
                 // a is a resume of b so b must be earlier
                 return std::cmp::Ordering::Greater;
             }
+            if a_resume_lc.start_time > a.start_time {
+                a_start_time = a_resume_lc.start_time + 1;
+            }
         }
-        a.start_time.cmp(&b.start_time)
+
+        a_start_time.cmp(&b_start_time)
     });
     sorted_lcs
 }
