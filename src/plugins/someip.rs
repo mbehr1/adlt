@@ -197,6 +197,11 @@ impl Plugin for SomeipPlugin {
                                                     ),
                                                 }));
                                             }
+                                        } else {
+                                            decoded_header = Some(Ok(format!(
+                                                "SOME/IP segmented message NWEN {} for unknown id!",
+                                                segment_id
+                                            )));
                                         }
                                         break;
                                     }
@@ -318,13 +323,21 @@ impl Plugin for SomeipPlugin {
             }
 
             if segmented_type != SegmentedType::None {
-                if let Some(Ok(text)) = decoded_header {
-                    msg.set_payload_text(text);
-                } else {
-                    msg.set_payload_text(format!(
-                        "someip plugin! got decoding err={:?}",
-                        decoded_header
-                    ));
+                match decoded_header {
+                    Some(Ok(text)) => {
+                        msg.set_payload_text(text);
+                    }
+                    Some(Err(e)) => {
+                        msg.set_payload_text(format!("someip plugin! got decoding err={:?}", e));
+                    }
+                    None => {
+                        // no header decoded, but segmented msg
+                        let cur_payload = msg.payload_as_text();
+                        msg.set_payload_text(format!(
+                            "someip plugin! cannot decode: {:?}",
+                            cur_payload
+                        ));
+                    }
                 }
             } // for None do nothing
         }
