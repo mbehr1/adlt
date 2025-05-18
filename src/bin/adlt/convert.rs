@@ -600,22 +600,32 @@ pub fn convert<W: std::io::Write + Send + 'static>(
             adlt::lifecycle::LifecycleId,
         >::default())
         .construct::<adlt::lifecycle::LifecycleId, adlt::lifecycle::LifecycleItem>();
-    let lc_thread = std::thread::spawn(move || {
-        adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, &|m| {
-            sync_sender_send_delay_if_full(m, &tx_for_lc_thread)
+    let lc_thread = std::thread::Builder::new()
+        .name("lc_thread".to_string())
+        .spawn(move || {
+            adlt::lifecycle::parse_lifecycles_buffered_from_stream(
+                lcs_w,
+                rx_from_parse_thread,
+                &|m| sync_sender_send_delay_if_full(m, &tx_for_lc_thread),
+            )
         })
-    });
+        .unwrap();
 
     let (plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
         let (tx_for_plugin_thread, rx_from_plugin_thread) = sync_channel(512 * 1024);
         (
-            Some(std::thread::spawn(move || {
-                plugins_process_msgs(
-                    rx_from_lc_thread,
-                    &|m| sync_sender_send_delay_if_full(m, &tx_for_plugin_thread),
-                    plugins_active,
-                )
-            })),
+            Some(
+                std::thread::Builder::new()
+                    .name("plugin_thread".to_string()) // we keep default stack size of 2MB
+                    .spawn(move || {
+                        plugins_process_msgs(
+                            rx_from_lc_thread,
+                            &|m| sync_sender_send_delay_if_full(m, &tx_for_plugin_thread),
+                            plugins_active,
+                        )
+                    })
+                    .unwrap(),
+            ),
             rx_from_plugin_thread,
         )
     } else {
@@ -626,15 +636,20 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let (sort_thread, rx_final) = if sort_by_time {
         let (tx_for_sort_thread, rx_from_sort_thread) = sync_channel(512 * 1024);
         (
-            Some(std::thread::spawn(move || {
-                adlt::utils::buffer_sort_messages(
-                    rx_from_plugin_thread,
-                    &|m| sync_sender_send_delay_if_full(m, &tx_for_sort_thread),
-                    &sort_thread_lcs_r,
-                    3,                            // windows_size_secs for the buffer_delay_calc
-                    20 * adlt::utils::US_PER_SEC, // min_buffer_delay_us:  // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
-                )
-            })),
+            Some(
+                std::thread::Builder::new()
+                    .name("sort_thread".to_string())
+                    .spawn(move || {
+                        adlt::utils::buffer_sort_messages(
+                            rx_from_plugin_thread,
+                            &|m| sync_sender_send_delay_if_full(m, &tx_for_sort_thread),
+                            &sort_thread_lcs_r,
+                            3, // windows_size_secs for the buffer_delay_calc
+                            20 * adlt::utils::US_PER_SEC, // min_buffer_delay_us:  // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
+                        )
+                    })
+                    .unwrap(),
+            ),
             rx_from_sort_thread,
         )
     } else {
@@ -645,11 +660,16 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let (thread_filter, t4_input) = if !filters.is_empty() {
         let (tx_filter, rx_filter) = sync_channel(256 * 1024);
         (
-            Some(std::thread::spawn(move || {
-                adlt::filter::functions::filter_as_streams(&filters, &rx_final, &|m| {
-                    sync_sender_send_delay_if_full(m, &tx_filter)
-                })
-            })),
+            Some(
+                std::thread::Builder::new()
+                    .name("filter".to_string())
+                    .spawn(move || {
+                        adlt::filter::functions::filter_as_streams(&filters, &rx_final, &|m| {
+                            sync_sender_send_delay_if_full(m, &tx_filter)
+                        })
+                    })
+                    .unwrap(),
+            ),
             rx_filter,
         )
     } else {
@@ -657,7 +677,8 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     };
 
     let t4_log = log.clone();
-    let t4 = std::thread::spawn(
+    let t4 = std::thread::Builder::new()
+                    .name("t4_log".to_string()).spawn(
         move || -> Result<(adlt::dlt::DltMessageIndexType, W), Box<dyn std::error::Error + Send + Sync>> {
             let log = t4_log;
             let mut output_file = if let Some(s) = output_file {
@@ -782,7 +803,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
 
             Ok((output, writer_screen))
         },
-    );
+    ).unwrap();
     const BUFREADER_CAPACITY: usize = 512 * 1024;
     // we use a relatively small 512kb chunk size as we're processing
     // the data multithreaded reader in bigger chunks slows is in total slower

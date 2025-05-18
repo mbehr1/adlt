@@ -55,11 +55,8 @@ use adlt::filter::{Filter, FilterKind, FilterKindContainer};
 
 use bincode::config;
 
-const BINCODE_CONFIG: config::Configuration<
-    config::LittleEndian,
-    config::Fixint,
-    config::NoLimit,
-> = config::legacy(); // todo choose local endianess
+const BINCODE_CONFIG: config::Configuration<config::LittleEndian, config::Fixint, config::NoLimit> =
+    config::legacy(); // todo choose local endianess
 
 pub fn add_subcommand(app: Command) -> Command {
     app.subcommand(
@@ -110,122 +107,131 @@ pub fn remote(
 
     for stream in server.incoming() {
         let logc = log.clone();
-        spawned_servers.push(std::thread::spawn(move || {
-            let log = logc;
-            let callback = |req: &Request, mut response: Response| {
-                info!(log, "Received a new ws handshake");
-                info!(log, "The request's path is: {}", req.uri().path());
-                info!(log, "The request's headers are:");
-                for (ref header, value) in req.headers() {
-                    info!(log, "* {}:{:?}", header, value);
-                }
+        spawned_servers.push(
+            std::thread::Builder::new()
+                .name("server".to_string())
+                .spawn(move || {
+                    let log = logc;
+                    let callback = |req: &Request, mut response: Response| {
+                        info!(log, "Received a new ws handshake");
+                        info!(log, "The request's path is: {}", req.uri().path());
+                        info!(log, "The request's headers are:");
+                        for (ref header, value) in req.headers() {
+                            info!(log, "* {}:{:?}", header, value);
+                        }
 
-                // Let's add an additional header to our response to the client.
-                let headers = response.headers_mut();
-                headers.append("adlt-version", clap::crate_version!().parse().unwrap());
-                headers.append(
-                    "adlt-archives-supported",
-                    archive_supported_fileexts().join(",").parse().unwrap(),
-                );
-                Ok(response)
-            };
+                        // Let's add an additional header to our response to the client.
+                        let headers = response.headers_mut();
+                        headers.append("adlt-version", clap::crate_version!().parse().unwrap());
+                        headers.append(
+                            "adlt-archives-supported",
+                            archive_supported_fileexts().join(",").parse().unwrap(),
+                        );
+                        Ok(response)
+                    };
 
-            let web_socket_config = tungstenite::protocol::WebSocketConfig {
-                max_message_size: Some(1_000_000_000),
-                max_send_queue: None,
-                max_frame_size: None,
-                accept_unmasked_frames: false,
-            };
+                    let web_socket_config = tungstenite::protocol::WebSocketConfig {
+                        max_message_size: Some(1_000_000_000),
+                        max_send_queue: None,
+                        max_frame_size: None,
+                        accept_unmasked_frames: false,
+                    };
 
-            let a_stream = stream.unwrap();
-            // we set a larger initial timeout as e.g. on vscode restart the accept fail often with read timeouts
-            a_stream
-                .set_read_timeout(Some(std::time::Duration::from_millis(5000)))
-                .expect("failed to set_read_timeout"); // panic on failure
-            a_stream
-                .set_write_timeout(None)
-                .expect("failed to set_write_timeout");
-            let websocket_res = accept_hdr_with_config(a_stream, callback, Some(web_socket_config));
-            if websocket_res.is_err() {
-                warn!(log, "websocket accept failed. thread done");
-                return;
-            }
-            let mut websocket = websocket_res.unwrap();
-
-            // now reduce read timeout to 100ms
-            websocket
-                .get_ref()
-                .set_read_timeout(Some(std::time::Duration::from_millis(100)))
-                .expect("failed to set_read_timeout"); // panic on failure;
-
-            let mut file_context: Option<FileContext> = None;
-
-            // we do a kind of event loop here
-            // 1st check for any new DltMessages from any started threads and process those
-            // 2nd check for new websocket messages from the client
-            // the socket is configured with a read timeout so that reading doesn't block for long
-            // todo change to event/poll alike solution
-
-            let mut last_all_msgs_len = usize::MAX;
-            loop {
-                // 1st step any new messages to process
-                if let Some(ref mut fc) = file_context {
-                    let r = process_file_context(&log, fc, &mut websocket);
-                    if r.is_err() {
-                        warn!(log, "ws process_file_context returned err {:?}", r);
-                        break;
+                    let a_stream = stream.unwrap();
+                    // we set a larger initial timeout as e.g. on vscode restart the accept fail often with read timeouts
+                    a_stream
+                        .set_read_timeout(Some(std::time::Duration::from_millis(5000)))
+                        .expect("failed to set_read_timeout"); // panic on failure
+                    a_stream
+                        .set_write_timeout(None)
+                        .expect("failed to set_write_timeout");
+                    let websocket_res =
+                        accept_hdr_with_config(a_stream, callback, Some(web_socket_config));
+                    if websocket_res.is_err() {
+                        warn!(log, "websocket accept failed. thread done");
+                        return;
                     }
-                }
+                    let mut websocket = websocket_res.unwrap();
 
-                let msg = websocket.read_message();
-                if let Err(err) = msg {
-                    match err {
-                        tungstenite::Error::Io(ref e)
-                            if e.kind() == std::io::ErrorKind::WouldBlock
-                                || e.kind() == std::io::ErrorKind::TimedOut =>
-                        {
-                            let all_msgs_len = if let Some(ctx) = &file_context {
-                                ctx.all_msgs.len()
-                            } else {
-                                0
-                            };
-                            if all_msgs_len != last_all_msgs_len {
-                                last_all_msgs_len = all_msgs_len;
-                                info!(
+                    // now reduce read timeout to 100ms
+                    websocket
+                        .get_ref()
+                        .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+                        .expect("failed to set_read_timeout"); // panic on failure;
+
+                    let mut file_context: Option<FileContext> = None;
+
+                    // we do a kind of event loop here
+                    // 1st check for any new DltMessages from any started threads and process those
+                    // 2nd check for new websocket messages from the client
+                    // the socket is configured with a read timeout so that reading doesn't block for long
+                    // todo change to event/poll alike solution
+
+                    let mut last_all_msgs_len = usize::MAX;
+                    loop {
+                        // 1st step any new messages to process
+                        if let Some(ref mut fc) = file_context {
+                            let r = process_file_context(&log, fc, &mut websocket);
+                            if r.is_err() {
+                                warn!(log, "ws process_file_context returned err {:?}", r);
+                                break;
+                            }
+                        }
+
+                        let msg = websocket.read_message();
+                        if let Err(err) = msg {
+                            match err {
+                                tungstenite::Error::Io(ref e)
+                                    if e.kind() == std::io::ErrorKind::WouldBlock
+                                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                                {
+                                    let all_msgs_len = if let Some(ctx) = &file_context {
+                                        ctx.all_msgs.len()
+                                    } else {
+                                        0
+                                    };
+                                    if all_msgs_len != last_all_msgs_len {
+                                        last_all_msgs_len = all_msgs_len;
+                                        info!(
                                     log,
                                     "ws read_message returned WouldBlock. all_msgs.len()={}",
                                     all_msgs_len
                                 );
+                                    }
+                                    continue;
+                                }
+                                _ => {
+                                    warn!(log, "ws read_message returned err {:?}", err);
+                                    break;
+                                }
                             }
-                            continue;
                         }
-                        _ => {
-                            warn!(log, "ws read_message returned err {:?}", err);
-                            break;
+                        let msg = msg.unwrap();
+                        match msg {
+                            Message::Text(t) => process_incoming_text_message(
+                                &log,
+                                t,
+                                &mut file_context,
+                                &mut websocket,
+                            ),
+                            Message::Binary(b) => {
+                                info!(log, "got binary message with len {}", b.len());
+                            }
+                            Message::Frame(b) => {
+                                info!(log, "got frame message with len {}", b.len());
+                            }
+                            Message::Close(cf) => {
+                                warn!(log, "got close message with {:?}", cf);
+                                break;
+                            }
+                            Message::Ping(_) | Message::Pong(_) => {}
                         }
                     }
-                }
-                let msg = msg.unwrap();
-                match msg {
-                    Message::Text(t) => {
-                        process_incoming_text_message(&log, t, &mut file_context, &mut websocket)
-                    }
-                    Message::Binary(b) => {
-                        info!(log, "got binary message with len {}", b.len());
-                    }
-                    Message::Frame(b) => {
-                        info!(log, "got frame message with len {}", b.len());
-                    }
-                    Message::Close(cf) => {
-                        warn!(log, "got close message with {:?}", cf);
-                        break;
-                    }
-                    Message::Ping(_) | Message::Pong(_) => {}
-                }
-            }
-            let _ = websocket.write_pending(); // ignore error
-            warn!(log, "websocket thread done");
-        }));
+                    let _ = websocket.write_pending(); // ignore error
+                    warn!(log, "websocket thread done");
+                })
+                .unwrap(),
+        );
         if no_more_incoming_cons {
             break;
         }
@@ -2029,7 +2035,7 @@ fn process_file_context<T: Read + Write>(
         // for queries (not streams), check whether query is done:
         if ((
             ((!got_new_msgs && !(fc.collect_mode==CollectMode::OnePassStreams))
-                ||(parser_thread_finished && fc.collect_mode == CollectMode::OnePassStreams)) 
+                ||(parser_thread_finished && fc.collect_mode == CollectMode::OnePassStreams))
             && (stream.all_msgs_last_processed_len >= all_msgs_len)) // no new msgs and all processed
             || (stream.msgs_sent.end >= stream.msgs_to_send.end)) // or window size achieved
             && !stream.is_stream
@@ -2139,32 +2145,42 @@ fn create_parser_thread(
     // the message flow is:
     // generated by parser_thread  -> lc_thread -> plugin_thread (if plugins_active) -> sort_thread
 
-    let lc_thread = std::thread::spawn(move || {
-        adlt::lifecycle::parse_lifecycles_buffered_from_stream(lcs_w, rx_from_parse_thread, &|m| {
-            sync_sender_send_delay_if_full(m, &tx_for_lc_thread)
+    let lc_thread = std::thread::Builder::new()
+        .name("lc_thread".to_string())
+        .spawn(move || {
+            adlt::lifecycle::parse_lifecycles_buffered_from_stream(
+                lcs_w,
+                rx_from_parse_thread,
+                &|m| sync_sender_send_delay_if_full(m, &tx_for_lc_thread),
+            )
         })
-    });
+        .unwrap();
 
     let lcs_r_for_plugins = lcs_r.clone();
     let (_plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
         let (tx_for_plugin_thread, rx_from_plugin_thread) = sync_channel(512 * 1024);
         (
-            Some(std::thread::spawn(move || {
-                plugins_active.iter_mut().for_each(|p| {
-                    p.set_lifecycle_read_handle(&lcs_r_for_plugins);
-                });
-                match plugins_process_msgs(
-                    rx_from_lc_thread,
-                    &|m| sync_sender_send_delay_if_full(m, &tx_for_plugin_thread),
-                    plugins_active,
-                ) {
-                    Ok(mut plugins_active) => {
-                        plugins_active.iter_mut().for_each(|p| p.sync_all());
-                        Ok(plugins_active)
-                    }
-                    Err(e) => Err(e),
-                }
-            })),
+            Some(
+                std::thread::Builder::new()
+                    .name("plugin_thread".to_string())
+                    .spawn(move || {
+                        plugins_active.iter_mut().for_each(|p| {
+                            p.set_lifecycle_read_handle(&lcs_r_for_plugins);
+                        });
+                        match plugins_process_msgs(
+                            rx_from_lc_thread,
+                            &|m| sync_sender_send_delay_if_full(m, &tx_for_plugin_thread),
+                            plugins_active,
+                        ) {
+                            Ok(mut plugins_active) => {
+                                plugins_active.iter_mut().for_each(|p| p.sync_all());
+                                Ok(plugins_active)
+                            }
+                            Err(e) => Err(e),
+                        }
+                    })
+                    .unwrap(),
+            ),
             rx_from_plugin_thread,
         )
     } else {
@@ -2175,15 +2191,20 @@ fn create_parser_thread(
     let (sort_thread, rx_final) = if sort_by_time {
         let (tx_for_sort_thread, rx_from_sort_thread) = sync_channel(512 * 1024);
         (
-            Some(std::thread::spawn(move || {
-                adlt::utils::buffer_sort_messages(
-                    rx_from_plugin_thread,
-                    &|m| sync_sender_send_delay_if_full(m, &tx_for_sort_thread),
-                    &sort_thread_lcs_r,
-                    3,
-                    20 * adlt::utils::US_PER_SEC, // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
-                )
-            })),
+            Some(
+                std::thread::Builder::new()
+                    .name("sort_thread".to_string())
+                    .spawn(move || {
+                        adlt::utils::buffer_sort_messages(
+                            rx_from_plugin_thread,
+                            &|m| sync_sender_send_delay_if_full(m, &tx_for_sort_thread),
+                            &sort_thread_lcs_r,
+                            3,
+                            20 * adlt::utils::US_PER_SEC, // todo target 2s. (to allow live tracing) but some big ECUs have a much weirder delay. Need to improve the algorithm to detect those.
+                        )
+                    })
+                    .unwrap(),
+            ),
             rx_from_sort_thread,
         )
     } else {
@@ -2196,9 +2217,10 @@ fn create_parser_thread(
     ParserThreadType {
         shall_stop,
         sort_thread,
-        parse_thread: std::thread::spawn(
+        parse_thread: std::thread::Builder::new()
+                    .name("parse_thread".to_string()).spawn(
             move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-                info!(log, "parser_thread started");
+                info!(log, "parse_thread started");
                 let shall_stop = pt_shall_stop.as_ref();
                 let mut messages_processed: adlt::dlt::DltMessageIndexType = 0;
 
@@ -2294,7 +2316,7 @@ fn create_parser_thread(
                 info!(log, "parser_thread stopped");
                 Ok(())
             },
-        ),
+        ).unwrap(),
         lc_thread,
         lcs_r,
         rx: rx_final,

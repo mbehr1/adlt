@@ -39,10 +39,16 @@ impl<T> ProgressNonAsyncFuture<T> {
         ProgressNonAsyncFuture {
             progress,
             shall_cancel,
-            thread: Some(std::thread::spawn(move || {
-                let progress_cb = |cur, max| Self::update_progress(cur, max, &progress_clone);
-                f(&progress_cb, shall_cancel_clone)
-            })),
+            thread: Some(
+                std::thread::Builder::new()
+                    .name("progressNonAsyncFut".to_string())
+                    .spawn(move || {
+                        let progress_cb =
+                            |cur, max| Self::update_progress(cur, max, &progress_clone);
+                        f(&progress_cb, shall_cancel_clone)
+                    })
+                    .unwrap(),
+            ),
         }
     }
 
