@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.61.4 - 2025-05-18
+#### Bug Fixes
+- **(lc)** sort was not a total order - (766310f) - Matthias Behr
+- **(someip)** improve text for decoding errors - (f1413f7) - Matthias Behr
+#### Miscellaneous Chores
+- **(deps)** update dependencies - (8b87443) - Matthias Behr
+- fix clippy warnings - (5274686) - Matthias Behr
+- provide thread names - (12b7421) - Matthias Behr
+
+- - -
+
 ## v0.61.3 - 2025-03-29
 #### Bug Fixes
 - **(lc)** remove one println - (1cdcc9a) - Matthias Behr
