@@ -687,8 +687,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                     Err(e) => Err(e),
                 }
             } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Err(std::io::Error::other(
                     "no output_file param",
                 ))
             };

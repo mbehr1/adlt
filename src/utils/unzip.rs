@@ -256,8 +256,7 @@ pub fn list_archive_contents<RS: Read + Seek + super::cloneable_seekable_reader:
     {
         // println!("list_archive_contents: fallback to libarchive");
         // fallback to libarchive:
-        let contents = list_archive_files(source)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let contents = list_archive_files(source).map_err(std::io::Error::other)?;
         Ok(contents)
     }
     #[cfg(not(feature = "libarchive"))]
@@ -599,11 +598,10 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
             ArchiveIteratorBuilder::new(source)
                 .filter(move |str, _stat| files.iter().any(|f| f == str))
                 .build()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+                .map_err(std::io::Error::other)?
         } else {
             // todo use uncompress_archive !
-            ArchiveIterator::from_read(source)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+            ArchiveIterator::from_read(source).map_err(std::io::Error::other)?
         };
 
         let mut file_writer: Option<BufWriter<_>> = None;
@@ -674,7 +672,7 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                 }
                 ArchiveContents::Err(e) => {
                     println!("error: {}", e);
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, e));
+                    return Err(std::io::Error::other(e));
                 }
             }
         }
