@@ -1,6 +1,8 @@
 // copyright Matthias Behr, (c) 2022
 //
 // todos:
+// [ ] - use spooled_tempfile as file_data to reduce memory usage
+// [ ] - sort filetransfers by ecu and then time or name
 // [ ] - add unit test coverage!
 
 use crate::{
@@ -59,6 +61,8 @@ enum FileTransferState {
     Complete,
     /// final state for corrupt/incomplete detected transfers. A transfer stays in Started as long as a corruption/incompleteness is detected.
     Incomplete,
+    /// final state for transfer with an error, e.g. FLER message received with errorCode and errno
+    Error(i64, i64), // errorCode, errno
 }
 
 #[derive(Debug)]
@@ -148,17 +152,28 @@ impl FileTransfer {
                     false
                 }
             } else {
-                self.state = FileTransferState::Incomplete;
+                if !matches!(self.state, FileTransferState::Error(_, _)) {
+                    self.state = FileTransferState::Incomplete;
+                }
+                if self.file_data.capacity() > 0 {
+                    self.file_data = Vec::new(); // do not keep the data any more
+                }
                 true
             }
         } else if self.next_package > self.nr_packages
-            && (self.file_size == 0 || self.file_size as usize == self.recvd_payload)
+            && ((self.file_size == 0 && self.recvd_payload > 0)
+                || self.file_size as usize == self.recvd_payload)
         {
             self.file_size = self.recvd_payload as u64;
             self.state = FileTransferState::Complete;
             true
         } else if self.recvd_packages >= self.nr_packages {
-            self.state = FileTransferState::Incomplete;
+            if !matches!(self.state, FileTransferState::Error(_, _)) {
+                self.state = FileTransferState::Incomplete;
+            }
+            if self.file_data.capacity() > 0 {
+                self.file_data = Vec::new(); // do not keep the data any more
+            }
             true
         } else {
             false
@@ -228,215 +243,292 @@ impl Plugin for FileTransferPlugin {
             }
         }
 
-        if msg.is_verbose() && msg.mstp() == DltMessageType::Log(DltMessageLogType::Info) {
-            match msg.noar() {
-                8 => {
-                    if FileTransferPlugin::is_type(msg, "FLST") {
-                        // file transfer start
+        if msg.is_verbose() {
+            match msg.mstp() {
+                DltMessageType::Log(DltMessageLogType::Info) => {
+                    match msg.noar() {
+                        8 => {
+                            if FileTransferPlugin::is_type(msg, "FLST") {
+                                // file transfer start
+                                let mut serial = 0;
+                                let mut file_name = String::new();
+                                let mut file_size = 0;
+                                let mut file_creation_date = String::new();
+                                let mut nr_packages = 0;
+                                let mut buffer_size = 0;
+                                let args = msg.into_iter();
+                                for (i, arg) in args.enumerate() {
+                                    match i {
+                                        0 => {} // FLST
+                                        1 => {
+                                            // serial
+                                            if let Ok(s) = arg_as_uint(&arg) {
+                                                serial = s;
+                                            } else {
+                                                println!("FLST unexpected serial type!");
+                                                break;
+                                            }
+                                        }
+                                        2 => {
+                                            // filename
+                                            if let Ok(name) = arg_as_string(&arg) {
+                                                file_name += &name;
+                                            }
+                                        }
+                                        3 => {
+                                            // fileSize
+                                            if let Ok(s) = arg_as_uint(&arg) {
+                                                file_size = s;
+                                            } else {
+                                                println!("FLST unexpected file size type!");
+                                                break;
+                                            }
+                                        }
+                                        4 => {
+                                            // file creation date
+                                            if let Ok(name) = arg_as_string(&arg) {
+                                                file_creation_date += &name;
+                                            }
+                                        }
+                                        5 => {
+                                            // nr packages
+                                            if let Ok(s) = arg_as_uint(&arg) {
+                                                nr_packages = s;
+                                            } else {
+                                                println!("FLST unexpected nr_packages type!");
+                                                break;
+                                            }
+                                        }
+                                        6 => {
+                                            // buffer size
+                                            if let Ok(s) = arg_as_uint(&arg) {
+                                                buffer_size = s;
+                                            } else {
+                                                println!("FLST unexpected buffer_size type!");
+                                                break;
+                                            }
+                                            break;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                /*println!(
+                                    "FLST serial={} file_name={} file_size={} file_creation_date()={} nr_packages={} buffer_size={}",
+                                    serial, file_name, file_size, file_creation_date, nr_packages, buffer_size
+                                );*/
+                                if nr_packages > 0 && buffer_size > 0 {
+                                    let keep_data = self.allow_save
+                                        || (if let Some(pat) = &self.auto_save_glob {
+                                            pat.matches(&file_name)
+                                        } else {
+                                            false
+                                        });
+
+                                    self.transfers.push(FileTransfer {
+                                        ecu: msg.ecu,
+                                        lifecycle: msg.lifecycle,
+                                        state: FileTransferState::Started,
+                                        serial,
+                                        file_name,
+                                        file_size,
+                                        file_creation_date,
+                                        nr_packages,
+                                        buffer_size,
+                                        next_package: 1,
+                                        recvd_packages: 0,
+                                        recvd_payload: 0,
+                                        file_data: Vec::with_capacity(if keep_data {
+                                            (nr_packages * buffer_size) as usize
+                                        } else {
+                                            0
+                                        }),
+                                        auto_saved_to: None,
+                                    });
+                                    self.transfers_idx.insert(
+                                        (msg.ecu, msg.lifecycle, serial),
+                                        self.transfers.len() - 1,
+                                    );
+                                    self.update_state();
+                                }
+                            }
+                        }
+                        5 => {
+                            if FileTransferPlugin::is_type(msg, "FLDA") {
+                                // file transfer data
+                                let mut serial = u64::MAX;
+                                let mut package_nr = u64::MAX;
+                                let args = msg.into_iter();
+                                for (i, arg) in args.enumerate() {
+                                    match i {
+                                        0 => {} // FLDA
+                                        1 => {
+                                            if let Ok(s) = arg_as_uint(&arg) {
+                                                serial = s;
+                                            } else {
+                                                println!("FLDA unexpected serial type!");
+                                                break;
+                                            }
+                                        }
+                                        2 => {
+                                            if let Ok(s) = arg_as_uint(&arg) {
+                                                // is weirdly a SINT32...
+                                                package_nr = s;
+                                            } else {
+                                                println!("FLDA unexpected package_nr type!");
+                                                break;
+                                            }
+                                        }
+                                        3 => {
+                                            if let Some(file_transfer_idx) = self
+                                                .transfers_idx
+                                                .get(&(msg.ecu, msg.lifecycle, serial))
+                                            {
+                                                let file_transfer = self
+                                                    .transfers
+                                                    .get_mut(*file_transfer_idx)
+                                                    .unwrap();
+                                                if file_transfer.add_flda(package_nr, &arg) {
+                                                    if file_transfer.state
+                                                        == FileTransferState::Complete
+                                                    {
+                                                        let glob = &self.auto_save_glob;
+                                                        let path = &self.auto_save_path;
+                                                        FileTransferPlugin::check_auto_save(
+                                                            glob,
+                                                            path,
+                                                            file_transfer,
+                                                            self.allow_save,
+                                                        );
+                                                        // need to do that before the update_state as file_data gets moved then
+                                                    }
+                                                    self.update_state();
+                                                }
+                                            } else if package_nr == 1 {
+                                                // incomplete, but can recover as this is the first package
+                                                let mut file_transfer = FileTransfer {
+                                                    ecu: msg.ecu,
+                                                    lifecycle: msg.lifecycle,
+                                                    state: FileTransferState::MissingStart,
+                                                    serial,
+                                                    file_name: "<missing_flst>".to_owned(),
+                                                    file_size: 0,
+                                                    file_creation_date: "".to_owned(),
+                                                    nr_packages: u64::MAX,
+                                                    buffer_size: 0,
+                                                    next_package: 1,
+                                                    recvd_packages: 0,
+                                                    recvd_payload: 0,
+                                                    file_data: Vec::with_capacity(
+                                                        if self.allow_save { 512 } else { 0 },
+                                                    ), // we do need a capacity as we use that to indicate whether to store data or not
+                                                    auto_saved_to: None,
+                                                };
+                                                let _ = file_transfer.add_flda(package_nr, &arg); // ignore return value, we do update_state anyhow
+                                                self.transfers.push(file_transfer);
+                                                self.transfers_idx.insert(
+                                                    (msg.ecu, msg.lifecycle, serial),
+                                                    self.transfers.len() - 1,
+                                                );
+                                                self.update_state();
+                                            }
+                                            break;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
+                                if !self.keep_flda {
+                                    return false;
+                                }
+                            }
+                        }
+                        3 => {
+                            if FileTransferPlugin::is_type(msg, "FLFI") {
+                                // file transfer finish
+                                let mut serial = u64::MAX;
+                                let args = msg.into_iter();
+                                for (i, arg) in args.enumerate() {
+                                    match i {
+                                        0 => {} // FLFI
+                                        1 => {
+                                            if let Ok(s) = arg_as_uint(&arg) {
+                                                serial = s;
+                                            } else {
+                                                println!("FLDA unexpected serial type!");
+                                                break;
+                                            }
+                                            break;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                if let Some(file_transfer_idx) =
+                                    self.transfers_idx.get(&(msg.ecu, msg.lifecycle, serial))
+                                {
+                                    let file_transfer =
+                                        self.transfers.get_mut(*file_transfer_idx).unwrap();
+                                    // mark as finished:
+                                    if file_transfer.check_finished(true) {
+                                        if file_transfer.state == FileTransferState::Complete {
+                                            let glob = &self.auto_save_glob;
+                                            let path = &self.auto_save_path;
+                                            FileTransferPlugin::check_auto_save(
+                                                glob,
+                                                path,
+                                                file_transfer,
+                                                self.allow_save,
+                                            );
+                                            // need to do that before the update_state as file_data gets moved then
+                                        }
+                                        self.update_state();
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    };
+                }
+                DltMessageType::Log(DltMessageLogType::Error) => {
+                    if msg.noar() == 10 && FileTransferPlugin::is_type(msg, "FLER") {
+                        // we handle only the FLER with the serial contained from https://github.com/COVESA/dlt-daemon/blob/4a6ac112ece4122969b8ccf8181055a9c1717d6f/src/lib/dlt_filetransfer.c#L275
+                        // file transfer error
                         let mut serial = 0;
-                        let mut file_name = String::new();
-                        let mut file_size = 0;
-                        let mut file_creation_date = String::new();
-                        let mut nr_packages = 0;
-                        let mut buffer_size = 0;
+                        let mut error_code = 0i64;
+                        let mut err_no = 0i64;
                         let args = msg.into_iter();
                         for (i, arg) in args.enumerate() {
                             match i {
-                                0 => {} // FLST
+                                0 => {} // FLER
                                 1 => {
+                                    // INT errorCode
+                                    if let Ok(s) = arg_as_int(&arg) {
+                                        error_code = s;
+                                    } else {
+                                        println!("FLER unexpected errorCode type!");
+                                    }
+                                }
+                                2 => {
+                                    // INT errno
+                                    if let Ok(s) = arg_as_int(&arg) {
+                                        err_no = s;
+                                    } else {
+                                        println!("FLER unexpected errno type!");
+                                    }
+                                }
+                                3 => {
                                     // serial
                                     if let Ok(s) = arg_as_uint(&arg) {
                                         serial = s;
                                     } else {
-                                        println!("FLST unexpected serial type!");
-                                        break;
-                                    }
-                                }
-                                2 => {
-                                    // filename
-                                    if let Ok(name) = arg_as_string(&arg) {
-                                        file_name += &name;
-                                    }
-                                }
-                                3 => {
-                                    // fileSize
-                                    if let Ok(s) = arg_as_uint(&arg) {
-                                        file_size = s;
-                                    } else {
-                                        println!("FLST unexpected file size type!");
-                                        break;
-                                    }
-                                }
-                                4 => {
-                                    // file creation date
-                                    if let Ok(name) = arg_as_string(&arg) {
-                                        file_creation_date += &name;
-                                    }
-                                }
-                                5 => {
-                                    // nr packages
-                                    if let Ok(s) = arg_as_uint(&arg) {
-                                        nr_packages = s;
-                                    } else {
-                                        println!("FLST unexpected nr_packages type!");
-                                        break;
-                                    }
-                                }
-                                6 => {
-                                    // buffer size
-                                    if let Ok(s) = arg_as_uint(&arg) {
-                                        buffer_size = s;
-                                    } else {
-                                        println!("FLST unexpected buffer_size type!");
-                                        break;
+                                        println!("FLER unexpected serial type!");
                                     }
                                     break;
                                 }
-                                _ => {}
-                            }
-                        }
-                        /*println!(
-                            "FLST serial={} file_name={} file_size={} file_creation_date()={} nr_packages={} buffer_size={}",
-                            serial, file_name, file_size, file_creation_date, nr_packages, buffer_size
-                        );*/
-                        if nr_packages > 0 && buffer_size > 0 {
-                            let keep_data = self.allow_save
-                                || (if let Some(pat) = &self.auto_save_glob {
-                                    pat.matches(&file_name)
-                                } else {
-                                    false
-                                });
-
-                            self.transfers.push(FileTransfer {
-                                ecu: msg.ecu,
-                                lifecycle: msg.lifecycle,
-                                state: FileTransferState::Started,
-                                serial,
-                                file_name,
-                                file_size,
-                                file_creation_date,
-                                nr_packages,
-                                buffer_size,
-                                next_package: 1,
-                                recvd_packages: 0,
-                                recvd_payload: 0,
-                                file_data: Vec::with_capacity(if keep_data {
-                                    (nr_packages * buffer_size) as usize
-                                } else {
-                                    0
-                                }),
-                                auto_saved_to: None,
-                            });
-                            self.transfers_idx
-                                .insert((msg.ecu, msg.lifecycle, serial), self.transfers.len() - 1);
-                            self.update_state();
-                        }
-                    }
-                }
-                5 => {
-                    if FileTransferPlugin::is_type(msg, "FLDA") {
-                        // file transfer data
-                        let mut serial = u64::MAX;
-                        let mut package_nr = u64::MAX;
-                        let args = msg.into_iter();
-                        for (i, arg) in args.enumerate() {
-                            match i {
-                                0 => {} // FLDA
-                                1 => {
-                                    if let Ok(s) = arg_as_uint(&arg) {
-                                        serial = s;
-                                    } else {
-                                        println!("FLDA unexpected serial type!");
-                                        break;
-                                    }
-                                }
-                                2 => {
-                                    if let Ok(s) = arg_as_uint(&arg) {
-                                        // is weirdly a SINT32...
-                                        package_nr = s;
-                                    } else {
-                                        println!("FLDA unexpected package_nr type!");
-                                        break;
-                                    }
-                                }
-                                3 => {
-                                    if let Some(file_transfer_idx) =
-                                        self.transfers_idx.get(&(msg.ecu, msg.lifecycle, serial))
-                                    {
-                                        let file_transfer =
-                                            self.transfers.get_mut(*file_transfer_idx).unwrap();
-                                        if file_transfer.add_flda(package_nr, &arg) {
-                                            if file_transfer.state == FileTransferState::Complete {
-                                                let glob = &self.auto_save_glob;
-                                                let path = &self.auto_save_path;
-                                                FileTransferPlugin::check_auto_save(
-                                                    glob,
-                                                    path,
-                                                    file_transfer,
-                                                    self.allow_save,
-                                                );
-                                                // need to do that before the update_state as file_data gets moved then
-                                            }
-                                            self.update_state();
-                                        }
-                                    } else if package_nr == 1 {
-                                        // incomplete, but can recover as this is the first package
-                                        let mut file_transfer = FileTransfer {
-                                            ecu: msg.ecu,
-                                            lifecycle: msg.lifecycle,
-                                            state: FileTransferState::MissingStart,
-                                            serial,
-                                            file_name: "<missing_flst>".to_owned(),
-                                            file_size: 0,
-                                            file_creation_date: "".to_owned(),
-                                            nr_packages: u64::MAX,
-                                            buffer_size: 0,
-                                            next_package: 1,
-                                            recvd_packages: 0,
-                                            recvd_payload: 0,
-                                            file_data: Vec::with_capacity(if self.allow_save {
-                                                512
-                                            } else {
-                                                0
-                                            }), // we do need a capacity as we use that to indicate whether to store data or not
-                                            auto_saved_to: None,
-                                        };
-                                        let _ = file_transfer.add_flda(package_nr, &arg); // ignore return value, we do update_state anyhow
-                                        self.transfers.push(file_transfer);
-                                        self.transfers_idx.insert(
-                                            (msg.ecu, msg.lifecycle, serial),
-                                            self.transfers.len() - 1,
-                                        );
-                                        self.update_state();
-                                    }
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        if !self.keep_flda {
-                            return false;
-                        }
-                    }
-                }
-                3 => {
-                    if FileTransferPlugin::is_type(msg, "FLFI") {
-                        // file transfer finish
-                        let mut serial = u64::MAX;
-                        let args = msg.into_iter();
-                        for (i, arg) in args.enumerate() {
-                            match i {
-                                0 => {} // FLFI
-                                1 => {
-                                    if let Ok(s) = arg_as_uint(&arg) {
-                                        serial = s;
-                                    } else {
-                                        println!("FLDA unexpected serial type!");
-                                        break;
-                                    }
-                                    break;
-                                }
+                                // 4 filename
+                                // 5 fsize
+                                // 6 fcreationdate
+                                // 7 package_count
+                                // 8 BUFFER_SIZE
                                 _ => {}
                             }
                         }
@@ -444,21 +536,17 @@ impl Plugin for FileTransferPlugin {
                             self.transfers_idx.get(&(msg.ecu, msg.lifecycle, serial))
                         {
                             let file_transfer = self.transfers.get_mut(*file_transfer_idx).unwrap();
-                            // mark as finished:
-                            if file_transfer.check_finished(true) {
-                                if file_transfer.state == FileTransferState::Complete {
-                                    let glob = &self.auto_save_glob;
-                                    let path = &self.auto_save_path;
-                                    FileTransferPlugin::check_auto_save(
-                                        glob,
-                                        path,
-                                        file_transfer,
-                                        self.allow_save,
-                                    );
-                                    // need to do that before the update_state as file_data gets moved then
-                                }
-                                self.update_state();
+                            file_transfer.state = FileTransferState::Error(error_code, err_no);
+                            if file_transfer.file_data.capacity() > 0 {
+                                file_transfer.file_data = Vec::new(); // do not keep the data any more
                             }
+                            self.update_state();
+                        } else {
+                            println!(
+                                "FLER for serial {} not found in transfers! transfers.len={}",
+                                serial,
+                                self.transfers.len()
+                            );
                         }
                     }
                 }
@@ -692,10 +780,14 @@ impl FileTransferPlugin {
                     FileTransferState::Incomplete => {
                         format!("Incomplete file transfer. Missed package {}", t.next_package)
                     }
+                    FileTransferState::Error(error_code, err_no) => {
+                        format!("File transfer error code:{} errno:{} for '{}', serial #{}", error_code, err_no, t.file_name, t.serial)
+                    }
 
                 },
                 "iconPath": match t.state {
                     FileTransferState::Complete => "file",
+                    FileTransferState::Error(_, _) => "error",
                     _ => "warning",
                 },
                 "contextValue": match t.state {
@@ -928,11 +1020,78 @@ fn arg_as_uint(arg: &crate::dlt::DltArg) -> Result<u64, ()> {
                         Err(())
                     }
                 }
-                // todo 16... not yet supported here
                 _ => Err(()),
             }
         } else {
             println!("arg_as_uint got type_info={}", arg.type_info);
+            Err(())
+        }
+    }
+}
+
+fn arg_as_int(arg: &crate::dlt::DltArg) -> Result<i64, ()> {
+    let is_uint = arg.type_info & DLT_TYPE_INFO_UINT > 0;
+    if is_uint {
+        match arg.payload_raw.len() {
+            8 => {
+                let i = if arg.is_big_endian {
+                    u64::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                } else {
+                    u64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                };
+                if i <= i64::MAX as u64 {
+                    Ok(i as i64)
+                } else {
+                    Err(())
+                }
+            }
+            4 => Ok(if arg.is_big_endian {
+                u32::from_be_bytes(arg.payload_raw.try_into().unwrap()) as i64
+            } else {
+                u32::from_le_bytes(arg.payload_raw.try_into().unwrap()) as i64
+            }),
+            2 => Ok(if arg.is_big_endian {
+                u16::from_be_bytes(arg.payload_raw.try_into().unwrap()) as i64
+            } else {
+                u16::from_le_bytes(arg.payload_raw.try_into().unwrap()) as i64
+            }),
+            1 => Ok(arg.payload_raw[0] as i64),
+            _ => Err(()),
+        }
+    } else {
+        let is_sint = arg.type_info & DLT_TYPE_INFO_SINT > 0;
+        if is_sint {
+            match arg.payload_raw.len() {
+                4 => {
+                    let i = if arg.is_big_endian {
+                        i32::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                    } else {
+                        i32::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                    };
+                    Ok(i as i64)
+                }
+                8 => {
+                    let i = if arg.is_big_endian {
+                        i64::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                    } else {
+                        i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                    };
+                    Ok(i)
+                }
+                2 => {
+                    let i = if arg.is_big_endian {
+                        i16::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                    } else {
+                        i16::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                    };
+                    Ok(i as i64)
+                }
+                1 => Ok(arg.payload_raw[0] as i64),
+                // todo 16... not yet supported here
+                _ => Err(()),
+            }
+        } else {
+            println!("arg_as_int got type_info={}", arg.type_info);
             Err(())
         }
     }
