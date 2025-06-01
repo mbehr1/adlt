@@ -2,7 +2,7 @@
 //
 // todos:
 // [ ] - use spooled_tempfile as file_data to reduce memory usage
-// [ ] - sort filetransfers by ecu and then time or name
+// [ ] - add warnings section to plugin state with e.g. the FLER messages
 // [ ] - add unit test coverage!
 
 use crate::{
@@ -12,7 +12,7 @@ use crate::{
     },
     plugins::plugin::{LcsRType, Plugin, PluginState},
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     any::Any,
     collections::HashMap,
@@ -72,6 +72,8 @@ struct FileTransfer {
     lifecycle: u32,
     serial: u64,
     state: FileTransferState,
+    /// file name as given in the FLST message.
+    /// Cannot be changed once update_state is called!
     file_name: String,
     file_size: u64,
     file_creation_date: String,
@@ -80,7 +82,7 @@ struct FileTransfer {
     next_package: u64,
     recvd_packages: u64,
     recvd_payload: usize,
-    file_data: Vec<u8>,
+    file_data: Option<Vec<u8>>,
     auto_saved_to: Option<String>,
 }
 
@@ -118,8 +120,31 @@ impl FileTransfer {
                 {
                     self.next_package += 1;
                     self.recvd_payload += arg.payload_raw.len();
-                    if self.file_data.capacity() > 0 {
-                        self.file_data.extend_from_slice(arg.payload_raw);
+                    let mut clear_file_data_due_to_reservation_failure = false;
+                    if let Some(file_data) = &mut self.file_data {
+                        // we alloc the memory only here on first data package
+                        // this is to avoid cases where a file transfer is started but then directly failed with FLER
+                        // for the recovery case (where we miss the FLST) we do not reserve memory upfront (indicated by nr_packages == u64::MAX)
+                        if file_data.capacity() == 0 && self.nr_packages < u64::MAX {
+                            let required_capacity = (self.nr_packages * self.buffer_size) as usize;
+                            if let Err(e) = file_data.try_reserve_exact(required_capacity) {
+                                println!(
+                                    "FileTransfer add_flda failed to reserve {} bytes due to {}. Setting state Error.",
+                                    required_capacity,e
+                                );
+                                clear_file_data_due_to_reservation_failure = true;
+                            }
+                        }
+                        if !clear_file_data_due_to_reservation_failure {
+                            file_data.extend_from_slice(arg.payload_raw);
+                        } else {
+                            self.file_data = None;
+                            self.state = FileTransferState::Error(
+                                -12,                                          // error code for reservation failure (ENOMEM)
+                                (self.nr_packages * self.buffer_size) as i64, // errno used for size failed to allocate
+                            );
+                            return true;
+                        }
                     }
                 }
             }
@@ -155,9 +180,7 @@ impl FileTransfer {
                 if !matches!(self.state, FileTransferState::Error(_, _)) {
                     self.state = FileTransferState::Incomplete;
                 }
-                if self.file_data.capacity() > 0 {
-                    self.file_data = Vec::new(); // do not keep the data any more
-                }
+                self.file_data = None;
                 true
             }
         } else if self.next_package > self.nr_packages
@@ -171,9 +194,7 @@ impl FileTransfer {
             if !matches!(self.state, FileTransferState::Error(_, _)) {
                 self.state = FileTransferState::Incomplete;
             }
-            if self.file_data.capacity() > 0 {
-                self.file_data = Vec::new(); // do not keep the data any more
-            }
+            self.file_data = None; // we do not need the data any more
             true
         } else {
             false
@@ -337,18 +358,13 @@ impl Plugin for FileTransferPlugin {
                                         next_package: 1,
                                         recvd_packages: 0,
                                         recvd_payload: 0,
-                                        file_data: Vec::with_capacity(if keep_data {
-                                            (nr_packages * buffer_size) as usize
-                                        } else {
-                                            0
-                                        }),
+                                        file_data: if keep_data { Some(Vec::new()) } else { None },
                                         auto_saved_to: None,
                                     });
-                                    self.transfers_idx.insert(
-                                        (msg.ecu, msg.lifecycle, serial),
-                                        self.transfers.len() - 1,
-                                    );
-                                    self.update_state();
+                                    let idx = self.transfers.len() - 1;
+                                    self.transfers_idx
+                                        .insert((msg.ecu, msg.lifecycle, serial), idx);
+                                    self.update_state(idx);
                                 }
                             }
                         }
@@ -401,7 +417,7 @@ impl Plugin for FileTransferPlugin {
                                                         );
                                                         // need to do that before the update_state as file_data gets moved then
                                                     }
-                                                    self.update_state();
+                                                    self.update_state(*file_transfer_idx);
                                                 }
                                             } else if package_nr == 1 {
                                                 // incomplete, but can recover as this is the first package
@@ -418,18 +434,19 @@ impl Plugin for FileTransferPlugin {
                                                     next_package: 1,
                                                     recvd_packages: 0,
                                                     recvd_payload: 0,
-                                                    file_data: Vec::with_capacity(
-                                                        if self.allow_save { 512 } else { 0 },
-                                                    ), // we do need a capacity as we use that to indicate whether to store data or not
+                                                    file_data: if self.allow_save {
+                                                        Some(Vec::new())
+                                                    } else {
+                                                        None
+                                                    },
                                                     auto_saved_to: None,
                                                 };
                                                 let _ = file_transfer.add_flda(package_nr, &arg); // ignore return value, we do update_state anyhow
                                                 self.transfers.push(file_transfer);
-                                                self.transfers_idx.insert(
-                                                    (msg.ecu, msg.lifecycle, serial),
-                                                    self.transfers.len() - 1,
-                                                );
-                                                self.update_state();
+                                                let idx = self.transfers.len() - 1;
+                                                self.transfers_idx
+                                                    .insert((msg.ecu, msg.lifecycle, serial), idx);
+                                                self.update_state(idx);
                                             }
                                             break;
                                         }
@@ -480,7 +497,7 @@ impl Plugin for FileTransferPlugin {
                                             );
                                             // need to do that before the update_state as file_data gets moved then
                                         }
-                                        self.update_state();
+                                        self.update_state(*file_transfer_idx);
                                     }
                                 }
                             }
@@ -537,11 +554,10 @@ impl Plugin for FileTransferPlugin {
                         {
                             let file_transfer = self.transfers.get_mut(*file_transfer_idx).unwrap();
                             file_transfer.state = FileTransferState::Error(error_code, err_no);
-                            if file_transfer.file_data.capacity() > 0 {
-                                file_transfer.file_data = Vec::new(); // do not keep the data any more
-                            }
-                            self.update_state();
+                            file_transfer.file_data = None; // we do not need the data any more
+                            self.update_state(*file_transfer_idx);
                         } else {
+                            // TODO add to a warnings list! (like SomeIP plugin)
                             println!(
                                 "FLER for serial {} not found in transfers! transfers.len={}",
                                 serial,
@@ -560,10 +576,10 @@ impl Plugin for FileTransferPlugin {
 
 impl FileTransferPlugin {
     pub fn from_json(
-        config: &serde_json::Map<String, serde_json::Value>,
+        config: &serde_json::Map<String, Value>,
     ) -> Result<FileTransferPlugin, Box<dyn Error>> {
         let name = match &config.get("name") {
-            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            Some(Value::String(s)) => Some(s.clone()),
             _ => {
                 return Err(
                     FileTransferPluginError::from("config 'name' not a string/missing").into(),
@@ -574,25 +590,25 @@ impl FileTransferPlugin {
             return Err(FileTransferPluginError::from("FileTransferPlugin: name missing").into());
         }
         let enabled = match &config.get("enabled") {
-            Some(serde_json::Value::Bool(b)) => *b,
+            Some(Value::Bool(b)) => *b,
             None => true, // default to true
             _ => return Err(FileTransferPluginError::from("config 'enabled' not a bool").into()),
         };
 
         let allow_save = match &config.get("allowSave") {
-            Some(serde_json::Value::Bool(b)) => *b,
+            Some(Value::Bool(b)) => *b,
             None => true, // default to true
             _ => return Err(FileTransferPluginError::from("config 'allowSave' not a bool").into()),
         };
 
         let keep_flda = match &config.get("keepFLDA") {
-            Some(serde_json::Value::Bool(b)) => *b,
+            Some(Value::Bool(b)) => *b,
             None => false, // default to false
             _ => return Err(FileTransferPluginError::from("config 'keepFLDA' not a bool").into()),
         };
 
         let apid = match &config.get("apid") {
-            Some(serde_json::Value::String(s)) => match DltChar4::from_str(s) {
+            Some(Value::String(s)) => match DltChar4::from_str(s) {
                 Ok(apid) => Some(apid),
                 Err(e) => {
                     return Err(FileTransferPluginError::from(format!(
@@ -606,7 +622,7 @@ impl FileTransferPlugin {
             _ => return Err(FileTransferPluginError::from("config 'apid' not a string").into()),
         };
         let ctid = match &config.get("ctid") {
-            Some(serde_json::Value::String(s)) => match DltChar4::from_str(s) {
+            Some(Value::String(s)) => match DltChar4::from_str(s) {
                 Ok(apid) => Some(apid),
                 Err(e) => {
                     return Err(FileTransferPluginError::from(format!(
@@ -621,7 +637,7 @@ impl FileTransferPlugin {
         };
 
         let auto_save_path = match &config.get("autoSavePath") {
-            Some(serde_json::Value::String(s)) => Some(s.to_owned()),
+            Some(Value::String(s)) => Some(s.to_owned()),
             None => None,
             _ => {
                 return Err(
@@ -630,7 +646,7 @@ impl FileTransferPlugin {
             }
         };
         let auto_save_glob = match &config.get("autoSaveGlob") {
-            Some(serde_json::Value::String(s)) => match glob::Pattern::new(s) {
+            Some(Value::String(s)) => match glob::Pattern::new(s) {
                 Ok(p) => Some(p),
                 Err(e) => {
                     return Err(FileTransferPluginError::from(format!(
@@ -649,7 +665,12 @@ impl FileTransferPlugin {
         };
 
         let state = PluginState {
-            value: serde_json::json!({"name":name, "treeItems":[]}),
+            value: serde_json::json!({"name":name, "treeItems":[
+                {
+                    "label":"Sorted by ECU/name",
+                    "children":[]
+                }
+            ]}),
             internal_data: Some(Box::new(FileTransferStateData {
                 completed_transfers: HashMap::new(),
             })),
@@ -697,7 +718,7 @@ impl FileTransferPlugin {
     ) {
         if let Some(pat) = glob {
             if file_transfer.state == FileTransferState::Complete
-                && !file_transfer.file_data.is_empty()
+                && file_transfer.file_data.is_some()
                 && pat.matches(&file_transfer.file_name)
             {
                 // try to save to the path: (but only the base name not the full path from the file_name  (e.g. not /tmp/.../foo.txt))
@@ -717,128 +738,196 @@ impl FileTransferPlugin {
                             let _ = std::fs::create_dir_all(par_dir); // let silently fail
                         }
                         if par_dir.exists() {
-                            // try to write the file:
-                            if let Ok(()) = File::create(&path)
-                                .and_then(|mut f| f.write_all(&file_transfer.file_data))
-                            {
-                                file_transfer.auto_saved_to = path.to_str().map(|p| p.to_owned());
+                            if let Some(file_data) = &file_transfer.file_data {
+                                // try to write the file:
+                                if let Ok(()) =
+                                    File::create(&path).and_then(|mut f| f.write_all(file_data))
+                                {
+                                    file_transfer.auto_saved_to =
+                                        path.to_str().map(|p| p.to_owned());
+                                }
+                                // todo set proper creation time!
                             }
-
-                            // todo set proper creation time!
                         }
                     }
                 }
-                if !keep_data && file_transfer.file_data.capacity() > 0 {
+                if !keep_data {
                     // file data wont be needed any more. we do this even if saving failed.
-                    file_transfer.file_data = Vec::new();
+                    file_transfer.file_data = None;
                 }
             }
         }
     }
 
-    /// update the plugin state object so that it reflects state changes.
+    /// update the plugin state object so that it reflects state change for the file_transfers with
+    /// specified file_transfers_idx.
     ///
     /// Generates the treeItems with the file transfers found and their status.
     ///
     /// It moves as well any completed transfers with buffers to the internal_data so
     /// that apply_command can be performed on it.
-    fn update_state(&mut self) {
-        let mut state = self.state.write().unwrap();
+    fn update_state(&mut self, file_transfers_idx: usize) {
+        if let Some(file_transfer) = self.transfers.get_mut(file_transfers_idx) {
+            let map_filetransfer_to_json = |idx: usize, t: &FileTransfer| {
+                json!({
+                    "label":
+                    match t.state {
+                        FileTransferState::Started => {
+                            format!("'{}', Incomplete, missing {} got {}/{}", t.file_name, t.next_package, t.recvd_packages, t.nr_packages)
+                        },
+                        FileTransferState::Complete => {
+                                format!("'{}', {}", t.file_name, size::Size::from_bytes(t.file_size))
+                        }
+                        FileTransferState::MissingStart => {
+                            format!("Incomplete file transfer. Missing FLST. Got {} packages.", t.recvd_packages)
+                        }
+                        FileTransferState::Incomplete => {
+                            format!("'{}', Incomplete, missed package {}/{}", t.file_name, t.next_package, t.nr_packages)
+                        }
+                        FileTransferState::Error(error_code, err_no) => {
+                            format!("'{}', File transfer error code:{} errno:{} serial #{}", t.file_name, error_code, err_no,  t.serial)
+                        }
 
-        // if we have completed transfers with buffer, move them to FileTransferStateData:
-        let completed_transfers = self
-            .transfers
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, t)| !t.file_data.is_empty() && t.state == FileTransferState::Complete)
-            .collect::<Vec<_>>();
-        if !completed_transfers.is_empty() {
-            if let Some(internal_data) = &mut state.internal_data {
-                if let Some(internal_data) = internal_data.downcast_mut::<FileTransferStateData>() {
-                    for (idx, t) in completed_transfers {
-                        internal_data
-                            .completed_transfers
-                            .insert(idx, std::mem::take(&mut t.file_data));
+                    },
+                    "iconPath": match t.state {
+                        FileTransferState::Complete => "file",
+                        FileTransferState::Error(_, _) => "error",
+                        _ => "warning",
+                    },
+                    "contextValue": match t.state {
+                        FileTransferState::Complete if self.allow_save => json!("canSave"), // todo should better use availability of internal_data to support autoSave as well
+                        _ => json!(null)
+                    },
+                    "cmdCtx": match t.state {
+                        FileTransferState::Complete if self.allow_save => json!({"save":{"basename":FileTransferPlugin::base_name_for_filetransfer(t), "idx":idx }}),
+                        _ => json!(null)
+                    },
+                    "tooltip":format!("{}, LC id={}, serial #{}, '{}', created at '{}', file size {}", t.ecu, t.lifecycle, t.serial, t.file_name, t.file_creation_date, size::Size::from_bytes(t.file_size)),
+                    "meta":json!({"lc":t.lifecycle, "autoSavedTo": t.auto_saved_to, "idx":idx, "name":t.file_name, "ecu":t.ecu}),
+                })
+            };
+
+            let mut state = self.state.write().unwrap();
+
+            // if we have completed transfers with buffer, move them to FileTransferStateData:
+            if file_transfer.state == FileTransferState::Complete
+                && file_transfer.file_data.is_some()
+            {
+                if let Some(internal_data) = &mut state.internal_data {
+                    if let Some(internal_data) =
+                        internal_data.downcast_mut::<FileTransferStateData>()
+                    {
+                        internal_data.completed_transfers.insert(
+                            file_transfers_idx,
+                            file_transfer.file_data.take().unwrap_or_default(),
+                        );
                     }
                 }
             }
-        }
 
-        let map_filetransfer_to_json = |idx: usize, t: &FileTransfer| {
-            json!({
-                "label":
-                match t.state {
-                    FileTransferState::Started => {
-                        format!("Incomplete file transfer '{}', missing {} got {}/{}", t.file_name, t.next_package, t.recvd_packages, t.nr_packages)
-                    },
-                    FileTransferState::Complete => {
-                        format!("'{}', {}kb", t.file_name, t.file_size/1024)
+            // update the tree items:
+            if let Some(tree_items) = state
+                .value
+                .as_object_mut()
+                .and_then(|v| v.get_mut("treeItems"))
+                .and_then(Value::as_array_mut)
+            {
+                let by_occurrence = &tree_items[1..];
+                // we handle two cases:
+                // update of an existing transfer idx or adding the next one
+                if file_transfers_idx < by_occurrence.len() {
+                    // update existing transfer
+                    tree_items[1 + file_transfers_idx] =
+                        map_filetransfer_to_json(file_transfers_idx, file_transfer);
+                    // find the one within the sorted_by_name:
+                    if let Some(sorted_by_name) = tree_items
+                        .first_mut()
+                        .and_then(|v| v.pointer_mut("/children"))
+                    {
+                        if let Some(ecu_children) =
+                            get_ecu_children(sorted_by_name, &file_transfer.ecu)
+                        {
+                            // find the file transfer by meta.idx
+                            // optimized by binary_search by file_name and then in reverse order
+                            // TAKE CARE: this assumes that the file_name does never change!
+                            if let Some(ecu_children) = ecu_children.as_array_mut() {
+                                // get max idx to search for by name:
+                                let file_name_str = file_transfer.file_name.as_str();
+                                let idx = ecu_children
+                                    .partition_point(|v| {
+                                        v.pointer("/meta/name")
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|name| name <= file_name_str)
+                                    })
+                                    .saturating_sub(1);
+
+                                if let Some(child_idx) =
+                                    ecu_children[..=idx].iter().rev().position(|v| {
+                                        v.pointer("/meta/idx")
+                                            .and_then(Value::as_u64)
+                                            .is_some_and(|idx| idx == file_transfers_idx as u64)
+                                    })
+                                {
+                                    // update existing ECU child (child_idx is from the end)
+                                    ecu_children[idx - child_idx] =
+                                        map_filetransfer_to_json(file_transfers_idx, file_transfer);
+                                } else {
+                                    println!(
+                                        "FileTransferPlugin::update_state: file_transfers_idx {} not found in ECU children!",
+                                        file_transfers_idx
+                                    );
+                                }
+                            }
+                        }
                     }
-                    FileTransferState::MissingStart => {
-                        format!("Incomplete file transfer. Missing FLST. Got {} packages.", t.recvd_packages)
+                } else if file_transfers_idx == by_occurrence.len() {
+                    // add new transfer
+                    tree_items.push(map_filetransfer_to_json(file_transfers_idx, file_transfer));
+                    if let Some(sorted_by_name) = tree_items
+                        .first_mut()
+                        .and_then(|v| v.pointer_mut("/children"))
+                    {
+                        if let Some(ecu_children) =
+                            get_ecu_children(sorted_by_name, &file_transfer.ecu)
+                        {
+                            // add to existing ECU child keep sort order
+                            // (at the end of the ones with same name)
+                            let ecu_children = ecu_children.as_array_mut().unwrap();
+
+                            // find the partition point for the new file transfer
+                            let file_name_str = file_transfer.file_name.as_str();
+                            let idx = ecu_children.partition_point(|v| {
+                                v.pointer("/meta/name")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|name| name <= file_name_str)
+                            });
+                            ecu_children.insert(
+                                idx,
+                                map_filetransfer_to_json(file_transfers_idx, file_transfer),
+                            );
+                        } else {
+                            // create a new ECU child
+                            let ecu_children = create_ecu_child(sorted_by_name, &file_transfer.ecu);
+                            ecu_children
+                                .as_array_mut()
+                                .unwrap()
+                                .push(map_filetransfer_to_json(file_transfers_idx, file_transfer));
+                        }
                     }
-                    FileTransferState::Incomplete => {
-                        format!("Incomplete file transfer. Missed package {}", t.next_package)
-                    }
-                    FileTransferState::Error(error_code, err_no) => {
-                        format!("File transfer error code:{} errno:{} for '{}', serial #{}", error_code, err_no, t.file_name, t.serial)
-                    }
-
-                },
-                "iconPath": match t.state {
-                    FileTransferState::Complete => "file",
-                    FileTransferState::Error(_, _) => "error",
-                    _ => "warning",
-                },
-                "contextValue": match t.state {
-                    FileTransferState::Complete if self.allow_save => json!("canSave"), // todo should better use availability of internal_data to support autoSave as well
-                    _ => json!(null)
-                },
-                "cmdCtx": match t.state {
-                    FileTransferState::Complete if self.allow_save => json!({"save":{"basename":FileTransferPlugin::base_name_for_filetransfer(t), "idx":idx }}),
-                    _ => json!(null)
-                },
-                "tooltip":format!("{}, LC id={}, serial #{}, '{}', created at '{}', file size {} ", t.ecu, t.lifecycle, t.serial, t.file_name, t.file_creation_date, t.file_size),
-                "meta":json!({"lc":t.lifecycle, "autoSavedTo": t.auto_saved_to}),
-            })
-        };
-
-        let transfer_tree_items = {
-            if !self.transfers.is_empty() {
-                let transfers_by_occurrence = self
-                    .transfers
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, t)| map_filetransfer_to_json(idx, t))
-                    .collect::<Vec<serde_json::Value>>();
-
-                // for sorting by name we do need to keep the idx as from the orig one
-                // so we clone the regular ones and then sort the json vec.
-                let mut transfers_by_name = self
-                    .transfers
-                    .iter()
-                    .zip(transfers_by_occurrence.clone())
-                    .collect::<Vec<_>>();
-                transfers_by_name.sort_by(|a, b| a.0.file_name.cmp(&b.0.file_name));
-                let transfers_by_name = transfers_by_name
-                    .into_iter()
-                    .map(|(_, b)| b)
-                    .collect::<Vec<_>>();
-
-                [
-                    vec![json!({"label":"Sorted by name", "children":transfers_by_name})],
-                    transfers_by_occurrence,
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
+                } else {
+                    println!(
+                        "FileTransferPlugin::update_state: file_transfers_idx {} out of range {}, logical error!",
+                        file_transfers_idx,
+                        by_occurrence.len()
+                    );
+                }
+                state.generation += 1;
             } else {
-                vec![]
+                println!("FileTransferPlugin::update_state: treeItems not found in state value!");
             }
-        };
-
-        state.value = serde_json::json!({"name":self.name, "treeItems": transfer_tree_items});
-        state.generation += 1;
+        } else {
+            println!("FileTransferPlugin::update_state: file_transfer with idx {} not found in transfers!", file_transfers_idx);
+        }
     }
 
     /// apply a command for the FileTransferPlugin
@@ -857,8 +946,8 @@ impl FileTransferPlugin {
     fn apply_command(
         internal_data: &Option<Box<dyn Any + Send + Sync>>,
         cmd: &str,
-        params: Option<&serde_json::Map<String, serde_json::Value>>,
-        ctx: Option<&serde_json::Map<String, serde_json::Value>>,
+        params: Option<&serde_json::Map<String, Value>>,
+        ctx: Option<&serde_json::Map<String, Value>>,
     ) -> bool {
         if let Some(internal_data) = internal_data {
             match internal_data.downcast_ref::<FileTransferStateData>() {
@@ -878,11 +967,11 @@ impl FileTransferPlugin {
                             // and params.saveAs
                             if let (Some(params), Some(ctx)) = (params, ctx) {
                                 if let (Some(save_as), Some(idx)) = (
-                                    params.get("saveAs").and_then(serde_json::Value::as_str),
+                                    params.get("saveAs").and_then(Value::as_str),
                                     ctx.get("save")
-                                        .and_then(serde_json::Value::as_object)
+                                        .and_then(Value::as_object)
                                         .and_then(|f| f.get("idx"))
-                                        .and_then(serde_json::Value::as_u64),
+                                        .and_then(Value::as_u64),
                                 ) {
                                     if let Some(data) =
                                         state_data.completed_transfers.get(&(idx as usize))
@@ -947,6 +1036,46 @@ impl FileTransferPlugin {
             }
         }
         false
+    }
+}
+
+// childrens are one per ECU and then sorted by name
+// parent should be the array (children) of the parent tree item
+fn get_ecu_children<'a>(parent: &'a mut Value, ecu: &DltChar4) -> Option<&'a mut Value> {
+    if let Some(parent) = parent.as_array_mut() {
+        let ecu_str = ecu.to_string();
+        // find the ecu in the parent array
+
+        if let Some(ecu_item) = parent.iter_mut().find(|v| {
+            v.get("label")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s == ecu_str)
+        }) {
+            // found the ecu, return it
+            ecu_item.pointer_mut("/children")
+            //Some(ecu_item)
+        } else {
+            None
+        }
+    } else {
+        //panic!("get_ecu_children: parent is not an array!");
+        None
+    }
+}
+
+fn create_ecu_child<'a>(parent: &'a mut Value, ecu: &DltChar4) -> &'a mut Value {
+    if let Some(parent) = parent.as_array_mut() {
+        let ecu_str = ecu.to_string();
+        // create a new item for the ECU
+        let new_ecu_item = json!({
+            "label":ecu_str,
+            "children":[]
+        });
+        parent.push(new_ecu_item);
+        // return the new item
+        parent.last_mut().unwrap().pointer_mut("/children").unwrap()
+    } else {
+        panic!("create_ecu_children({}): parent is not an array!", ecu);
     }
 }
 
@@ -1157,7 +1286,8 @@ mod tests {
         assert!(state_obj.contains_key("treeItems"));
         let tree_items = state_obj.get("treeItems").unwrap();
         assert!(tree_items.is_array());
-        assert_eq!(tree_items.as_array().unwrap().len(), 0);
+        assert_eq!(tree_items.as_array().unwrap().len(), 1); // the sorted by name item
+
         // state can be debug printed:
         assert!(!format!("{:?}", state).is_empty());
 
