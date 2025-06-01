@@ -1105,52 +1105,7 @@ fn arg_as_uint(arg: &crate::dlt::DltArg) -> Result<u64, ()> {
     } else {
         let is_sint = arg.type_info & DLT_TYPE_INFO_SINT > 0;
         if is_sint {
-            match arg.payload_raw.len() {
-                4 => {
-                    let i = if arg.is_big_endian {
-                        i32::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                    } else {
-                        i32::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                    };
-                    if i >= 0 {
-                        Ok(i as u64)
-                    } else {
-                        Err(())
-                    }
-                }
-                8 => {
-                    let i = if arg.is_big_endian {
-                        i64::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                    } else {
-                        i64::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                    };
-                    if i >= 0 {
-                        Ok(i as u64)
-                    } else {
-                        Err(())
-                    }
-                }
-                2 => {
-                    let i = if arg.is_big_endian {
-                        i16::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                    } else {
-                        i16::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                    };
-                    if i >= 0 {
-                        Ok(i as u64)
-                    } else {
-                        Err(())
-                    }
-                }
-                1 => {
-                    if arg.payload_raw[0] as i8 >= 0 {
-                        Ok(arg.payload_raw[0] as u64)
-                    } else {
-                        Err(())
-                    }
-                }
-                _ => Err(()),
-            }
+            arg_as_int(arg).and_then(|i| if i >= 0 { Ok(i as u64) } else { Err(()) })
         } else {
             println!("arg_as_uint got type_info={}", arg.type_info);
             Err(())
@@ -1161,32 +1116,13 @@ fn arg_as_uint(arg: &crate::dlt::DltArg) -> Result<u64, ()> {
 fn arg_as_int(arg: &crate::dlt::DltArg) -> Result<i64, ()> {
     let is_uint = arg.type_info & DLT_TYPE_INFO_UINT > 0;
     if is_uint {
-        match arg.payload_raw.len() {
-            8 => {
-                let i = if arg.is_big_endian {
-                    u64::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                } else {
-                    u64::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                };
-                if i <= i64::MAX as u64 {
-                    Ok(i as i64)
-                } else {
-                    Err(())
-                }
+        arg_as_uint(arg).and_then(|i| {
+            if i <= i64::MAX as u64 {
+                Ok(i as i64)
+            } else {
+                Err(())
             }
-            4 => Ok(if arg.is_big_endian {
-                u32::from_be_bytes(arg.payload_raw.try_into().unwrap()) as i64
-            } else {
-                u32::from_le_bytes(arg.payload_raw.try_into().unwrap()) as i64
-            }),
-            2 => Ok(if arg.is_big_endian {
-                u16::from_be_bytes(arg.payload_raw.try_into().unwrap()) as i64
-            } else {
-                u16::from_le_bytes(arg.payload_raw.try_into().unwrap()) as i64
-            }),
-            1 => Ok(arg.payload_raw[0] as i64),
-            _ => Err(()),
-        }
+        })
     } else {
         let is_sint = arg.type_info & DLT_TYPE_INFO_SINT > 0;
         if is_sint {
