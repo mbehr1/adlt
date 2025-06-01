@@ -119,14 +119,15 @@ impl FileTransfer {
                 // last package may be smaller
                 {
                     self.next_package += 1;
-                    self.recvd_payload += arg.payload_raw.len();
+                    self.recvd_payload = self.recvd_payload.saturating_add(arg.payload_raw.len());
                     let mut clear_file_data_due_to_reservation_failure = false;
                     if let Some(file_data) = &mut self.file_data {
                         // we alloc the memory only here on first data package
                         // this is to avoid cases where a file transfer is started but then directly failed with FLER
                         // for the recovery case (where we miss the FLST) we do not reserve memory upfront (indicated by nr_packages == u64::MAX)
                         if file_data.capacity() == 0 && self.nr_packages < u64::MAX {
-                            let required_capacity = (self.nr_packages * self.buffer_size) as usize;
+                            let required_capacity =
+                                (self.nr_packages.saturating_mul(self.buffer_size)) as usize;
                             if let Err(e) = file_data.try_reserve_exact(required_capacity) {
                                 println!(
                                     "FileTransfer add_flda failed to reserve {} bytes due to {}. Setting state Error.",
@@ -140,8 +141,8 @@ impl FileTransfer {
                         } else {
                             self.file_data = None;
                             self.state = FileTransferState::Error(
-                                -12,                                          // error code for reservation failure (ENOMEM)
-                                (self.nr_packages * self.buffer_size) as i64, // errno used for size failed to allocate
+                                -12, // error code for reservation failure (ENOMEM)
+                                (self.nr_packages.saturating_mul(self.buffer_size)) as i64, // errno used for size failed to allocate
                             );
                             return true;
                         }
@@ -293,7 +294,7 @@ impl Plugin for FileTransferPlugin {
                                         2 => {
                                             // filename
                                             if let Ok(name) = arg_as_string(&arg) {
-                                                file_name += &name;
+                                                file_name = name;
                                             }
                                         }
                                         3 => {
@@ -308,7 +309,7 @@ impl Plugin for FileTransferPlugin {
                                         4 => {
                                             // file creation date
                                             if let Ok(name) = arg_as_string(&arg) {
-                                                file_creation_date += &name;
+                                                file_creation_date = name;
                                             }
                                         }
                                         5 => {
@@ -1495,6 +1496,44 @@ mod tests {
             std::fs::metadata(&file_path).unwrap().len(),
             b"data".len() as u64
         );
+    }
+
+    #[test]
+    fn huge_transfer() {
+        let flst = DltVerbArgTypeWrapper::DltScodAscii(serde_bytes::Bytes::new(b"FLST\0"));
+        let flda = DltVerbArgTypeWrapper::DltScodAscii(serde_bytes::Bytes::new(b"FLDA\0"));
+        let cfg =
+            json!({"name": "f", "apid":"APID", "ctid":"CTID", "allowSave":true, "keepFLDA":true});
+        let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
+
+        let (noar, payload) = dlt_args!(
+            flst,
+            12345678u32,
+            "bfile1.bin",
+            u32::MAX,
+            "2022-06-02 21:54:01",
+            1u64,         // nr packages (DLT-Viewer sends this as u32...)
+            u64::MAX - 1, // package size
+            flst
+        )
+        .unwrap();
+        let mut m_flst1 = DltMessage::get_testmsg_with_payload(false, noar, &payload);
+
+        let (noar, payload) = dlt_args!(
+            flda,
+            12345678u32,
+            1u32,                                      // package number
+            serde_bytes::Bytes::new(&[0u8, 1u8, 2u8]), // payload data
+            flda
+        )
+        .unwrap();
+        let mut m_flda1 = DltMessage::get_testmsg_with_payload(false, noar, &payload);
+
+        assert!(p.process_msg(&mut m_flst1));
+        assert!(p.process_msg(&mut m_flda1));
+        assert_eq!(p.transfers.len(), 1);
+        // check that state is Error:
+        assert_eq!(p.transfers[0].state, FileTransferState::Error(-12, -2)); // it's not -2 but a u64::MAX-1
     }
 
     #[test]
