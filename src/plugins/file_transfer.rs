@@ -1190,6 +1190,8 @@ mod tests {
         dlt::{
             DLT_TYLE_16BIT, DLT_TYLE_32BIT, DLT_TYLE_64BIT, DLT_TYPE_INFO_RAWD, DLT_TYPE_INFO_STRG,
         },
+        dlt_args,
+        serde_verb_payload::DltVerbArgTypeWrapper,
         utils::payload_from_args,
     };
 
@@ -1492,6 +1494,95 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&file_path).unwrap().len(),
             b"data".len() as u64
+        );
+    }
+
+    #[test]
+    fn two_transfers() {
+        let flst = DltVerbArgTypeWrapper::DltScodAscii(serde_bytes::Bytes::new(b"FLST\0"));
+        let cfg =
+            json!({"name": "f", "apid":"APID", "ctid":"CTID", "allowSave":true, "keepFLDA":true});
+        let mut p = FileTransferPlugin::from_json(cfg.as_object().unwrap()).unwrap();
+
+        let (noar, payload) = dlt_args!(
+            flst,
+            12345678u32,
+            "bfile1.bin",
+            4u32,
+            "2022-06-02 21:54:01",
+            1u32,
+            16u32,
+            flst
+        )
+        .unwrap();
+        let mut m_flst1 = DltMessage::get_testmsg_with_payload(false, noar, &payload);
+        let (noar, payload) = dlt_args!(
+            flst,
+            81234567u32,
+            "afile2.bin",
+            5u32,
+            "2022-06-02 21:54:02",
+            1u32,
+            32u32,
+            flst
+        )
+        .unwrap();
+        let mut m_flst2 = DltMessage::get_testmsg_with_payload(false, noar, &payload);
+
+        let (noar, payload) = dlt_args!(
+            DltVerbArgTypeWrapper::DltScodAscii(serde_bytes::Bytes::new(b"FLER\0")),
+            -42i32,      // error code
+            12i32,       // errno
+            12345678u32, // serial
+            "bfile1.bin",
+            4u32,                  // filesize
+            "2022-06-02 21:54:01", // fcreationdate
+            1u32,                  // nr packages
+            16u32,                 // buffer size
+            DltVerbArgTypeWrapper::DltScodAscii(serde_bytes::Bytes::new(b"FLER\0"))
+        )
+        .unwrap();
+        let mut m_fler1 = DltMessage::get_testmsg_with_payload(false, noar, &payload);
+        m_fler1.extended_header.as_mut().unwrap().verb_mstp_mtin = 0x21; // LOG(ERROR)
+
+        assert_eq!(p.state.read().unwrap().generation, 1);
+        assert!(p.process_msg(&mut m_flst1));
+        assert!(p.process_msg(&mut m_flst2));
+        assert!(p.process_msg(&mut m_fler1));
+
+        assert_eq!(p.transfers.len(), 2);
+        assert_eq!(p.transfers_idx.len(), 2);
+
+        let state = p.state.read().unwrap();
+        assert_eq!(state.generation, 4);
+        // check that we have two transfers and listed under the same ECU:
+        let value = &state.value;
+        assert!(value.is_object());
+        let ecus = value.pointer("/treeItems/0/children").unwrap();
+        assert!(ecus.is_array());
+        let ecu_children = ecus.as_array().unwrap();
+        assert_eq!(ecu_children.len(), 1);
+
+        let sorted_transfers = value
+            .pointer("/treeItems/0/children/0/children")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(sorted_transfers.len(), 2);
+        // check that the transfers are sorted by name:
+        assert_eq!(
+            sorted_transfers[0]
+                .pointer("/meta/name")
+                .and_then(Value::as_str)
+                .unwrap(),
+            "afile2.bin"
+        );
+        assert_eq!(
+            sorted_transfers[1]
+                .pointer("/meta/name")
+                .and_then(Value::as_str)
+                .unwrap(),
+            "bfile1.bin"
         );
     }
 
