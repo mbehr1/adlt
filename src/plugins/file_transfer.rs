@@ -1676,13 +1676,14 @@ mod tests {
     }
 
     #[test]
-    fn arg_as_uint_test() {
+    fn arg_as_int_uint_test() {
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_STRG,
             is_big_endian: true,
             payload_raw: b"FLST\0",
         };
         assert_eq!(arg_as_uint(&arg1), Err(()));
+        assert_eq!(arg_as_int(&arg1), Err(()));
 
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_16BIT as u32,
@@ -1690,6 +1691,7 @@ mod tests {
             payload_raw: &42u16.to_be_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Ok(42));
+        assert_eq!(arg_as_int(&arg1), Ok(42i64));
         assert_eq!(arg_as_string(&arg1), Err(()));
 
         let arg1 = DltArg {
@@ -1698,6 +1700,7 @@ mod tests {
             payload_raw: &42u32.to_be_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Ok(42));
+        assert_eq!(arg_as_int(&arg1), Ok(42i64));
 
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_64BIT as u32,
@@ -1705,6 +1708,7 @@ mod tests {
             payload_raw: &42u64.to_le_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Ok(42));
+        assert_eq!(arg_as_int(&arg1), Ok(42i64));
 
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_16BIT as u32,
@@ -1712,6 +1716,7 @@ mod tests {
             payload_raw: &42i16.to_be_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Ok(42));
+        assert_eq!(arg_as_int(&arg1), Ok(42i64));
 
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_16BIT as u32,
@@ -1719,6 +1724,23 @@ mod tests {
             payload_raw: &(-42i16).to_be_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Err(()));
+        assert_eq!(arg_as_int(&arg1), Ok(-42i64));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_16BIT as u32,
+            is_big_endian: false,
+            payload_raw: &42i16.to_le_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(42));
+        assert_eq!(arg_as_int(&arg1), Ok(42i64));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_16BIT as u32,
+            is_big_endian: false,
+            payload_raw: &(-42i16).to_le_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Err(()));
+        assert_eq!(arg_as_int(&arg1), Ok(-42i64));
 
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
@@ -1726,6 +1748,7 @@ mod tests {
             payload_raw: &42i32.to_be_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Ok(42));
+        assert_eq!(arg_as_int(&arg1), Ok(42));
 
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_32BIT as u32,
@@ -1733,6 +1756,7 @@ mod tests {
             payload_raw: &(-42i32).to_be_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Err(()));
+        assert_eq!(arg_as_int(&arg1), Ok(-42i64));
 
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_64BIT as u32,
@@ -1740,6 +1764,7 @@ mod tests {
             payload_raw: &42u64.to_le_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Ok(42));
+        assert_eq!(arg_as_int(&arg1), Ok(42));
 
         let arg1 = DltArg {
             type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_64BIT as u32,
@@ -1747,5 +1772,30 @@ mod tests {
             payload_raw: &(-42i64).to_be_bytes(),
         };
         assert_eq!(arg_as_uint(&arg1), Err(()));
+        assert_eq!(arg_as_int(&arg1), Ok(-42));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_UINT | DLT_TYLE_64BIT as u32,
+            is_big_endian: false,
+            payload_raw: &u64::MAX.to_le_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(u64::MAX));
+        assert_eq!(arg_as_int(&arg1), Err(()));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_64BIT as u32,
+            is_big_endian: false,
+            payload_raw: &i64::MAX.to_le_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Ok(i64::MAX as u64));
+        assert_eq!(arg_as_int(&arg1), Ok(i64::MAX));
+
+        let arg1 = DltArg {
+            type_info: DLT_TYPE_INFO_SINT | DLT_TYLE_64BIT as u32,
+            is_big_endian: false,
+            payload_raw: &i64::MIN.to_le_bytes(),
+        };
+        assert_eq!(arg_as_uint(&arg1), Err(()));
+        assert_eq!(arg_as_int(&arg1), Ok(i64::MIN));
     }
 }
