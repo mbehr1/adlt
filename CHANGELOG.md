@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.61.5 - 2025-06-01
+#### Bug Fixes
+- **(filetransfer)** speedup filetransfer state generation - (3b89d85) - Matthias Behr
+- **(filetransfer)** support FLER and add error info - (e235324) - Matthias Behr
+#### Refactoring
+- **(filetransfer)** reduce duplicate code for arg_as_int/uint - (998e368) - Matthias Behr
+#### Tests
+- **(filetransfer)** add test for huge transfers - (0bc19b0) - Matthias Behr
+- **(filetransfer)** add test for sorting of state treeItems - (e884bc2) - Matthias Behr
+- **(filetransfer)** add unit tests for arg_as_int - (b02170d) - Matthias Behr
+
+- - -
+
 ## v0.61.4 - 2025-05-18
 #### Bug Fixes
 - **(lc)** sort was not a total order - (766310f) - Matthias Behr
