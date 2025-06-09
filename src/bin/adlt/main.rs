@@ -1,6 +1,8 @@
 // todos:
 mod convert;
+mod receive;
 mod remote;
+mod transmit;
 
 use clap::{Arg, Command};
 // todo use rayon::prelude::*;
@@ -26,6 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     let cmd_app = convert::add_subcommand(cmd_app);
     let cmd_app = remote::add_subcommand(cmd_app);
+    let cmd_app = receive::add_subcommand(cmd_app);
+    let cmd_app = transmit::add_subcommand(cmd_app);
     let matches = cmd_app.get_matches();
 
     // initialize logging
@@ -62,6 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|_x| ())
         } // dont return anything here
         Some(("remote", sub_m)) => remote::remote(&log, sub_m, false),
+        Some(("receive", sub_m)) => {
+            receive::receive(&log, sub_m, std::io::BufWriter::new(std::io::stdout()))
+        }
+        Some(("transmit", sub_m)) => transmit::transmit(&log, sub_m),
         _ => Err(Box::new(io::Error::new(
             io::ErrorKind::Unsupported,
             "unknown subcommand",
