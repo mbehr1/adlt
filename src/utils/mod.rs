@@ -39,6 +39,10 @@ pub mod unzip;
 
 pub mod progress;
 
+mod ipdltmsgreceiver;
+pub use self::ipdltmsgreceiver::IpDltMsgReceiver;
+pub use self::ipdltmsgreceiver::RecvMode;
+
 use lazy_static::lazy_static;
 
 static GLOBAL_NEXT_NAMESPACE: AtomicU32 = AtomicU32::new(0);
