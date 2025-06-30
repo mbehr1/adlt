@@ -584,7 +584,13 @@ static TRACE_TYPE_STRS: [&str; 6] = ["", "variable", "func_in", "func_out", "sta
 static NW_TYPE_STRS: [&str; 7] = ["", "ipc", "can", "flexray", "most", "ethernet", "someip"];
 static CONTROL_TYPE_STRS: [&str; 4] = ["", "request", "response", "time"];
 
+pub const SERVICE_ID_SET_LOG_LEVEL: u32 = 1;
+pub const SERVICE_ID_SET_TRACE_STATUS: u32 = 2;
 pub const SERVICE_ID_GET_LOG_INFO: u32 = 3;
+pub const SERVICE_ID_SET_VERBOSE_MODE: u32 = 9;
+pub const SERVICE_ID_SET_TIMING_PACKETS: u32 = 11;
+pub const SERVICE_ID_SET_DEFAULT_LOG_LEVEL: u32 = 17;
+pub const SERVICE_ID_SET_DEFAULT_TRACE_STATUS: u32 = 18;
 pub const SERVICE_ID_GET_SOFTWARE_VERSION: u32 = 19;
 
 // user services as from dlt-daemon:
@@ -603,27 +609,30 @@ pub const SERVICE_ID_RESERVED_D: u32 = 0xF0D;
 pub const SERVICE_ID_RESERVED_E: u32 = 0xF0E;
 
 type HashMapNoHash<K, V> = HashMap<K, V, BuildNoHashHasher<K>>;
-static SERVICE_ID_NAMES: LazyLock<HashMapNoHash<u32, &'static str>> = LazyLock::new(|| {
+pub static SERVICE_ID_NAMES: LazyLock<HashMapNoHash<u32, &'static str>> = LazyLock::new(|| {
     let mut map = HashMapNoHash::default();
     map.extend([
-        (1, "set_log_level"),
-        (2, "set_trace_status"),
+        (SERVICE_ID_SET_LOG_LEVEL, "set_log_level"),
+        (SERVICE_ID_SET_TRACE_STATUS, "set_trace_status"),
         (SERVICE_ID_GET_LOG_INFO, "get_log_info"),
         (4, "get_default_log_level"),
         (5, "store_config"),
         (6, "reset_to_factory_default"),
         (7, "set_com_interface_status"),
         (8, "set_com_interface_max_bandwidth"),
-        (9, "set_verbose_mode"),
+        (SERVICE_ID_SET_VERBOSE_MODE, "set_verbose_mode"),
         (10, "set_message_filtering"),
-        (11, "set_timing_packets"),
+        (SERVICE_ID_SET_TIMING_PACKETS, "set_timing_packets"),
         (12, "get_local_time"),
         (13, "use_ecu_id"),
         (14, "use_session_id"),
         (15, "use_timestamp"),
         (16, "use_extended_header"),
-        (17, "set_default_log_level"),
-        (18, "set_default_trace_status"),
+        (SERVICE_ID_SET_DEFAULT_LOG_LEVEL, "set_default_log_level"),
+        (
+            SERVICE_ID_SET_DEFAULT_TRACE_STATUS,
+            "set_default_trace_status",
+        ),
         (SERVICE_ID_GET_SOFTWARE_VERSION, "get_software_version"),
         (20, "message_buffer_overflow"),
         // user services as from dlt-daemon:

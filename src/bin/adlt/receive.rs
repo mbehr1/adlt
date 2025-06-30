@@ -1,22 +1,31 @@
 /**
  * TODOs:
  * [x] - support limit for file size. split files if limit is reached. autogenerate file names.
- * [ ] - support forwarding/serving messages via TCP incl. a ring buffer
+ * [x] - support forwarding/serving messages via TCP
+ * [ ] - support a ring buffer with old messages for tcp forwarding?
  * [ ] - for forwarding: support filters
- * [ ] - for forwarding: support context level changes
+ * [x] - for forwarding: support context level changes
  * [ ] - support filters for received messages
  */
+use nohash_hasher::NoHashHasher;
 use std::{
+    hash::BuildHasherDefault,
     io::{BufWriter, Write},
+    mem::MaybeUninit,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
 use adlt::{
-    dlt::DltChar4,
+    dlt::{
+        DltChar4, DltMessage, DltMessageIndexType, DltStandardHeader, DltStorageHeader,
+        DLT_MIN_STD_HEADER_SIZE, SERVICE_ID_GET_LOG_INFO, SERVICE_ID_NAMES,
+        SERVICE_ID_SET_DEFAULT_LOG_LEVEL, SERVICE_ID_SET_DEFAULT_TRACE_STATUS,
+        SERVICE_ID_SET_LOG_LEVEL, SERVICE_ID_SET_TIMING_PACKETS, SERVICE_ID_SET_VERBOSE_MODE,
+    },
     utils::{buf_as_hex_to_io_write, IpDltMsgReceiver, RecvMode},
 };
 use clap::{Arg, ArgMatches, Command};
-use slog::{debug, error, info};
+use slog::{debug, error, info, warn};
 
 /*
 printf("Usage: dlt-receive [options] hostname/serial_device_name\n");
@@ -121,6 +130,13 @@ pub fn add_subcommand(app: Command) -> Command {
                 .help("Restrict file size to <limit> bytes when output to file. Use MB, MiB, GB, GIB as suffix to specify mega-, giga-bytes respectively (e.g. 200MB). If used a 3 digit index is added to the file name before the extension.")
                 .value_parser(clap::value_parser!(size::Size))
             )
+            .arg(Arg::new("forward_tcp")
+                .long("forward_tcp")
+                .short('t')
+                .num_args(1)
+                .help("Forward/serve received messages via TCP on the given port.")
+                .value_parser(clap::value_parser!(u16))
+            )
     )
 }
 
@@ -202,6 +218,8 @@ pub fn receive<W: std::io::Write + Send + 'static>(
             None
         };
 
+    let forward_tcp_port = sub_m.get_one::<u16>("forward_tcp");
+
     let new_file_writer = |path: &str, limit_idx: &Option<(usize, u32)>| {
         let do_zip = path.ends_with(".zip");
         let path_to_use = if let Some((_limit, next_idx)) = limit_idx {
@@ -277,6 +295,38 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         recv_addr,
     )?;
 
+    // channels used:
+    // tx_for_recv_thread -> receiver thread will put messages into this channel/end (and they will end at rx_from_recv_thread)
+    // forward_thread -> forward thread will receive messages from rx_from_recv_thread and put back to tx_for_forward_thread
+
+    let (tx_for_recv_thread, rx_from_recv_thread) = std::sync::mpsc::channel();
+
+    // forward_tcp thread?
+    let (forward_tcp_hread, rx_from_forward_thread) = if let Some(port) = forward_tcp_port {
+        let log = log.clone();
+        info!(log, "Forwarding messages via TCP on port {}", port);
+        let stop_forward = stop_receive.clone();
+        let port = *port;
+
+        let (tx_for_forward_thread, rx_from_forward_thread) = std::sync::mpsc::channel();
+
+        let forward_thread = std::thread::Builder::new()
+            .name("forward_tcp_thread".to_string())
+            .spawn(move || -> std::io::Result<()> {
+                forward_serve_via_tcp(
+                    log,
+                    stop_forward,
+                    port,
+                    rx_from_recv_thread,
+                    tx_for_forward_thread,
+                )
+            })
+            .unwrap();
+        (Some(forward_thread), rx_from_forward_thread)
+    } else {
+        (None, rx_from_recv_thread)
+    };
+
     // install ctrl+c handler
     let log_c = log.clone();
     ctrlc::set_handler(move || {
@@ -290,7 +340,6 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     // spawn a thread to receive messages as eg. write/flush to zip file takes too much time
     // send messages via a channel (async) to the main thread
 
-    let (tx, rx_from_recv_thread) = std::sync::mpsc::channel();
     let log_clone_for_recv_thread = log.clone();
     let recv_thread = std::thread::Builder::new()
         .name("recv_thread".to_string())
@@ -299,7 +348,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
             while !stop_recv_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 match ip_receiver.recv_msg() {
                     Ok(msg_from_pair) => {
-                        if let Err(e) = tx.send(msg_from_pair){
+                        if let Err(e) = tx_for_recv_thread.send(msg_from_pair){
                          error!(log, "Failed to send message to processing thread: {}. Stopping receiver thread.", e);
                         break;
                         }
@@ -323,7 +372,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         })
         .unwrap();
 
-    for (msg, _msg_from) in rx_from_recv_thread {
+    for (msg, _msg_from) in rx_from_forward_thread {
         // verify the consistency of the message TODO for test purposes only. define via parameter!
         if msg.ecu == adlt {
             if msg.timestamp_dms != next_adlt_timestamp {
@@ -409,6 +458,491 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         Err(s) => error!(log, "recv_thread join got Error {:?}", s),
         Ok(s) => debug!(log, "recv_thread join was Ok {:?}", s),
     };
+    match forward_tcp_hread {
+        Some(thread) => {
+            match thread.join() {
+                Err(s) => error!(log, "forward_tcp_thread join got Error {:?}", s),
+                Ok(s) => debug!(log, "forward_tcp_thread join was Ok {:?}", s),
+            };
+        }
+        None => {}
+    }
 
     Ok(())
+}
+
+fn set_max_send_buffer_size(stream: &socket2::Socket, size: usize) -> std::io::Result<usize> {
+    let mut try_size = size;
+    while try_size > 64 * 1024 {
+        // set the send buffer size to 64kb
+        match stream.set_send_buffer_size(try_size) {
+            Ok(()) => {
+                return Ok(try_size);
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::InvalidInput {
+                    // the size is too large, try a smaller size
+                    try_size /= 2;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("Failed to set send buffer size {}/{} bytes", try_size, size),
+    ))
+}
+
+fn forward_serve_via_tcp(
+    log: slog::Logger,
+    stop_forward: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    port: u16,
+    rx_for_forward_thread: std::sync::mpsc::Receiver<(DltMessage, SocketAddr)>,
+    tx_for_forward_thread: std::sync::mpsc::Sender<(DltMessage, SocketAddr)>,
+) -> std::io::Result<()> {
+    // use libc::{c_int, setsockopt, SOL_SOCKET, SO_SNDLOWAT};
+    use socket2::{Domain, SockAddr, Type};
+    use std::sync::{Arc, Mutex};
+
+    // list of connected clients (expected dlt-viewers)
+
+    struct Viewer {
+        stream: socket2::Socket,
+        addr: SockAddr,
+        default_log_level: Option<u8>, // default log level for this viewer (none if not set yet) (0 = off, 1 = fatal, 2 = error, 3=warning, 4 = info, 5=debug, 6 = verbose)
+        apid_ctid_log_level_map: std::collections::HashMap<
+            u64, // (apid, ctid) as u32le
+            u8,
+            BuildHasherDefault<NoHashHasher<u64>>,
+        >, // map of (apid, ctid (as u32le)) to log level for this viewer
+    }
+    let viewers = Arc::new(Mutex::new(Vec::<Viewer>::new()));
+
+    let listener = socket2::Socket::new(Domain::IPV4, Type::STREAM, None)
+        .expect("Failed to create TCP socket");
+    let address: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+    let address: SockAddr = address.into();
+
+    listener.set_reuse_address(true).expect(&format!(
+        "Failed to set reuse address on TCP socket for port {:?}",
+        address.as_socket_ipv4()
+    ));
+    listener.bind(&address).expect(&format!(
+        "Failed to bind TCP socket to port {:?}",
+        address.as_socket_ipv4()
+    ));
+    info!(log, "TCP listener bound to port {}", port);
+    listener.listen(10).expect("Failed to listen on TCP socket");
+    // set the listener to non-blocking mode
+    listener
+        .set_nonblocking(true)
+        .expect("Failed to set non-blocking mode");
+
+    let log_clone = log.clone();
+    let viewers_clone = viewers.clone();
+    let stop_listener = stop_forward.clone();
+    let listen_thread = std::thread::Builder::new()
+        .name("forward_tcp_listen_thread".to_string())
+        .spawn(move || {
+            let log = log_clone;
+            let viewers = viewers_clone;
+            while !stop_forward.load(std::sync::atomic::Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((viewer, addr)) => {
+                        info!(log, "Accepted connection from {:?}", addr.as_socket_ipv4());
+                        // set the stream to non-blocking mode
+                        if let Err(e) = viewer.set_nonblocking(true) {
+                            error!(log, "Failed to set stream to non-blocking: {}", e);
+                            continue;
+                        }
+                        match set_max_send_buffer_size(&viewer, 64 * 1024 * 1000) {
+                            Ok(size) => {
+                                info!(log, "Set send buffer size to {} bytes", size);
+                            }
+                            Err(e) => {
+                                error!(
+                                    log,
+                                    "Failed to set send buffer size: {}! Current size = {}",
+                                    e,
+                                    viewer.send_buffer_size().unwrap_or(0)
+                                );
+                            }
+                        }
+                        // set SO_SNDLOWAT to 64kb to allow at least 1 message to be always fitting:
+                        // using setsocketopt
+                        // seems not supported on windows, so dont using that approach
+                        /*let lowat: c_int = 64 * 1024; // 64kb
+                        let ret = unsafe {
+                            setsockopt(
+                                viewer.as_raw_fd(),
+                                SOL_SOCKET,
+                                SO_SNDLOWAT,
+                                &lowat as *const _ as *const libc::c_void,
+                                std::mem::size_of_val(&lowat) as libc::socklen_t,
+                            )
+                        };
+                        if ret != 0 {
+                            error!(
+                                log,
+                                "Failed to set SO_SNDLOWAT on viewer socket: {}",
+                                std::io::Error::last_os_error()
+                            );
+                            continue;
+                        } else {
+                            info!(log, "Set SO_SNDLOWAT to 64kb for viewer socket");
+                        }*/
+
+                        // spawn a thread to handle the connection
+                        let stop_forward_clone = stop_forward.clone();
+                        let log_clone = log.clone();
+                        let viewers_clone = viewers.clone();
+                        std::thread::spawn(move || {
+                            let log = log_clone;
+                            let viewers = viewers_clone;
+                            // add the viewer to the list
+                            viewers.lock().unwrap().push(Viewer {
+                                stream: viewer.try_clone().expect("Failed to clone viewer stream"),
+                                addr: addr.clone(),
+                                default_log_level: None,
+                                apid_ctid_log_level_map: std::collections::HashMap::with_capacity_and_hasher(
+                                    512, // initial capacity for 512 entries (apid/ctid) pairs
+                                    BuildHasherDefault::<NoHashHasher<u64>>::default(),
+                                ),
+                            });
+                            let mut recvd_msg_index: DltMessageIndexType = 0;
+                            while !stop_forward_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                                let mut buf = [MaybeUninit::uninit(); 64 * 1024]; // todo buffer size?
+                                                                                  // todo change to ipdltmsgreceiver code
+
+                                match viewer.recv(&mut buf) {
+                                    Ok(rcvd_len) => {
+                                        if rcvd_len > 0 {
+                                            info!(
+                                                log,
+                                                "Got {} bytes from viewer {:?}",
+                                                rcvd_len,
+                                                addr.as_socket_ipv4()
+                                            );
+                                            let mut recvd_data = unsafe {
+                                                // This creates a `&[u8]` slice from the `&[MaybeUninit<u8>]` slice.
+                                                // It's safe because u8 and MaybeUninit<u8> have the same layout,
+                                                // and we trust `recv_from` to have initialized these `size` bytes.
+                                                std::slice::from_raw_parts(
+                                                    buf.as_ptr() as *const u8,
+                                                    rcvd_len,
+                                                )
+                                            };
+                                            loop{
+                                                let parse_res = parse_dlt_with_std_header(
+                                                    recvd_data,
+                                                    recvd_msg_index,
+                                                );
+                                                match parse_res {
+                                                    Ok((msg, remaining)) => {
+                                                        info!(log, "Parsed message: {:?}, remaining bytes = {}", msg, remaining);
+                                                        recvd_msg_index += 1;
+                                                        // todo parse as msg and process control msgs (setDefaultLogLevel, setLogLevel)
+                                                        // default log level should be off
+
+                                                        if msg.is_ctrl_request(){
+                                                            let mut args = msg.into_iter();
+                                                            let message_id_arg = args.next();
+                                                            match message_id_arg {
+                                                                Some(a) => {
+                                                                    let message_id = if a.is_big_endian {
+                                                                        // todo this fails if first arg is not a uint32! add check
+                                                                        u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
+                                                                    } else {
+                                                                        u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
+                                                                    };
+                                                                    let payload_arg = args.next();
+                                                                    let (payload, _is_big_endian) = match payload_arg {
+                                                                        Some(a) => (a.payload_raw, a.is_big_endian),
+                                                                        None => (&[] as &[u8], false),
+                                                                    };
+                                                                    info!(log, "Received control request message id {} ({}): {:?}", message_id, SERVICE_ID_NAMES.get(&message_id).unwrap_or(&"Unknown"),payload);
+                                                                    match message_id{
+                                                                        SERVICE_ID_SET_LOG_LEVEL => {
+                                                                            // set the log level for apid/ctid
+                                                                            if payload.len() >= 9 {
+                                                                                let apid = DltChar4::from_buf(&payload[0..4]);
+                                                                                let ctid = DltChar4::from_buf(&payload[4..8]);
+                                                                                let log_level = payload[8];
+                                                                                info!(log, "Set log level for apid {} and ctid {} to {}", apid, ctid, log_level);
+                                                                                // update the viewer's apid/ctid log level map
+                                                                                let mut viewers_lock = viewers.lock().unwrap();
+                                                                                if let Some(viewer) = viewers_lock.iter_mut().find(|v| v.addr == addr) {
+                                                                                    viewer.apid_ctid_log_level_map.insert(
+                                                                                        ((apid.as_u32le() as u64) << 32) | (ctid.as_u32le() as u64),
+                                                                                        log_level,
+                                                                                    );
+                                                                                } else {
+                                                                                    warn!(log, "Viewer with addr {:?} not found in list", addr.as_socket_ipv4());
+                                                                                }
+                                                                            }else {
+                                                                                warn!(log, "Invalid payload length for set log level message: {} bytes, expected at least 9 bytes", payload.len());
+                                                                            }
+                                                                        }
+                                                                        SERVICE_ID_GET_LOG_INFO => {}
+                                                                        SERVICE_ID_SET_DEFAULT_LOG_LEVEL => {
+                                                                            let default_log_level = if payload.len()>=1{
+                                                                                payload[0]
+                                                                            }else{
+                                                                                0 // default to 0 (off)
+                                                                            };
+                                                                            info!(log, "Set default log level to {} for addr {:?}", default_log_level, addr.as_socket_ipv4());
+                                                                            // 0 = off, 1 = fatal, 2 = error, 3=warning, 4 = info, 5=debug, 6 = verbose
+                                                                            let mut viewers_lock = viewers.lock().unwrap();
+                                                                            // update viewer with that addr:
+                                                                            if let Some(viewer) = viewers_lock.iter_mut().find(|v| v.addr == addr) {
+                                                                                viewer.default_log_level = Some(default_log_level);
+                                                                            } else {
+                                                                                warn!(log, "Viewer with addr {:?} not found in list", addr.as_socket_ipv4());
+                                                                            }
+                                                                        }
+                                                                        SERVICE_ID_SET_DEFAULT_TRACE_STATUS|SERVICE_ID_SET_TIMING_PACKETS|SERVICE_ID_SET_VERBOSE_MODE=>{}
+                                                                        _ => {
+                                                                            warn!(log, "Unknown control request message id: {}", message_id);
+                                                                        }
+                                                                    }
+                                                                    // todo process control request messages
+                                                                    // e.g. set log level, set default log level, etc.
+
+                                                                }
+                                                                None => {
+                                                                }
+                                                            };
+                                                        }
+
+
+                                                        if remaining>0 {
+                                                            recvd_data = &recvd_data[recvd_data.len()-remaining..];
+                                                        }else{
+                                                            break;
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        error!(
+                                                            log,
+                                                            "Failed to parse DLT message from viewer {:?}: bytes missing={}",
+                                                            addr.as_socket_ipv4(),
+                                                            e
+                                                        );
+                                                        break; // todo: add to buffer!
+                                                    }
+                                                }
+                                            }
+
+                                            viewer
+                                                .send(&recvd_data)
+                                                .expect("Failed to send ACK to viewer");
+                                        } else {
+                                            // no data available, continue
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                50,
+                                            ));
+                                        }
+
+                                        // break;
+                                    }
+                                    Err(e) => {
+                                        if e.kind() != std::io::ErrorKind::WouldBlock {
+                                            error!(log, "Error receiving data from viewer: {}", e);
+                                            break;
+                                        } else {
+                                            // no data available, continue
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                50,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            // remove the viewer from the list
+                            let mut viewers_lock = viewers.lock().unwrap();
+                            viewers_lock.retain(|v| v.addr != addr);
+                            // close the stream
+                            if let Err(e) = viewer.shutdown(std::net::Shutdown::Both) {
+                                error!(log, "Error shutting down viewer stream: {}", e);
+                            }
+                            info!(log, "TCP connection to {:?} closed.", addr.as_socket_ipv4());
+                        });
+                    }
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::WouldBlock {
+                            error!(log, "Error accepting connection: {}", e);
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                        } else {
+                            // no connection available, continue
+                            // std::thread::sleep(std::time::Duration::from_millis(50));
+                            // wait not needed here, as the channel recv_timeout will block for some time
+                        }
+                    }
+                }
+            }
+            let _ = listener.shutdown(std::net::Shutdown::Both);
+        })
+        .unwrap();
+
+    loop {
+        // todo or better use the rx_for_forward_thread Disconnected to not loose messages?
+        // need to receive messages from the channel, forward them to the tcp clients and put it to the tx channel
+        match rx_for_forward_thread.recv() {
+            Ok((msg, addr)) => {
+                //info!(log, "Forwarding message to {:?}", addr);
+                let mut failed_viewers = Vec::new();
+
+                for viewer in viewers.lock().unwrap().iter_mut() {
+                    // send the message to all connected viewers (dlt-viewer doesn't expect the storage header)
+
+                    // write_all doesn't help with non-blocking sockets! (TODO)
+                    // so we use a really big send_buffer size (64mb target)
+                    // if this is not enough the viewer/client is too slow and will be removed from the forwarders
+
+                    // do we have a log level for the apid/ctid?
+                    // else use default log level of the viewer
+
+                    let log_level = if let Some(ext_header) = &msg.extended_header {
+                        if let Some(level) = viewer.apid_ctid_log_level_map.get(
+                            &((ext_header.apid.as_u32le() as u64) << 32
+                                | ext_header.ctid.as_u32le() as u64),
+                        ) {
+                            *level
+                        } else {
+                            // use default log level of the viewer or >verbose if not set yet (TODO rethink initial value)
+                            viewer.default_log_level.unwrap_or(7) // 0 = off, 1 = fatal, 2 = error, 3=warning, 4 = info, 5=debug, 6 = verbose
+                        }
+                    } else {
+                        1 // fatal by default if no extended header is present
+                    };
+
+                    // todo add trace status support as well
+
+                    let shall_forward =
+                        // check if the message should be forwarded to this viewer
+                        // if the default log level is set, only forward messages with a log level <= default_log_level
+
+                        if let Some(msg_vmm) = msg.verb_mstp_mtin() {
+                            let mstp = (msg_vmm >> 1) & 0x07u8;
+                            let mtin = (msg_vmm >> 4) & 0x0fu8;
+                            mstp == 0 && mtin <= log_level
+                        } else {
+                            true // no ext header, forward all messages
+                        };
+
+                    if shall_forward == false {
+                        // skip this viewer
+                        continue;
+                    }
+                    match DltStandardHeader::to_write(
+                        &mut viewer.stream,
+                        &msg.standard_header,
+                        &msg.extended_header,
+                        Some(msg.ecu),
+                        None, // session_id = None, todo
+                        if msg.standard_header.has_timestamp() {
+                            Some(msg.timestamp_dms)
+                        } else {
+                            None
+                        },
+                        &msg.payload,
+                    ) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!(
+                                log,
+                                "Error sending message to viewer {:?}: {}",
+                                viewer.addr.as_socket_ipv4(),
+                                e
+                            );
+                            // remove the viewer from the list
+                            failed_viewers.push(viewer.addr.clone());
+                        }
+                    }
+                }
+
+                if let Err(e) = tx_for_forward_thread.send((msg, addr)) {
+                    error!(log, "Failed to forward message to main thread: {}", e);
+                    break; // exit on error
+                }
+
+                // remove failed viewers
+                if !failed_viewers.is_empty() {
+                    let mut viewers_lock = viewers.lock().unwrap();
+                    viewers_lock.retain(|v| !failed_viewers.contains(&v.addr));
+                }
+            }
+            Err(std::sync::mpsc::RecvError) => {
+                error!(
+                    log,
+                    "Error receiving message for forwarding: Disconnected channel"
+                );
+                break;
+            }
+        }
+    }
+    // set stop_forward to true to stop the listener thread
+    // this might be stopped/set already as ctrl+c handler sets it
+    // but to avoid a deadlock here we set it again
+    stop_listener.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    match listen_thread.join() {
+        Err(s) => error!(log, "listen_thread join got Error {:?}", s),
+        Ok(s) => debug!(log, "listen_thread join was Ok {:?}", s),
+    };
+    Ok(())
+}
+
+// Todo refactor into generic utils
+fn parse_dlt_with_std_header(
+    data: &[u8],
+    index: DltMessageIndexType,
+) -> Result<(DltMessage, usize), usize> {
+    // Parse the DltMessage from the buffer
+    let mut remaining = data.len();
+    if remaining >= DLT_MIN_STD_HEADER_SIZE {
+        // todo check for DLT v1 standard header pattern
+        let stdh = DltStandardHeader::from_buf(&data[0..remaining]).expect("no valid stdheader!");
+        let std_ext_header_size = stdh.std_ext_header_size();
+        if stdh.len >= std_ext_header_size {
+            // do we have the remaining data?
+            if remaining >= stdh.len as usize {
+                remaining -= std_ext_header_size as usize;
+                let payload_offset = std_ext_header_size as usize;
+                let payload_size = stdh.len - std_ext_header_size;
+                remaining -= payload_size as usize; // always <= remaining as: remaining >= stdh.len >= std_ext_header_size
+                let payload =
+                    Vec::from(&data[payload_offset..payload_offset + payload_size as usize]);
+                // get current time as seconds and microseconds since epoch
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("Time went backwards");
+
+                let sh = DltStorageHeader {
+                    // todo... use start time? and header via config/parameter?
+                    secs: now.as_secs() as u32,
+                    micros: now.subsec_micros(),
+                    ecu: DltChar4::from_buf(b"RECV"), // TODO support parameter -e ecuid
+                };
+                let msg = DltMessage::from_headers(
+                    index,
+                    sh,
+                    stdh,
+                    &data[DLT_MIN_STD_HEADER_SIZE..payload_offset],
+                    payload,
+                );
+                Ok((msg, remaining))
+            } else {
+                // data is not enough for a complete message
+                // return the missing bytes
+                Err(stdh.len as usize - remaining)
+            }
+        } else {
+            Err(0) // invalid, no message
+        }
+    } else {
+        Err(DLT_MIN_STD_HEADER_SIZE - remaining) // not enough data for a standard header
+    }
 }

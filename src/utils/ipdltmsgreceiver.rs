@@ -164,8 +164,9 @@ impl IpDltMsgReceiver {
 
         info!(
             log,
-            "created receiver socket: {:?} with receiver buffer size: {} and read timeout: {:?}",
-            socket,
+            "created receiver socket: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
+            socket.local_addr().unwrap().as_socket_ipv4(),
+            socket.local_addr().unwrap().as_socket_ipv6(),
             socket.recv_buffer_size().unwrap_or(0),
             socket.read_timeout()
         );
@@ -418,8 +419,6 @@ mod tests {
             }
             println!("No message received, got error: {:?}", result.err());
             break;
-            // sleep a bit
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
         assert_eq!(
             nr_msgs, 3,
