@@ -1625,7 +1625,7 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
 
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
+    pub kind: ErrorKind,
 }
 
 impl Error {
@@ -1853,6 +1853,66 @@ pub fn parse_dlt_with_serial_header(
     } else {
         Err(Error::new(ErrorKind::NotEnoughData(
             MIN_DLT_MSG_SIZE - remaining,
+        )))
+    }
+}
+
+// TODO refactor upper functions to use this one
+
+pub fn parse_dlt_with_std_header(
+    data: &[u8],
+    index: DltMessageIndexType,
+    ecu: DltChar4, // ecu to use for storage header
+) -> Result<(usize, DltMessage), Error> {
+    // Parse the DltMessage from the buffer
+    let mut remaining = data.len();
+    if remaining >= DLT_MIN_STD_HEADER_SIZE {
+        // todo check for DLT v1 standard header pattern
+        let stdh = DltStandardHeader::from_buf(&data[0..remaining]).expect("no valid stdheader!");
+        let std_ext_header_size = stdh.std_ext_header_size();
+        if stdh.len >= std_ext_header_size {
+            // do we have the remaining data?
+            if remaining >= stdh.len as usize {
+                remaining -= std_ext_header_size as usize;
+                let payload_offset = std_ext_header_size as usize;
+                let payload_size = stdh.len - std_ext_header_size;
+                remaining -= payload_size as usize; // always <= remaining as: remaining >= stdh.len >= std_ext_header_size
+                let payload =
+                    Vec::from(&data[payload_offset..payload_offset + payload_size as usize]);
+                // get current time as seconds and microseconds since epoch
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("Time went backwards");
+
+                let sh = DltStorageHeader {
+                    secs: now.as_secs() as u32,
+                    micros: now.subsec_micros(),
+                    ecu,
+                };
+                let msg = DltMessage::from_headers(
+                    index,
+                    sh,
+                    stdh,
+                    &data[DLT_MIN_STD_HEADER_SIZE..payload_offset],
+                    payload,
+                );
+                let to_consume = data.len() - remaining;
+                Ok((to_consume, msg))
+            } else {
+                // data is not enough for a complete message
+                // return the missing bytes
+                Err(Error::new(ErrorKind::NotEnoughData(
+                    stdh.len as usize - remaining,
+                )))
+            }
+        } else {
+            Err(Error::new(ErrorKind::InvalidData(String::from(
+                "stdh.len too small",
+            ))))
+        }
+    } else {
+        Err(Error::new(ErrorKind::NotEnoughData(
+            DLT_MIN_STD_HEADER_SIZE - remaining,
         )))
     }
 }
