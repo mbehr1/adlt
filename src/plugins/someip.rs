@@ -676,9 +676,7 @@ if(m!==null){
 return o;
 ";
 
-    format!(
-        "const pname='{parameter_name}';{JS_EVENT_P_CONVERSION_FUNCTION}"
-    )
+    format!("const pname='{parameter_name}';{JS_EVENT_P_CONVERSION_FUNCTION}")
 }
 
 // todo add overview for methods as well

@@ -164,10 +164,8 @@ impl ExportPlugin {
             Ok(f) => f,
             Err(e) => {
                 return Err(PluginError::new(
-                    format!(
-                        "ExportPlugin: could not create file '{export_file_name}': {e}"
-                    )
-                    .as_str(),
+                    format!("ExportPlugin: could not create file '{export_file_name}': {e}")
+                        .as_str(),
                 )
                 .into())
             }

@@ -142,7 +142,7 @@ pub fn add_subcommand(app: Command) -> Command {
                 .short('e')
                 .num_args(1)
                 .default_value("RECV")
-                .value_parser(|s: &str|DltChar4::from_str(s).map_err(|_|format!("ecu contains non ascii characters")))
+                .value_parser(|s: &str|DltChar4::from_str(s).map_err(|_|"ecu contains non ascii characters"))
                 .help("Set ECU ID for received messages if they have no extended header (default: RECV)")
             )
     )
@@ -179,6 +179,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     log: &slog::Logger,
     sub_m: &ArgMatches,
     mut writer_screen: W,
+    stop_receive_param: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let hostname = sub_m.get_one::<String>("hostname").unwrap(); // mand. arg. cannot fail
     let port = sub_m.get_one::<u16>("port").unwrap_or(&3490);
@@ -295,7 +296,13 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     );
 
     // create ip_receiver:
-    let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_receive = if let Some(stop_receive_param) = &stop_receive_param {
+        stop_receive_param.clone()
+    } else {
+        // create a new stop receive flag
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
+    };
+    //let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_recv_clone = stop_receive.clone();
 
     let mut ip_receiver = IpDltMsgReceiver::new(
@@ -341,11 +348,13 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     };
 
     // install ctrl+c handler
-    let log_c = log.clone();
-    ctrlc::set_handler(move || {
-        info!(log_c, "Ctrl+C received, stopping receiver...");
-        stop_receive.store(true, std::sync::atomic::Ordering::SeqCst);
-    })?;
+    if stop_receive_param.is_none() {
+        let log_c = log.clone();
+        ctrlc::set_handler(move || {
+            info!(log_c, "Ctrl+C received, stopping receiver...");
+            stop_receive.store(true, std::sync::atomic::Ordering::SeqCst);
+        })?;
+    }
 
     let adlt = DltChar4::from_buf(b"ADLT");
     let mut next_adlt_timestamp = 0;
@@ -653,7 +662,7 @@ fn forward_serve_via_tcp(
                                                 let parse_res = parse_dlt_with_std_header(
                                                     recvd_data,
                                                     recvd_msg_index,
-                                                    ecu_id.clone(),
+                                                    ecu_id,
                                                 );
                                                 match parse_res {
                                                     Ok((to_consume, msg)) => {
@@ -906,4 +915,66 @@ fn forward_serve_via_tcp(
         Ok(s) => debug!(log, "listen_thread join was Ok {:?}", s),
     };
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use portpicker::pick_unused_port;
+    use slog::{o, Drain, Logger};
+
+    fn new_logger() -> Logger {
+        let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        Logger::root(drain, o!())
+    }
+
+    #[test]
+    fn params_wrong_port() {
+        let logger = new_logger();
+        let arg_vec = vec!["t", "receive", "-p66666"];
+        let sub_c = add_subcommand(Command::new("t")).try_get_matches_from(arg_vec);
+        assert!(sub_c.is_err());
+        let err = sub_c.unwrap_err();
+        assert!(err.kind() == clap::error::ErrorKind::ValueValidation);
+        assert_eq!(err.to_string(), "error: invalid value '66666' for '-p <port>': 66666 is not in 0..=65535\n\nFor more information, try '--help'.\n");
+    }
+
+    #[test]
+    fn params_ok() {
+        let arg_vec = vec!["t", "receive", "127.0.0.1", "-u"];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (c, sub_m) = sub_c.subcommand().unwrap();
+        assert_eq!("receive", c);
+        assert_eq!(
+            sub_m.get_one::<String>("hostname").map(|s| s.to_string()),
+            Some(String::from("127.0.0.1"))
+        );
+        //let r = receive(&logger, sub_m, std::io::stdout());
+    }
+
+    #[test]
+    fn recv_udp() {
+        // determine a free port:
+        let port = pick_unused_port().expect("no ports free");
+        let port_str = port.to_string();
+        let logger = new_logger();
+        let arg_vec = vec!["t", "receive", "127.0.0.1", "-u", "-p", &port_str];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
+        // spawn on a thread to not block the test
+        std::thread::scope(|s| {
+            let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop_receive_t = stop_receive.clone();
+            let t = s.spawn(move || {
+                let r = receive(&logger, sub_m, std::io::stdout(), Some(stop_receive_t));
+                assert!(r.is_ok());
+            });
+            // wait 100ms
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            stop_receive.store(true, std::sync::atomic::Ordering::SeqCst);
+            let r = t.join();
+        });
+    }
 }

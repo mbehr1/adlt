@@ -66,9 +66,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|_x| ())
         } // dont return anything here
         Some(("remote", sub_m)) => remote::remote(&log, sub_m, false),
-        Some(("receive", sub_m)) => {
-            receive::receive(&log, sub_m, std::io::BufWriter::new(std::io::stdout()))
-        }
+        Some(("receive", sub_m)) => receive::receive(
+            &log,
+            sub_m,
+            std::io::BufWriter::new(std::io::stdout()),
+            None,
+        ),
         Some(("transmit", sub_m)) => transmit::transmit(&log, sub_m),
         _ => Err(Box::new(io::Error::new(
             io::ErrorKind::Unsupported,

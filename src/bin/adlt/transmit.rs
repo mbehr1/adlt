@@ -174,9 +174,7 @@ pub fn transmit(
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
-    println!(
-        "Sent {nr_msgs_sent} test DLT messages to {hostname}:{port}"
-    );
+    println!("Sent {nr_msgs_sent} test DLT messages to {hostname}:{port}");
 
     Ok(())
 }

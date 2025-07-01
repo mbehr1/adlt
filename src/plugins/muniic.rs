@@ -387,9 +387,7 @@ impl MuniicPlugin {
                 }
             } else {
                 // todo warning?
-                println!(
-                    "MuniicPlugin: got config msg without regex match, msg={msg:?}"
-                );
+                println!("MuniicPlugin: got config msg without regex match, msg={msg:?}");
             }
         } else {
             println!(
@@ -444,9 +442,7 @@ fn tree_item_for_interface(
             }
         } else {
             TreeItem {
-                label: format!(
-                    "<no interface with hash {interface_hash}> #{interface_id}"
-                ),
+                label: format!("<no interface with hash {interface_hash}> #{interface_id}"),
                 ..Default::default()
             }
         }
