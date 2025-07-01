@@ -3115,6 +3115,50 @@ mod tests {
     }
 
     #[test]
+    fn parse_dlt_with_std_header_basic() {
+        let vec_m1 = get_msg_payload(1, false);
+        let vec_m2 = get_msg_payload(2, false);
+
+        let mut file = Vec::new();
+        // first message has 0 byte lost (1 byte loss is not detectable easily...)
+        file.write_all(&vec_m1.as_slice()[0..vec_m1.len() - 0])
+            .unwrap();
+        // 2nd message is ok
+        file.write_all(&vec_m2).unwrap();
+
+        // we expect an error on the first message:
+        let (parsed, m1) =
+            parse_dlt_with_std_header(&file, 1, DltChar4::from_buf(b"ECU1")).unwrap();
+        assert_eq!(parsed, vec_m1.len());
+        assert_eq!(m1.mcnt(), 1);
+
+        // so we do expect the 2nd message:
+        let (parsed, m2) =
+            parse_dlt_with_std_header(&file[parsed..], 1, DltChar4::from_buf(b"ECU1")).unwrap();
+        assert_eq!(parsed, vec_m2.len());
+        assert_eq!(m2.mcnt(), 2);
+    }
+
+    #[test]
+    fn parse_dlt_with_std_header_toofew() {
+        let vec_m1 = get_msg_payload(1, false);
+
+        let mut file = Vec::new();
+        file.write_all(&vec_m1.as_slice()[0..vec_m1.len() - 1])
+            .unwrap();
+
+        // we expect an error on the first message:
+        let res = parse_dlt_with_std_header(&file, 1, DltChar4::from_buf(b"ECU1"))
+            .err()
+            .unwrap();
+        assert!(matches!(res.kind(), ErrorKind::NotEnoughData(1)));
+        assert_eq!(
+            res.to_string(),
+            "not enough data - missing at least 1 bytes"
+        );
+    }
+
+    #[test]
     fn parse_storage() {
         let m = get_testmsg_with_payload(
             true,
@@ -3181,7 +3225,7 @@ mod tests {
         assert_eq!(m2.mcnt(), m.mcnt());
     }
 
-    fn get_serial_msg_payload(mcnt: u8) -> Vec<u8> {
+    fn get_msg_payload(mcnt: u8, with_serial_pattern: bool) -> Vec<u8> {
         let mut file = Vec::new();
 
         let standard_header = DltStandardHeader {
@@ -3191,11 +3235,12 @@ mod tests {
         };
 
         let payload = vec![0x01u8];
-        let dls_pat = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
+        if with_serial_pattern {
+            let dls_pat = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
 
-        // DLS format = serial header patter, standard header, [ext header], payload
-        file.write_all(&dls_pat).unwrap();
-        //file.write_all(&b1).unwrap();
+            // DLS format = serial header patter, standard header, [ext header], payload
+            file.write_all(&dls_pat).unwrap();
+        }
 
         DltStandardHeader::to_write(
             &mut file,
@@ -3216,8 +3261,8 @@ mod tests {
 
     #[test]
     fn parse_serial() {
-        let vec_m1 = get_serial_msg_payload(1);
-        let vec_m2 = get_serial_msg_payload(2);
+        let vec_m1 = get_msg_payload(1, true);
+        let vec_m2 = get_msg_payload(2, true);
 
         let file: Vec<_> = vec![vec_m1.clone(), vec_m2.clone()]
             .into_iter()
@@ -3234,8 +3279,8 @@ mod tests {
 
     #[test]
     fn parse_serial_corrupt() {
-        let vec_m1 = get_serial_msg_payload(1);
-        let vec_m2 = get_serial_msg_payload(2);
+        let vec_m1 = get_msg_payload(1, true);
+        let vec_m2 = get_msg_payload(2, true);
 
         let mut file = Vec::new();
         // first message has 1 byte lost
