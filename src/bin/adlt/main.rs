@@ -71,7 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sub_m,
             std::io::BufWriter::new(std::io::stdout()),
             None,
-        ),
+        )
+        .map(|_x| ()), // dont return anything here
         Some(("transmit", sub_m)) => transmit::transmit(&log, sub_m),
         _ => Err(Box::new(io::Error::new(
             io::ErrorKind::Unsupported,

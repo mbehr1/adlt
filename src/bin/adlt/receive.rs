@@ -180,7 +180,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     sub_m: &ArgMatches,
     mut writer_screen: W,
     stop_receive_param: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<usize, Box<dyn std::error::Error>> {
     let hostname = sub_m.get_one::<String>("hostname").unwrap(); // mand. arg. cannot fail
     let port = sub_m.get_one::<u16>("port").unwrap_or(&3490);
     let udp_multicast = sub_m.get_flag("udp_multicast");
@@ -394,8 +394,10 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         })
         .unwrap();
 
+    let mut nr_msg_received = 0usize;
     for (msg, _msg_from) in rx_from_forward_thread {
         // verify the consistency of the message TODO for test purposes only. define via parameter!
+        nr_msg_received += 1;
         if msg.ecu == adlt {
             if msg.timestamp_dms != next_adlt_timestamp {
                 info!(
@@ -487,7 +489,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         };
     }
 
-    Ok(())
+    Ok(nr_msg_received)
 }
 
 fn set_max_send_buffer_size(stream: &socket2::Socket, size: usize) -> std::io::Result<usize> {
@@ -919,10 +921,19 @@ fn forward_serve_via_tcp(
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddrV4;
+
     use super::*;
+    use crate::transmit::create_send_socket;
+    use adlt::{
+        dlt::{DltExtendedHeader, DLT_MIN_STD_HEADER_SIZE},
+        dlt_args,
+    };
 
     use portpicker::pick_unused_port;
     use slog::{o, Drain, Logger};
+    use socket2::SockAddr;
+    use tempfile::NamedTempFile;
 
     fn new_logger() -> Logger {
         let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
@@ -956,25 +967,130 @@ mod tests {
 
     #[test]
     fn recv_udp() {
+        const DLT_STD_HDR_VERSION: u8 = 0x1 << 5;
+
         // determine a free port:
         let port = pick_unused_port().expect("no ports free");
         let port_str = port.to_string();
+
+        let forward_port = pick_unused_port().expect("no ports free");
+        let forward_port_str = forward_port.to_string();
+
         let logger = new_logger();
-        let arg_vec = vec!["t", "receive", "127.0.0.1", "-u", "-p", &port_str];
+        let file = NamedTempFile::with_suffix(".zip").unwrap();
+        let file_path = file.path().to_str().unwrap();
+
+        let arg_vec = vec![
+            "t",
+            "receive",
+            "127.0.0.1",
+            "-u",
+            "-p",
+            &port_str,
+            "-o",
+            file_path,
+            "-t",
+            &forward_port_str,
+        ];
         let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
         let (_c, sub_m) = sub_c.subcommand().unwrap();
         // spawn on a thread to not block the test
         std::thread::scope(|s| {
             let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let stop_receive_t = stop_receive.clone();
+
+            let logger_t = logger.clone();
             let t = s.spawn(move || {
+                let logger = logger_t;
                 let r = receive(&logger, sub_m, std::io::stdout(), Some(stop_receive_t));
                 assert!(r.is_ok());
+                r.unwrap()
             });
+
+            // send a test message to the UDP port
+            // create send socket:
+            let send_addr = std::net::SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port).into();
+            let socket = create_send_socket(
+                RecvMode::Udp,
+                send_addr,
+                socket2::InterfaceIndexOrAddress::Index(0),
+            )
+            .unwrap();
+
+            let send_to_addr = SockAddr::from(send_addr);
+
+            let mut nr_msgs_sent = 0usize;
+            let ecu = DltChar4::from_buf(b"ADLT");
+            let mut exth = Some(DltExtendedHeader {
+                verb_mstp_mtin: 0x41,
+                noar: 0, // will be set later
+                apid: DltChar4::from_buf(b"TSTA"),
+                ctid: DltChar4::from_buf(b"TSTC"),
+            });
+
+            // init a vec with ascending numbers:
+            let payload_buf = (0..u16::MAX).map(|u| u as u8).collect::<Vec<u8>>();
+            let std_hdr = adlt::dlt::DltStandardHeader {
+                htyp: DLT_STD_HDR_VERSION, // dlt_args! uses machine endianess! | DLT_STD_HDR_BIG_ENDIAN,
+                mcnt: (nr_msgs_sent % 256) as u8,
+                len: 0, // set automatically by DltStandardHeader::to_write
+            };
+
+            // write the DLT message to the buffer
+            // Todo move alloc out of loop
+            let mut buf = Vec::with_capacity(u16::MAX as usize);
+            let mut buf_writer = std::io::Cursor::new(&mut buf);
+
+            let wanted_payload_len = std::cmp::min(
+                nr_msgs_sent % u16::MAX as usize,
+                u16::MAX as usize - (4 + 8 + 4 + 2 + DLT_MIN_STD_HEADER_SIZE + 18 + 28), // type info, usize(8), type info, payload len(2) + std/ext header size -> this leads to a max dlt message of 64k
+                                                                                         // -28 as otherwise osx rejects the message as too large (error 40)
+            );
+            let (noar, payload) = dlt_args!(
+                nr_msgs_sent,
+                serde_bytes::Bytes::new(&payload_buf[0..(wanted_payload_len)])
+            )
+            .unwrap();
+            if let Some(exth) = &mut exth {
+                exth.noar = noar;
+            }
+
+            adlt::dlt::DltStandardHeader::to_write(
+                &mut buf_writer,
+                &std_hdr,
+                &exth,
+                Some(ecu),
+                None,                      // session_id = None, todo
+                Some(nr_msgs_sent as u32), // use message count as timestamp
+                &payload,
+            )
+            .expect("Failed to write DLT message: {e}");
+
+            // let full_msg_len = buf_writer.position() as usize;
+            let buf = buf_writer.into_inner();
+
+            // wait 100ms (to give the receiver time to start)
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            socket.send_to(buf, &send_to_addr).unwrap();
+            info!(
+                logger,
+                "Sent message to {:?}",
+                send_to_addr.as_socket_ipv4(),
+            );
+            nr_msgs_sent += 1;
+
             // wait 100ms
             std::thread::sleep(std::time::Duration::from_millis(100));
             stop_receive.store(true, std::sync::atomic::Ordering::SeqCst);
             let r = t.join();
+            assert!(r.is_ok());
+            let nr_msg_received = r.unwrap();
+            assert_eq!(nr_msg_received, nr_msgs_sent);
+            info!(logger, "Received {} messages", nr_msg_received);
         });
+
+        // check if the file exists and is not empty
+        // TODO
     }
 }
