@@ -711,7 +711,7 @@ where
                                         });
                                     };
                                     if !buffered_lcs.remove(&lc2.id) && moved_msgs != lc2_msgs {
-                                        println!("merged lc was not in buffered_lcs or its msgs not buffered anymore!\n {:?}\n {:?} msg #{}, moved_msgs={} vs {}", prev_lc, lc2, last_msg_index, moved_msgs, lc2_msgs);
+                                        println!("merged lc was not in buffered_lcs or its msgs not buffered anymore!\n {prev_lc:?}\n {lc2:?} msg #{last_msg_index}, moved_msgs={moved_msgs} vs {lc2_msgs}");
                                     }
                                     remove_last_lc = true;
                                 } else {
@@ -757,8 +757,7 @@ where
                         }
                         if let Err(e) = outflow(msg) {
                             println!(
-                                "parse_lifecycles_buffered_from_stream .send 4 got err={}",
-                                e
+                                "parse_lifecycles_buffered_from_stream .send 4 got err={e}"
                             );
                             break; // exit. the receiver has stopped
                         }
@@ -848,7 +847,7 @@ where
                                     if msg_lc == prune_lc_id {
                                         let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
                                         if let Err(e) = outflow(msg) {
-                                            println!("parse_lifecycles_buffered_from_stream .send 1 got err={}", e);
+                                            println!("parse_lifecycles_buffered_from_stream .send 1 got err={e}");
                                             break; // exit. the receiver has stopped
                                         }
                                     } else if !buffered_lcs.contains(&msg_lc) {
@@ -862,7 +861,7 @@ where
                                         // send that msg right away: (code duplication, might as well just wait one iteration)
                                         let msg = buffered_msgs.pop_front().unwrap(); // .remove(0);
                                         if let Err(e) = outflow(msg) {
-                                            println!("parse_lifecycles_buffered_from_stream .send 2 got err={}", e);
+                                            println!("parse_lifecycles_buffered_from_stream .send 2 got err={e}");
                                             break;
                                         }
                                     } else {
@@ -898,8 +897,7 @@ where
             );
             if let Err(e) = outflow(msg) {
                 println!(
-                    "parse_lifecycles_buffered_from_stream .send 3 got err={}",
-                    e
+                    "parse_lifecycles_buffered_from_stream .send 3 got err={e}"
                 );
                 break;
             }
@@ -930,8 +928,7 @@ where
         mark_lc_id_to_refresh(m.lifecycle, &mut lcs_to_refresh);
         if let Err(e) = outflow(m) {
             println!(
-                "parse_lifecycles_buffered_from_stream .send 4 got err={}",
-                e
+                "parse_lifecycles_buffered_from_stream .send 4 got err={e}"
             );
             break;
         }

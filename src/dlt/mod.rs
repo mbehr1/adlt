@@ -988,7 +988,7 @@ impl DltMessage {
                         } else {
                             f32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        write!(text, "{}", val)?;
+                        write!(text, "{val}")?;
                         // ryu seems not to be faster (at least in our bench dlt_payload_verb)
                         //text.push_str(ryu::Buffer::new().format(val));
                     }
@@ -998,7 +998,7 @@ impl DltMessage {
                         } else {
                             f64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        write!(text, "{}", val)?;
+                        write!(text, "{val}")?;
                         //text.push_str(ryu::Buffer::new().format(val));
                     }
                     // f16 and f128 dont exist. todo could use create half::f16 and f128::f128 but dlt-viewer doesn't support it either
@@ -1015,9 +1015,9 @@ impl DltMessage {
                 if !arg.payload_raw.is_empty() {
                     for (i, &c) in arg.payload_raw[0..arg.payload_raw.len()].iter().enumerate() {
                         if i > 0 {
-                            write!(text, " {:02x}", c)?;
+                            write!(text, " {c:02x}")?;
                         } else {
-                            write!(text, "{:02x}", c)?;
+                            write!(text, "{c:02x}")?;
                         }
                     }
                 }
@@ -1074,7 +1074,7 @@ impl DltMessage {
                         write!(text, "<scod bin nyi! todo>")?;
                     }
                     _ => {
-                        write!(text, "<scod unknown {}>", scod)?;
+                        write!(text, "<scod unknown {scod}>")?;
                     }
                 }
             }
@@ -1118,9 +1118,9 @@ impl DltMessage {
                 DltMessageType::Control(ct) => {
                     let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
                     if let Some(service_name) = SERVICE_ID_NAMES.get(&message_id) {
-                        write!(&mut text, "[{}", service_name)?;
+                        write!(&mut text, "[{service_name}")?;
                     } else if ct != DltMessageControlType::Time {
-                        write!(&mut text, "[service({})", message_id)?;
+                        write!(&mut text, "[service({message_id})")?;
                     }
                     let mut needs_closing_bracket = true;
                     match ct {
@@ -1157,8 +1157,8 @@ impl DltMessage {
                                         // output as json parseable array
                                         let apids_json = serde_json::to_string(&apids);
                                         match &apids_json {
-                                            Ok(apid_str) => write!(&mut text, " {}", apid_str)?,
-                                            Err(err) => write!(&mut text, " got err={:?}", err)?,
+                                            Ok(apid_str) => write!(&mut text, " {apid_str}")?,
+                                            Err(err) => write!(&mut text, " got err={err:?}")?,
                                         }
                                     }
                                     SERVICE_ID_UNREGISTER_CONTEXT => {
@@ -1170,7 +1170,7 @@ impl DltMessage {
                                                 "ctid": ctid,
                                                 "comid": comid
                                             });
-                                            write!(&mut text, " {}", val)?;
+                                            write!(&mut text, " {val}")?;
                                         } else {
                                             write!(&mut text, " ")?;
                                             crate::utils::buf_as_hex_to_write(&mut text, payload)?;
@@ -1188,7 +1188,7 @@ impl DltMessage {
                                                 },
                                                 "comid": comid
                                             });
-                                            write!(&mut text, " {}", val)?;
+                                            write!(&mut text, " {val}")?;
                                         } else {
                                             write!(&mut text, " ")?;
                                             crate::utils::buf_as_hex_to_write(&mut text, payload)?;
@@ -1242,7 +1242,7 @@ impl DltMessage {
                         est_len_ascii
                     };
                     let mut text = String::with_capacity(est_len_full.next_power_of_two());
-                    write!(&mut text, "[{}] ", message_id)?;
+                    write!(&mut text, "[{message_id}] ")?;
                     let times_replaced =
                         crate::utils::buf_as_printable_ascii_to_write(&mut text, payload, '-')?;
                     text.push('|');
@@ -1644,13 +1644,13 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.kind {
             ErrorKind::NotEnoughData(amount) => {
-                write!(f, "not enough data - missing at least {} bytes", amount)
+                write!(f, "not enough data - missing at least {amount} bytes")
             }
             ErrorKind::InvalidData(ref desc) => {
-                write!(f, "invalid data - {}", desc)
+                write!(f, "invalid data - {desc}")
             }
             ErrorKind::OtherFatal(ref desc) => {
-                write!(f, "other fatal error! - {}", desc)
+                write!(f, "other fatal error! - {desc}")
             }
         }
     }
@@ -1807,7 +1807,7 @@ pub fn parse_dlt_with_serial_header(
                                 // yes, lets use that.
                                 // we simply return an error here and let the usual skip logic apply
                                 return Err(Error::new(ErrorKind::InvalidData(
-                                                format!("skipped probably corrupt msg due to serial header pattern heuristic. serial pattern at {} vs expected {}", i, to_consume),
+                                                format!("skipped probably corrupt msg due to serial header pattern heuristic. serial pattern at {i} vs expected {to_consume}"),
                                             )));
                             }
                         }

@@ -94,8 +94,7 @@ pub fn get_plugin(
                 }
                 _ => {
                     println!(
-                        "got enabled not supported/unknown plugin with name:{}",
-                        name
+                        "got enabled not supported/unknown plugin with name:{name}"
                     );
                     None
                 }

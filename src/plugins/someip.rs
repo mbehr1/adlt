@@ -199,8 +199,7 @@ impl Plugin for SomeipPlugin {
                                             }
                                         } else {
                                             decoded_header = Some(Ok(format!(
-                                                "SOME/IP segmented message NWEN {} for unknown id!",
-                                                segment_id
+                                                "SOME/IP segmented message NWEN {segment_id} for unknown id!"
                                             )));
                                         }
                                         break;
@@ -261,8 +260,7 @@ impl Plugin for SomeipPlugin {
                                     {
                                         smi.raw_buf.extend(buf); // buf must not be mut
                                         decoded_header = Some(Ok(format!(
-                                            "SOME/IP segmented message NWCH {} ({})",
-                                            segment_id, chunk_nr
+                                            "SOME/IP segmented message NWCH {segment_id} ({chunk_nr})"
                                         )));
                                     } else {
                                         decoded_header = Some(Ok(format!(
@@ -272,8 +270,7 @@ impl Plugin for SomeipPlugin {
                                     }
                                 } else {
                                     decoded_header = Some(Ok(format!(
-                                        "SOME/IP segmented message NWCH {} ({}) for unknown id!",
-                                        segment_id, chunk_nr
+                                        "SOME/IP segmented message NWCH {segment_id} ({chunk_nr}) for unknown id!"
                                     )));
                                 }
 
@@ -295,8 +292,7 @@ impl Plugin for SomeipPlugin {
                         if buf.len() == 2 {
                             let chunk_size = u16::from_le_bytes([buf[0], buf[1]]);
                             decoded_header = Some(Ok(format!(
-                                "SOME/IP segmented message NWST id: {} amount: {}",
-                                segment_id, start_expected_nr_chunk
+                                "SOME/IP segmented message NWST id: {segment_id} amount: {start_expected_nr_chunk}"
                             )));
                             // some sanity check that chunk_size * size < e.g. 1MB
                             if chunk_size > 0
@@ -328,14 +324,13 @@ impl Plugin for SomeipPlugin {
                         msg.set_payload_text(text);
                     }
                     Some(Err(e)) => {
-                        msg.set_payload_text(format!("someip plugin! got decoding err={:?}", e));
+                        msg.set_payload_text(format!("someip plugin! got decoding err={e:?}"));
                     }
                     None => {
                         // no header decoded, but segmented msg
                         let cur_payload = msg.payload_as_text();
                         msg.set_payload_text(format!(
-                            "someip plugin! cannot decode: {:?}",
-                            cur_payload
+                            "someip plugin! cannot decode: {cur_payload:?}"
                         ));
                     }
                 }
@@ -520,17 +515,17 @@ fn tree_item_for_mid_types(
                         mid,
                         field_name,
                         if let Some(g) = getter {
-                            format!("Getter({:04x}) ", g)
+                            format!("Getter({g:04x}) ")
                         } else {
                             "".to_owned()
                         },
                         if let Some(g) = setter {
-                            format!("Setter({:04x}) ", g)
+                            format!("Setter({g:04x}) ")
                         } else {
                             "".to_owned()
                         },
                         if let Some(g) = notifier {
-                            format!("Notifier({:04x})", g)
+                            format!("Notifier({g:04x})")
                         } else {
                             "".to_owned()
                         },
@@ -682,8 +677,7 @@ return o;
 ";
 
     format!(
-        "const pname='{}';{}",
-        parameter_name, JS_EVENT_P_CONVERSION_FUNCTION
+        "const pname='{parameter_name}';{JS_EVENT_P_CONVERSION_FUNCTION}"
     )
 }
 
@@ -760,11 +754,10 @@ impl SomeipPlugin {
         let fibex_data = load_all_fibex(&files)?;
 
         if files.is_empty() {
-            warnings.push(format!("No fibex files found in directory: {}", fibex_dir));
+            warnings.push(format!("No fibex files found in directory: {fibex_dir}"));
         } else if fibex_data.projects.is_empty() {
             warnings.push(format!(
-                "No fibex projects parsed from fibex files found in directory: {}",
-                fibex_dir
+                "No fibex projects parsed from fibex files found in directory: {fibex_dir}"
             ));
         }
         // add any of those warnings after the prev one.

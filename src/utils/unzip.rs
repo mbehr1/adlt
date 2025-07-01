@@ -277,7 +277,7 @@ pub fn archive_contents_read_dir<'a>(
     let prefix = if path.is_empty() || path.ends_with('/') {
         path.to_owned()
     } else {
-        format!("{}/", path)
+        format!("{path}/")
     };
     //println!("using prefix:'{}'", prefix);
     // we dont want an empty, "." or ".." dir to be returned, so mark them as returned here.
@@ -345,7 +345,7 @@ pub fn archive_contents_metadata(
         } else {
             Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("file or dir not found: {}", path),
+                format!("file or dir not found: {path}"),
             ))
         }
     }

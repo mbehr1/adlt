@@ -95,7 +95,7 @@ impl IpDltMsgReceiver {
                             socket
                                 .bind(&SockAddr::from(socket_addr))
                                 .unwrap_or_else(|_| {
-                                    panic!("bind multicast error. socket_addr={:?}", socket_addr)
+                                    panic!("bind multicast error. socket_addr={socket_addr:?}")
                                 });
                         } else {
                             // TODO! (test)
@@ -266,7 +266,7 @@ impl IpDltMsgReceiver {
                 src_addr_buffer.extend_from_slice(recvd_data);
                 Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("not enough data (missing {}), storing fragment", missing),
+                    format!("not enough data (missing {missing}), storing fragment"),
                 ))
             }
             _ => {
