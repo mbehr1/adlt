@@ -130,8 +130,7 @@ impl FileTransfer {
                                 (self.nr_packages.saturating_mul(self.buffer_size)) as usize;
                             if let Err(e) = file_data.try_reserve_exact(required_capacity) {
                                 println!(
-                                    "FileTransfer add_flda failed to reserve {} bytes due to {}. Setting state Error.",
-                                    required_capacity,e
+                                    "FileTransfer add_flda failed to reserve {required_capacity} bytes due to {e}. Setting state Error."
                                 );
                                 clear_file_data_due_to_reservation_failure = true;
                             }
@@ -152,8 +151,7 @@ impl FileTransfer {
             self.check_finished(false)
         } else {
             println!(
-                "FileTransfer add_flda got unexpected package {} on (in)complete!",
-                package_nr
+                "FileTransfer add_flda got unexpected package {package_nr} on (in)complete!"
             );
             false
         }
@@ -613,8 +611,7 @@ impl FileTransferPlugin {
                 Ok(apid) => Some(apid),
                 Err(e) => {
                     return Err(FileTransferPluginError::from(format!(
-                        "config 'apid' failed parsing with:{:?}",
-                        e
+                        "config 'apid' failed parsing with:{e:?}"
                     ))
                     .into())
                 }
@@ -627,8 +624,7 @@ impl FileTransferPlugin {
                 Ok(apid) => Some(apid),
                 Err(e) => {
                     return Err(FileTransferPluginError::from(format!(
-                        "config 'ctid' failed parsing with:{:?}",
-                        e
+                        "config 'ctid' failed parsing with:{e:?}"
                     ))
                     .into())
                 }
@@ -651,8 +647,7 @@ impl FileTransferPlugin {
                 Ok(p) => Some(p),
                 Err(e) => {
                     return Err(FileTransferPluginError::from(format!(
-                        "config 'autoSaveGlob' failed parsing with:{:?}",
-                        e
+                        "config 'autoSaveGlob' failed parsing with:{e:?}"
                     ))
                     .into())
                 }
@@ -874,8 +869,7 @@ impl FileTransferPlugin {
                                         map_filetransfer_to_json(file_transfers_idx, file_transfer);
                                 } else {
                                     println!(
-                                        "FileTransferPlugin::update_state: file_transfers_idx {} not found in ECU children!",
-                                        file_transfers_idx
+                                        "FileTransferPlugin::update_state: file_transfers_idx {file_transfers_idx} not found in ECU children!"
                                     );
                                 }
                             }
@@ -927,7 +921,7 @@ impl FileTransferPlugin {
                 println!("FileTransferPlugin::update_state: treeItems not found in state value!");
             }
         } else {
-            println!("FileTransferPlugin::update_state: file_transfer with idx {} not found in transfers!", file_transfers_idx);
+            println!("FileTransferPlugin::update_state: file_transfer with idx {file_transfers_idx} not found in transfers!");
         }
     }
 
@@ -954,8 +948,7 @@ impl FileTransferPlugin {
             match internal_data.downcast_ref::<FileTransferStateData>() {
                 Some(state_data) => {
                     println!(
-                        "FileTransferPlugin::apply_command(cmd:{}, params:{:?}, ctx:{:?})... ",
-                        cmd, params, ctx,
+                        "FileTransferPlugin::apply_command(cmd:{cmd}, params:{params:?}, ctx:{ctx:?})... ",
                     );
                     println!(
                         "got internal FileTransferStateData! #transfers={}",
@@ -984,12 +977,12 @@ impl FileTransferPlugin {
                                         {
                                             Ok(_) => true,
                                             Err(e) => {
-                                                println!("saving failed with err '{}'", e);
+                                                println!("saving failed with err '{e}'");
                                                 false
                                             }
                                         }
                                     } else {
-                                        println!("didn't found idx {}", idx);
+                                        println!("didn't found idx {idx}");
                                         false
                                     }
                                 } else {
@@ -1076,7 +1069,7 @@ fn create_ecu_child<'a>(parent: &'a mut Value, ecu: &DltChar4) -> &'a mut Value 
         // return the new item
         parent.last_mut().unwrap().pointer_mut("/children").unwrap()
     } else {
-        panic!("create_ecu_children({}): parent is not an array!", ecu);
+        panic!("create_ecu_children({ecu}): parent is not an array!");
     }
 }
 

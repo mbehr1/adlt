@@ -225,7 +225,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         let path_to_use = if let Some((_limit, next_idx)) = limit_idx {
             // split path into path without extension and extension
             let (path_wo_ext, ext) = path.rsplit_once('.').unwrap_or((path, "dlt"));
-            &format!("{}_{:03}.{}", path_wo_ext, next_idx, ext)
+            &format!("{path_wo_ext}_{next_idx:03}.{ext}")
         } else {
             path
         };
@@ -238,7 +238,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
                 let bytes_written = std::rc::Rc::clone(&fa.bytes_written);
                 let mut zip = zip::ZipWriter::new_stream(fa);
                 let file_name = if let Some((_limit, next_idx)) = limit_idx {
-                    &format!("adlt_receive_{:03}.dlt", next_idx)
+                    &format!("adlt_receive_{next_idx:03}.dlt")
                 } else {
                     "adlt_receive.dlt"
                 };
@@ -302,7 +302,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     let (tx_for_recv_thread, rx_from_recv_thread) = std::sync::mpsc::channel();
 
     // forward_tcp thread?
-    let (forward_tcp_hread, rx_from_forward_thread) = if let Some(port) = forward_tcp_port {
+    let (forward_tcp_thread, rx_from_forward_thread) = if let Some(port) = forward_tcp_port {
         let log = log.clone();
         info!(log, "Forwarding messages via TCP on port {}", port);
         let stop_forward = stop_receive.clone();
@@ -458,14 +458,11 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         Err(s) => error!(log, "recv_thread join got Error {:?}", s),
         Ok(s) => debug!(log, "recv_thread join was Ok {:?}", s),
     };
-    match forward_tcp_hread {
-        Some(thread) => {
-            match thread.join() {
-                Err(s) => error!(log, "forward_tcp_thread join got Error {:?}", s),
-                Ok(s) => debug!(log, "forward_tcp_thread join was Ok {:?}", s),
-            };
-        }
-        None => {}
+    if let Some(thread) = forward_tcp_thread {
+        match thread.join() {
+            Err(s) => error!(log, "forward_tcp_thread join got Error {:?}", s),
+            Ok(s) => debug!(log, "forward_tcp_thread join was Ok {:?}", s),
+        };
     }
 
     Ok(())
@@ -491,7 +488,7 @@ fn set_max_send_buffer_size(stream: &socket2::Socket, size: usize) -> std::io::R
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::InvalidInput,
-        format!("Failed to set send buffer size {}/{} bytes", try_size, size),
+        format!("Failed to set send buffer size {try_size}/{size} bytes"),
     ))
 }
 
@@ -525,14 +522,18 @@ fn forward_serve_via_tcp(
     let address: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let address: SockAddr = address.into();
 
-    listener.set_reuse_address(true).expect(&format!(
-        "Failed to set reuse address on TCP socket for port {:?}",
-        address.as_socket_ipv4()
-    ));
-    listener.bind(&address).expect(&format!(
-        "Failed to bind TCP socket to port {:?}",
-        address.as_socket_ipv4()
-    ));
+    listener.set_reuse_address(true).unwrap_or_else(|_| {
+        panic!(
+            "Failed to set reuse address on TCP socket for port {:?}",
+            address.as_socket_ipv4()
+        )
+    });
+    listener.bind(&address).unwrap_or_else(|_| {
+        panic!(
+            "Failed to bind TCP socket to port {:?}",
+            address.as_socket_ipv4()
+        )
+    });
     info!(log, "TCP listener bound to port {}", port);
     listener.listen(10).expect("Failed to listen on TCP socket");
     // set the listener to non-blocking mode
@@ -651,70 +652,66 @@ fn forward_serve_via_tcp(
                                                         if msg.is_ctrl_request(){
                                                             let mut args = msg.into_iter();
                                                             let message_id_arg = args.next();
-                                                            match message_id_arg {
-                                                                Some(a) => {
-                                                                    let message_id = if a.is_big_endian {
-                                                                        // todo this fails if first arg is not a uint32! add check
-                                                                        u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
-                                                                    } else {
-                                                                        u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
-                                                                    };
-                                                                    let payload_arg = args.next();
-                                                                    let (payload, _is_big_endian) = match payload_arg {
-                                                                        Some(a) => (a.payload_raw, a.is_big_endian),
-                                                                        None => (&[] as &[u8], false),
-                                                                    };
-                                                                    info!(log, "Received control request message id {} ({}): {:?}", message_id, SERVICE_ID_NAMES.get(&message_id).unwrap_or(&"Unknown"),payload);
-                                                                    match message_id{
-                                                                        SERVICE_ID_SET_LOG_LEVEL => {
-                                                                            // set the log level for apid/ctid
-                                                                            if payload.len() >= 9 {
-                                                                                let apid = DltChar4::from_buf(&payload[0..4]);
-                                                                                let ctid = DltChar4::from_buf(&payload[4..8]);
-                                                                                let log_level = payload[8];
-                                                                                info!(log, "Set log level for apid {} and ctid {} to {}", apid, ctid, log_level);
-                                                                                // update the viewer's apid/ctid log level map
-                                                                                let mut viewers_lock = viewers.lock().unwrap();
-                                                                                if let Some(viewer) = viewers_lock.iter_mut().find(|v| v.addr == addr) {
-                                                                                    viewer.apid_ctid_log_level_map.insert(
-                                                                                        ((apid.as_u32le() as u64) << 32) | (ctid.as_u32le() as u64),
-                                                                                        log_level,
-                                                                                    );
-                                                                                } else {
-                                                                                    warn!(log, "Viewer with addr {:?} not found in list", addr.as_socket_ipv4());
-                                                                                }
-                                                                            }else {
-                                                                                warn!(log, "Invalid payload length for set log level message: {} bytes, expected at least 9 bytes", payload.len());
-                                                                            }
-                                                                        }
-                                                                        SERVICE_ID_GET_LOG_INFO => {}
-                                                                        SERVICE_ID_SET_DEFAULT_LOG_LEVEL => {
-                                                                            let default_log_level = if payload.len()>=1{
-                                                                                payload[0]
-                                                                            }else{
-                                                                                0 // default to 0 (off)
-                                                                            };
-                                                                            info!(log, "Set default log level to {} for addr {:?}", default_log_level, addr.as_socket_ipv4());
-                                                                            // 0 = off, 1 = fatal, 2 = error, 3=warning, 4 = info, 5=debug, 6 = verbose
+                                                            if let Some(a) = message_id_arg {
+                                                                let message_id = if a.is_big_endian {
+                                                                    // todo this fails if first arg is not a uint32! add check
+                                                                    u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
+                                                                } else {
+                                                                    u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
+                                                                };
+                                                                let payload_arg = args.next();
+                                                                let (payload, _is_big_endian) = match payload_arg {
+                                                                    Some(a) => (a.payload_raw, a.is_big_endian),
+                                                                    None => (&[] as &[u8], false),
+                                                                };
+                                                                info!(log, "Received control request message id {} ({}): {:?}", message_id, SERVICE_ID_NAMES.get(&message_id).unwrap_or(&"Unknown"),payload);
+                                                                match message_id{
+                                                                    SERVICE_ID_SET_LOG_LEVEL => {
+                                                                        // set the log level for apid/ctid
+                                                                        if payload.len() >= 9 {
+                                                                            let apid = DltChar4::from_buf(&payload[0..4]);
+                                                                            let ctid = DltChar4::from_buf(&payload[4..8]);
+                                                                            let log_level = payload[8];
+                                                                            info!(log, "Set log level for apid {} and ctid {} to {}", apid, ctid, log_level);
+                                                                            // update the viewer's apid/ctid log level map
                                                                             let mut viewers_lock = viewers.lock().unwrap();
-                                                                            // update viewer with that addr:
                                                                             if let Some(viewer) = viewers_lock.iter_mut().find(|v| v.addr == addr) {
-                                                                                viewer.default_log_level = Some(default_log_level);
+                                                                                viewer.apid_ctid_log_level_map.insert(
+                                                                                    ((apid.as_u32le() as u64) << 32) | (ctid.as_u32le() as u64),
+                                                                                    log_level,
+                                                                                );
                                                                             } else {
                                                                                 warn!(log, "Viewer with addr {:?} not found in list", addr.as_socket_ipv4());
                                                                             }
-                                                                        }
-                                                                        SERVICE_ID_SET_DEFAULT_TRACE_STATUS|SERVICE_ID_SET_TIMING_PACKETS|SERVICE_ID_SET_VERBOSE_MODE=>{}
-                                                                        _ => {
-                                                                            warn!(log, "Unknown control request message id: {}", message_id);
+                                                                        }else {
+                                                                            warn!(log, "Invalid payload length for set log level message: {} bytes, expected at least 9 bytes", payload.len());
                                                                         }
                                                                     }
-                                                                    // todo process control request messages
-                                                                    // e.g. set log level, set default log level, etc.
+                                                                    SERVICE_ID_GET_LOG_INFO => {}
+                                                                    SERVICE_ID_SET_DEFAULT_LOG_LEVEL => {
+                                                                        let default_log_level = if !payload.is_empty(){
+                                                                            payload[0]
+                                                                        }else{
+                                                                            0 // default to 0 (off)
+                                                                        };
+                                                                        info!(log, "Set default log level to {} for addr {:?}", default_log_level, addr.as_socket_ipv4());
+                                                                        // 0 = off, 1 = fatal, 2 = error, 3=warning, 4 = info, 5=debug, 6 = verbose
+                                                                        let mut viewers_lock = viewers.lock().unwrap();
+                                                                        // update viewer with that addr:
+                                                                        if let Some(viewer) = viewers_lock.iter_mut().find(|v| v.addr == addr) {
+                                                                            viewer.default_log_level = Some(default_log_level);
+                                                                        } else {
+                                                                            warn!(log, "Viewer with addr {:?} not found in list", addr.as_socket_ipv4());
+                                                                        }
+                                                                    }
+                                                                    SERVICE_ID_SET_DEFAULT_TRACE_STATUS|SERVICE_ID_SET_TIMING_PACKETS|SERVICE_ID_SET_VERBOSE_MODE=>{}
+                                                                    _ => {
+                                                                        warn!(log, "Unknown control request message id: {}", message_id);
+                                                                    }
+                                                                }
+                                                                // todo process control request messages
+                                                                // e.g. set log level, set default log level, etc.
 
-                                                                }
-                                                                None => {
-                                                                }
                                                             };
                                                         }
 
@@ -738,7 +735,7 @@ fn forward_serve_via_tcp(
                                             }
 
                                             viewer
-                                                .send(&recvd_data)
+                                                .send(recvd_data)
                                                 .expect("Failed to send ACK to viewer");
                                         } else {
                                             // no data available, continue
@@ -834,7 +831,7 @@ fn forward_serve_via_tcp(
                             true // no ext header, forward all messages
                         };
 
-                    if shall_forward == false {
+                    if !shall_forward {
                         // skip this viewer
                         continue;
                     }

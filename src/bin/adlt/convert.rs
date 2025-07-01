@@ -68,7 +68,7 @@ impl EacFilter {
                     filter.ecu = Some(c4);
                 }
                 Err(e) => {
-                    return Err(format!("failed to parse ecu '{}': {}", ecu, e));
+                    return Err(format!("failed to parse ecu '{ecu}': {e}"));
                 }
             }
         }
@@ -80,7 +80,7 @@ impl EacFilter {
                     filter.apid = Some(c4);
                 }
                 Err(e) => {
-                    return Err(format!("failed to parse apid '{}': {}", apid, e));
+                    return Err(format!("failed to parse apid '{apid}': {e}"));
                 }
             }
         }
@@ -92,7 +92,7 @@ impl EacFilter {
                     filter.ctid = Some(c4);
                 }
                 Err(e) => {
-                    return Err(format!("failed to parse ctid '{}': {}", ctid, e));
+                    return Err(format!("failed to parse ctid '{ctid}': {e}"));
                 }
             }
         }
@@ -1009,7 +1009,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                                         meta["lc"],
                                         label,
                                         if let Some(path) = meta["autoSavedTo"].as_str() {
-                                            format!(", saved as: '{}'", path)
+                                            format!(", saved as: '{path}'")
                                         } else {
                                             EMPTY_STR
                                         }

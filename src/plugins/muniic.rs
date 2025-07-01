@@ -148,14 +148,12 @@ impl Plugin for MuniicPlugin {
                                             }
                                         } else {
                                             println!(
-                                                "MuniicPlugin: got msg with no message_id msg={:?}",
-                                                msg
+                                                "MuniicPlugin: got msg with no message_id msg={msg:?}"
                                             )
                                         }
                                     } else {
                                         println!(
-                                            "MuniicPlugin: got msg with no interface_id msg={:?}",
-                                            msg
+                                            "MuniicPlugin: got msg with no interface_id msg={msg:?}"
                                         )
                                     }
                                 }
@@ -228,7 +226,7 @@ impl MuniicPlugin {
         let mut cfg: MuniicJsonConfig = Default::default();
 
         if files.is_empty() {
-            warnings.push(format!("No json files found in directory: {}", json_dir));
+            warnings.push(format!("No json files found in directory: {json_dir}"));
         } else {
             for file in &files {
                 let cfg_file: Result<MuniicJsonConfig, _> =
@@ -237,7 +235,7 @@ impl MuniicPlugin {
                     cfg.map.extend(cfg_file.map);
                     cfg.interfaces.extend(cfg_file.interfaces);
                 } else {
-                    warnings.push(format!("Error parsing json file: {:?}", file));
+                    warnings.push(format!("Error parsing json file: {file:?}"));
                 }
             }
         }
@@ -390,8 +388,7 @@ impl MuniicPlugin {
             } else {
                 // todo warning?
                 println!(
-                    "MuniicPlugin: got config msg without regex match, msg={:?}",
-                    msg
+                    "MuniicPlugin: got config msg without regex match, msg={msg:?}"
                 );
             }
         } else {
@@ -448,15 +445,14 @@ fn tree_item_for_interface(
         } else {
             TreeItem {
                 label: format!(
-                    "<no interface with hash {}> #{}",
-                    interface_hash, interface_id
+                    "<no interface with hash {interface_hash}> #{interface_id}"
                 ),
                 ..Default::default()
             }
         }
     } else {
         TreeItem {
-            label: format!("<no versions> #{}", interface_id),
+            label: format!("<no versions> #{interface_id}"),
             ..Default::default()
         }
     }
@@ -471,7 +467,7 @@ fn decode_method(method: &MuniicMethod, arg: &DltArg) -> Option<String> {
     if payload.len() >= 2 {
         processed_payload += 2;
         let val = u16::from_be_bytes([payload[0], payload[1]]);
-        text += format!("Int.Request ID() = {}", val).as_str();
+        text += format!("Int.Request ID() = {val}").as_str();
 
         let mut attr_payload = &payload[processed_payload..];
         // [In]
@@ -534,7 +530,7 @@ fn decode_attribute<'a>(
             if !payload.is_empty() {
                 processed_payload += 1;
                 let val: i8 = i8::from_be_bytes([payload[0]]);
-                text += format!("{}", val).as_str();
+                text += format!("{val}").as_str();
             } else {
                 return None;
             }
@@ -551,7 +547,7 @@ fn decode_attribute<'a>(
             if payload.len() >= 2 {
                 processed_payload += 2;
                 let val = i16::from_be_bytes([payload[0], payload[1]]);
-                text += format!("{}", val).as_str();
+                text += format!("{val}").as_str();
             } else {
                 return None;
             }
@@ -560,7 +556,7 @@ fn decode_attribute<'a>(
             if payload.len() >= 2 {
                 processed_payload += 2;
                 let val = u16::from_be_bytes([payload[0], payload[1]]);
-                text += format!("{}", val).as_str();
+                text += format!("{val}").as_str();
             } else {
                 return None;
             }
@@ -569,7 +565,7 @@ fn decode_attribute<'a>(
             if payload.len() >= 4 {
                 processed_payload += 4;
                 let val = i32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                text += format!("{}", val).as_str();
+                text += format!("{val}").as_str();
             } else {
                 return None;
             }
@@ -578,7 +574,7 @@ fn decode_attribute<'a>(
             if payload.len() >= 4 {
                 processed_payload += 4;
                 let val = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                text += format!("{}", val).as_str();
+                text += format!("{val}").as_str();
             } else {
                 return None;
             }
@@ -590,7 +586,7 @@ fn decode_attribute<'a>(
                     payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
                     payload[6], payload[7],
                 ]);
-                text += format!("{}", val).as_str();
+                text += format!("{val}").as_str();
             } else {
                 return None;
             }
@@ -602,7 +598,7 @@ fn decode_attribute<'a>(
                     payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
                     payload[6], payload[7],
                 ]);
-                text += format!("{}", val).as_str();
+                text += format!("{val}").as_str();
             } else {
                 return None;
             }
@@ -611,7 +607,7 @@ fn decode_attribute<'a>(
             if payload.len() >= 4 {
                 processed_payload += 4;
                 let val = f32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                text += format!("{:.6}", val).as_str();
+                text += format!("{val:.6}").as_str();
             } else {
                 return None;
             }
@@ -692,7 +688,7 @@ fn decode_attribute<'a>(
                                     //text += format!("({})", val).as_str();
                                 }
                             } else {
-                                text += format!("{}", val).as_str();
+                                text += format!("{val}").as_str();
                             }
                         } else {
                             return None;
@@ -709,7 +705,7 @@ fn decode_attribute<'a>(
                                     // text += format!("({})", val).as_str();
                                 }
                             } else {
-                                text += format!("{}", val).as_str();
+                                text += format!("{val}").as_str();
                             }
                         } else {
                             return None;
@@ -728,14 +724,14 @@ fn decode_attribute<'a>(
                                     //text += format!("({})", val).as_str();
                                 }
                             } else {
-                                text += format!("{}", val).as_str();
+                                text += format!("{val}").as_str();
                             }
                         } else {
                             return None;
                         }
                     }
                     _ => {
-                        text += format!("<enum unknown base type {}>", base_type).as_str();
+                        text += format!("<enum unknown base type {base_type}>").as_str();
                     }
                 }
             } else {

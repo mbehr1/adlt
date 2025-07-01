@@ -99,7 +99,7 @@ pub fn transmit(
 
     // create send socket:
     let socket = create_send_socket(send_mode, send_addr, interface)
-        .map_err(|e| format!("Failed to create send socket: {}", e))?;
+        .map_err(|e| format!("Failed to create send socket: {e}"))?;
 
     let send_to_addr = SockAddr::from(send_addr);
 
@@ -151,7 +151,7 @@ pub fn transmit(
             Some(nr_msgs_sent as u32), // use message count as timestamp
             &payload,
         )
-        .map_err(|e| format!("Failed to write DLT message: {}", e))?;
+        .map_err(|e| format!("Failed to write DLT message: {e}"))?;
 
         // let full_msg_len = buf_writer.position() as usize;
         let buf = buf_writer.into_inner();
@@ -175,8 +175,7 @@ pub fn transmit(
     }
 
     println!(
-        "Sent {} test DLT messages to {}:{}",
-        nr_msgs_sent, hostname, port
+        "Sent {nr_msgs_sent} test DLT messages to {hostname}:{port}"
     );
 
     Ok(())
