@@ -68,7 +68,7 @@ impl EacFilter {
                     filter.ecu = Some(c4);
                 }
                 Err(e) => {
-                    return Err(format!("failed to parse ecu '{}': {}", ecu, e));
+                    return Err(format!("failed to parse ecu '{ecu}': {e}"));
                 }
             }
         }
@@ -80,7 +80,7 @@ impl EacFilter {
                     filter.apid = Some(c4);
                 }
                 Err(e) => {
-                    return Err(format!("failed to parse apid '{}': {}", apid, e));
+                    return Err(format!("failed to parse apid '{apid}': {e}"));
                 }
             }
         }
@@ -92,7 +92,7 @@ impl EacFilter {
                     filter.ctid = Some(c4);
                 }
                 Err(e) => {
-                    return Err(format!("failed to parse ctid '{}': {}", ctid, e));
+                    return Err(format!("failed to parse ctid '{ctid}': {e}"));
                 }
             }
         }
@@ -682,14 +682,9 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         move || -> Result<(adlt::dlt::DltMessageIndexType, W), Box<dyn std::error::Error + Send + Sync>> {
             let log = t4_log;
             let mut output_file = if let Some(s) = output_file {
-                match std::fs::File::create(s) {
-                    Ok(f) => Ok(BufWriter::new(f)),
-                    Err(e) => Err(e),
-                }
+                std::fs::File::create(s).map(|f|Some(BufWriter::new(f)))?
             } else {
-                Err(std::io::Error::other(
-                    "no output_file param",
-                ))
+                None
             };
 
             let mut output : adlt::dlt::DltMessageIndexType= 0;
@@ -788,14 +783,14 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                         writer_screen_flush_pending = true;
                     }
                     // if output to file:
-                    if let Ok(ref mut file) = output_file {
+                    if let Some(ref mut file) = output_file {
                         msg.to_write(file)?;
                         did_output = true;
                     }
                     if did_output{ output += 1;}
                 }
             }
-            if let Ok(mut writer) = output_file {
+            if let Some(mut writer) = output_file {
                 writer.flush()?;
                 drop(writer); // close, happens anyhow autom...
             }
@@ -1014,7 +1009,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
                                         meta["lc"],
                                         label,
                                         if let Some(path) = meta["autoSavedTo"].as_str() {
-                                            format!(", saved as: '{}'", path)
+                                            format!(", saved as: '{path}'")
                                         } else {
                                             EMPTY_STR
                                         }

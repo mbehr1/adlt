@@ -48,8 +48,7 @@ pub fn filter_as_streams<F: Fn(DltMessage) -> SendMsgFnReturnType>(
             match output(msg) {
                 Err(msg2) => {
                     return Err(Error::new(ErrorKind::OtherFatal(format!(
-                        "filter_as_stream: output.send failed sending msg {}",
-                        msg2
+                        "filter_as_stream: output.send failed sending msg {msg2}"
                     ))))
                 }
                 _ => {

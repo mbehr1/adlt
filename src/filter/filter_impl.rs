@@ -71,8 +71,7 @@ impl Char4OrRegex {
                 .map(Char4OrRegex::Regex)
                 .map_err(|e| {
                     Error::new(ErrorKind::InvalidData(format!(
-                        "Char4OrRegex failed regex with {:?}",
-                        e
+                        "Char4OrRegex failed regex with {e:?}"
                     )))
                 })
         } else {
@@ -80,8 +79,7 @@ impl Char4OrRegex {
                 .map(Char4OrRegex::DltChar4)
                 .map_err(|e| {
                     Error::new(ErrorKind::InvalidData(format!(
-                        "Char4OrRegex failed non regex with {:?}",
-                        e
+                        "Char4OrRegex failed non regex with {e:?}"
                     )))
                 })
         }
@@ -233,8 +231,7 @@ impl Filter {
                 .unwrap_or_else(|| contains_regex_chars(s));
             ecu = Some(Char4OrRegex::from_str(s, ecu_is_regex).map_err(|e| {
                 Error::new(ErrorKind::InvalidData(format!(
-                    "error parsing ecu '{}' ecuIsRegex={}:{:?}",
-                    s, ecu_is_regex, e
+                    "error parsing ecu '{s}' ecuIsRegex={ecu_is_regex}:{e:?}"
                 )))
             })?)
         }
@@ -246,8 +243,7 @@ impl Filter {
                 .unwrap_or_else(|| contains_regex_chars(s));
             apid = Some(Char4OrRegex::from_str(s, apid_is_regex).map_err(|e| {
                 Error::new(ErrorKind::InvalidData(format!(
-                    "error parsing apid '{}' apidIsRegex={}:{:?}",
-                    s, apid_is_regex, e
+                    "error parsing apid '{s}' apidIsRegex={apid_is_regex}:{e:?}"
                 )))
             })?)
         }
@@ -259,8 +255,7 @@ impl Filter {
                 .unwrap_or_else(|| contains_regex_chars(s));
             ctid = Some(Char4OrRegex::from_str(s, ctid_is_regex).map_err(|e| {
                 Error::new(ErrorKind::InvalidData(format!(
-                    "error parsing ctid '{}' ctidIsRegex={}:{:?}",
-                    s, ctid_is_regex, e
+                    "error parsing ctid '{s}' ctidIsRegex={ctid_is_regex}:{e:?}"
                 )))
             })?)
         }
@@ -281,15 +276,13 @@ impl Filter {
                 let s = "(?i)".to_owned() + s;
                 payload_regex = Some(Regex::new(&s).map_err(|e| {
                     Error::new(ErrorKind::InvalidData(format!(
-                        "regex error parsing '{}':{:?}",
-                        s, e
+                        "regex error parsing '{s}':{e:?}"
                     )))
                 })?);
             } else {
                 payload_regex = Some(Regex::new(s).map_err(|e| {
                     Error::new(ErrorKind::InvalidData(format!(
-                        "regex error parsing '{}':{:?}",
-                        s, e
+                        "regex error parsing '{s}':{e:?}"
                     )))
                 })?);
             }
@@ -303,8 +296,7 @@ impl Filter {
                         .build()
                         .map_err(|e| {
                             Error::new(ErrorKind::InvalidData(format!(
-                                "regex error parsing escaped '{}':{:?}",
-                                s, e
+                                "regex error parsing escaped '{s}':{e:?}"
                             )))
                         })?,
                 );
@@ -488,8 +480,7 @@ impl Filter {
                             .map_err(|e| {
                                 quick_xml::Error::IllFormed(
                                     quick_xml::errors::IllFormedError::MissingEndTag(format!(
-                                        "regex error parsing escaped '{}':{:?}",
-                                        s, e
+                                        "regex error parsing escaped '{s}':{e:?}"
                                     )),
                                 )
                             })?,

@@ -342,15 +342,13 @@ impl Plugin for NonVerbosePlugin {
                                 } else {
                                     // todo write error?
                                     msg.payload_text = Some(format!(
-                                        "NVP: found frame {:?} but processing err! payload: {:?}",
-                                        frame, payload
+                                        "NVP: found frame {frame:?} but processing err! payload: {payload:?}"
                                     ));
                                 }
                             } else {
                                 // todo warn?
                                 msg.payload_text = Some(format!(
-                                    "NVP: found frame {:?} but payload too small! payload: {:?}",
-                                    frame, payload
+                                    "NVP: found frame {frame:?} but payload too small! payload: {payload:?}"
                                 ));
                             }
                         } else {
@@ -405,8 +403,8 @@ impl NonVerbosePlugin {
         for file in files {
             let mut fd = FibexData::new();
             if let Err(e) = fd.load_fibex_file(&file) {
-                let warning = format!("load_fibex_file(file={:?}) failed with:{}", file, e);
-                println!("{}", warning);
+                let warning = format!("load_fibex_file(file={file:?}) failed with:{e}");
+                println!("{warning}");
                 warnings.push(warning);
             } else {
                 // is it a non-verbose describing fibex?
@@ -510,11 +508,10 @@ impl NonVerbosePlugin {
             }
         }
         if files_len == 0 {
-            warnings.push(format!("No fibex files found in directory: {}", fibex_dir));
+            warnings.push(format!("No fibex files found in directory: {fibex_dir}"));
         } else if fibex_map_by_ecu.is_empty() {
             warnings.push(format!(
-                "No fibex data parsed from fibex files found in directory: {}",
-                fibex_dir
+                "No fibex data parsed from fibex files found in directory: {fibex_dir}"
             ));
         }
         // update state:

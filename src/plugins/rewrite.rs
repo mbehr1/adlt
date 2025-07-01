@@ -79,8 +79,7 @@ impl RewriteConfig {
                 if let Some(Some(s)) = config.get("payloadRegex").map(|s| s.as_str()) {
                     Regex::new(s).map_err(|e| {
                         Box::new(RewritePluginError::from(format!(
-                            "regex error parsing '{}':{:?}",
-                            s, e
+                            "regex error parsing '{s}':{e:?}"
                         )))
                     })?
                 } else {

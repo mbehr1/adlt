@@ -164,11 +164,8 @@ impl ExportPlugin {
             Ok(f) => f,
             Err(e) => {
                 return Err(PluginError::new(
-                    format!(
-                        "ExportPlugin: could not create file '{}': {}",
-                        export_file_name, e
-                    )
-                    .as_str(),
+                    format!("ExportPlugin: could not create file '{export_file_name}': {e}")
+                        .as_str(),
                 )
                 .into())
             }
@@ -407,8 +404,7 @@ impl Plugin for ExportPlugin {
                             )
                             .unwrap();
                             println!(
-                                "ExportPlugin: found lifecycle to keep: {:?}, added filter: {:?}",
-                                lc, filter
+                                "ExportPlugin: found lifecycle to keep: {lc:?}, added filter: {filter:?}"
                             );
                             // we assume the last neg filter is the lifecycleToKeep filter:
                             self.filters[FilterKind::Negative].pop();
@@ -451,7 +447,7 @@ impl Plugin for ExportPlugin {
                             self.nr_exported_msgs += 1;
                         }
                         Err(e) => {
-                            println!("ExportPlugin: could not write message to file: {}", e);
+                            println!("ExportPlugin: could not write message to file: {e}");
                             // todo ... write to pluginstate
                         }
                     }

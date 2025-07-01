@@ -95,12 +95,12 @@ pub fn remote(
     let port = sub_m.get_one::<u16>("port").unwrap();
     info!(log, "remote starting"; "port" => port);
 
-    let server_addr = format!("{}:{}", ip_addr, port); // todo ipv6???
+    let server_addr = format!("{ip_addr}:{port}"); // todo ipv6???
     let server = TcpListener::bind(server_addr)?;
     // server.set_nonblocking(true).expect("Cannot set non-blocking");
     info!(log, "remote server listening on {}:{}", ip_addr, port; "port" => port);
     // output on stdout as well to help identify a proper startup even with verbose options:
-    println!("remote server listening on {}:{}", ip_addr, port); // todo use server.local_addr() and exist in case of failure?
+    println!("remote server listening on {ip_addr}:{port}"); // todo use server.local_addr() and exist in case of failure?
 
     let mut spawned_servers = vec![];
     let no_more_incoming_cons = just_one_connection;
@@ -674,16 +674,14 @@ fn process_incoming_text_message<T: Read + Write>(
 
                         websocket
                             .write_message(Message::Text(format!(
-                                "ok: open {{\"plugins_active\":{}}}",
-                                plugins_active_str
+                                "ok: open {{\"plugins_active\":{plugins_active_str}}}"
                             )))
                             .unwrap(); // todo
                     }
                     Err(e) => {
                         websocket
                             .write_message(Message::Text(format!(
-                                "err: open '{}' failed with '{:?}'!",
-                                params, e
+                                "err: open '{params}' failed with '{e:?}'!"
                             )))
                             .unwrap(); // todo
                     }
@@ -702,8 +700,7 @@ fn process_incoming_text_message<T: Read + Write>(
             } else {
                 websocket
                     .write_message(Message::Text(format!(
-                        "err: {} failed as no file open. open first!",
-                        command
+                        "err: {command} failed as no file open. open first!"
                     )))
                     .unwrap(); // todo
             }
@@ -748,7 +745,7 @@ fn process_incoming_text_message<T: Read + Write>(
                 }
 
                 websocket
-                    .write_message(Message::Text(format!("ok: '{}'!", command)))
+                    .write_message(Message::Text(format!("ok: '{command}'!")))
                     .unwrap(); // todo
                                // todo send info with 0 msgs
             } else {
@@ -774,8 +771,7 @@ fn process_incoming_text_message<T: Read + Write>(
                                     {
                                         websocket
                                             .write_message(Message::Text(format!(
-                                                "err: {} failed as open option 'collect:'one_pass_streams'' was used. Only one_pass streams supported.",
-                                                command
+                                                "err: {command} failed as open option 'collect:'one_pass_streams'' was used. Only one_pass streams supported."
                                             )))
                                             .unwrap(); // todo
                                     } else {
@@ -795,8 +791,7 @@ fn process_incoming_text_message<T: Read + Write>(
                                 Err(e) => {
                                     websocket
                                         .write_message(Message::Text(format!(
-                                            "err: {} failed with err '{}' from '{}'!",
-                                            command, e, params
+                                            "err: {command} failed with err '{e}' from '{params}'!"
                                         )))
                                         .unwrap(); // todo
                                 }
@@ -805,8 +800,7 @@ fn process_incoming_text_message<T: Read + Write>(
                         CollectMode::None => {
                             websocket
                         .write_message(Message::Text(format!(
-                            "err: {} failed as open option 'collect:false' was used. Stream not supported then.",
-                            command
+                            "err: {command} failed as open option 'collect:false' was used. Stream not supported then."
                         )))
                         .unwrap(); // todo
                         }
@@ -815,8 +809,7 @@ fn process_incoming_text_message<T: Read + Write>(
                 None => {
                     websocket
                         .write_message(Message::Text(format!(
-                            "err: {} failed as no file open. open first!",
-                            command
+                            "err: {command} failed as no file open. open first!"
                         )))
                         .unwrap(); // todo
                 }
@@ -845,8 +838,7 @@ fn process_incoming_text_message<T: Read + Write>(
                                         ) {
                                             websocket
                                                 .write_message(Message::Text(format!(
-                                                    "err: {} failed with err '{}' from '{}'!",
-                                                    command, e, params
+                                                    "err: {command} failed with err '{e}' from '{params}'!"
                                                 )))
                                                 .unwrap(); // todo
                                         }
@@ -872,8 +864,7 @@ fn process_incoming_text_message<T: Read + Write>(
                                                             websocket
                                                                 .write_message(Message::Text(
                                                                     format!(
-                                                        "ok: {} {}={{\"filtered_msg_index\":{}}}",
-                                                        command, id, filtered_msg_index,
+                                                        "ok: {command} {id}={{\"filtered_msg_index\":{filtered_msg_index}}}",
                                                     ),
                                                                 ))
                                                                 .unwrap(); // todo
@@ -904,8 +895,7 @@ fn process_incoming_text_message<T: Read + Write>(
                                                         );
                                                     websocket
                                                         .write_message(Message::Text(format!(
-                                                        "ok: {} {}={{\"filtered_msg_index\":{}}}",
-                                                        command, id, filtered_msg_index,
+                                                        "ok: {command} {id}={{\"filtered_msg_index\":{filtered_msg_index}}}",
                                                     )))
                                                         .unwrap();
                                                 }
@@ -961,8 +951,7 @@ fn process_incoming_text_message<T: Read + Write>(
                                                 _ => {
                                                     websocket
                                             .write_message(Message::Text(format!(
-                                                "err: {} failed. stream_id {}: failure parsing={:?}",
-                                                command, id, window_text
+                                                "err: {command} failed. stream_id {id}: failure parsing={window_text:?}"
                                             )))
                                             .unwrap(); // todo
                                                 }
@@ -970,8 +959,7 @@ fn process_incoming_text_message<T: Read + Write>(
                                         } else {
                                             websocket
                                             .write_message(Message::Text(format!(
-                                                "err: {} failed. stream_id {}: too few params_splitted={:?}",
-                                                command, id, params_splitted
+                                                "err: {command} failed. stream_id {id}: too few params_splitted={params_splitted:?}"
                                             )))
                                             .unwrap(); // todo
                                         }
@@ -980,16 +968,14 @@ fn process_incoming_text_message<T: Read + Write>(
                                         fc.streams.remove(pos);
                                         websocket
                                             .write_message(Message::Text(format!(
-                                                "ok: {} stream stream_id {}",
-                                                command, id
+                                                "ok: {command} stream stream_id {id}"
                                             )))
                                             .unwrap(); // todo
                                     }
                                     _ => {
                                         websocket
                                             .write_message(Message::Text(format!(
-                                                "err: {} failed. stream_id {} not found!",
-                                                command, id
+                                                "err: {command} failed. stream_id {id} not found!"
                                             )))
                                             .unwrap(); // todo
                                     }
@@ -997,8 +983,7 @@ fn process_incoming_text_message<T: Read + Write>(
                             } else {
                                 websocket
                                     .write_message(Message::Text(format!(
-                                        "err: {} stream failed. stream_id {} not found!",
-                                        command, id
+                                        "err: {command} stream failed. stream_id {id} not found!"
                                     )))
                                     .unwrap(); // todo
                             }
@@ -1006,8 +991,7 @@ fn process_incoming_text_message<T: Read + Write>(
                         None => {
                             websocket
                                 .write_message(Message::Text(format!(
-                                    "err: {} stream failed. No file opened!",
-                                    command
+                                    "err: {command} stream failed. No file opened!"
                                 )))
                                 .unwrap(); // todo
                         }
@@ -1016,8 +1000,7 @@ fn process_incoming_text_message<T: Read + Write>(
                 Err(e) => {
                     websocket
                         .write_message(Message::Text(format!(
-                            "err: {} stream failed. param {} is no valid stream_id! Err={}",
-                            command, params, e
+                            "err: {command} stream failed. param {params} is no valid stream_id! Err={e}"
                         )))
                         .unwrap(); // todo
                 }
@@ -1059,16 +1042,14 @@ fn process_incoming_text_message<T: Read + Write>(
                                                 );
                                                 websocket
                                                     .write_message(Message::Text(format!(
-                                                        "ok: {} {}",
-                                                        command, r
+                                                        "ok: {command} {r}"
                                                     )))
                                                     .unwrap(); // todo
                                             } else {
                                                 websocket
                                                                 .write_message(Message::Text(
                                                                     format!(
-                                                                        "err: {} plugin '{}' does not support commands",
-                                                                        command, plugin_name
+                                                                        "err: {command} plugin '{plugin_name}' does not support commands"
                                                                     ),
                                                                 ))
                                                                 .unwrap(); // todo
@@ -1081,24 +1062,21 @@ fn process_incoming_text_message<T: Read + Write>(
                                 if !found_plugin {
                                     websocket
                                         .write_message(Message::Text(format!(
-                                            "err: {} plugin '{}' not found!",
-                                            command, plugin_name
+                                            "err: {command} plugin '{plugin_name}' not found!"
                                         )))
                                         .unwrap(); // todo
                                 }
                             } else {
                                 websocket
                                     .write_message(Message::Text(format!(
-                                        "err: {} params misses cmd or name!",
-                                        command,
+                                        "err: {command} params misses cmd or name!",
                                     )))
                                     .unwrap(); // todo
                             }
                         } else {
                             websocket
                                 .write_message(Message::Text(format!(
-                                    "err: {} params not an object!",
-                                    command,
+                                    "err: {command} params not an object!",
                                 )))
                                 .unwrap(); // todo
                         }
@@ -1115,8 +1093,7 @@ fn process_incoming_text_message<T: Read + Write>(
                 None => {
                     websocket
                         .write_message(Message::Text(format!(
-                            "err: {} failed as no file open. open first!",
-                            command
+                            "err: {command} failed as no file open. open first!"
                         )))
                         .unwrap(); // todo
                 }
@@ -1129,14 +1106,13 @@ fn process_incoming_text_message<T: Read + Write>(
                     match process_fs_cmd(log, params) {
                         Ok(res) => {
                             websocket
-                                .write_message(Message::Text(format!("ok: {}:{}", command, res)))
+                                .write_message(Message::Text(format!("ok: {command}:{res}")))
                                 .unwrap(); // todo
                         }
                         Err(err_reason) => {
                             websocket
                                 .write_message(Message::Text(format!(
-                                    "err: {} {}",
-                                    command, err_reason
+                                    "err: {command} {err_reason}"
                                 )))
                                 .unwrap(); // todo
                         }
@@ -1144,8 +1120,7 @@ fn process_incoming_text_message<T: Read + Write>(
                 } else {
                     websocket
                         .write_message(Message::Text(format!(
-                            "err: {} params not an object!",
-                            command,
+                            "err: {command} params not an object!",
                         )))
                         .unwrap(); // todo
                 }
@@ -1161,7 +1136,7 @@ fn process_incoming_text_message<T: Read + Write>(
         }
         _ => {
             websocket
-                .write_message(Message::Text(format!("unknown command '{}'!", t)))
+                .write_message(Message::Text(format!("unknown command '{t}'!")))
                 .unwrap(); // todo
         }
     }
@@ -1301,7 +1276,7 @@ fn process_fs_cmd(
             }
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("cmd '{}' unknown", cmd),
+                format!("cmd '{cmd}' unknown"),
             )
             .into()),
         }
@@ -1328,8 +1303,7 @@ fn fs_cmd_archive(
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "path '{}' not in expected format 'path/to.archive!/path/within/archive'",
-                full_path
+                "path '{full_path}' not in expected format 'path/to.archive!/path/within/archive'"
             ),
         )
         .into());
@@ -1340,7 +1314,7 @@ fn fs_cmd_archive(
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("path '{}' not in expected format", full_path),
+                format!("path '{full_path}' not in expected format"),
             )
             .into())
         }
@@ -1412,7 +1386,7 @@ fn fs_cmd_archive(
                 }
                 _ => Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("cmd '{}' not supported", cmd),
+                    format!("cmd '{cmd}' not supported"),
                 )
                 .into()),
             };
@@ -1537,7 +1511,7 @@ fn binary_search_by_msg_index(
             };
             Ok(filtered_msg_index)
         } else {
-            Err(format!("sort_by_time, index={} unknown", wanted_msg_idx))
+            Err(format!("sort_by_time, index={wanted_msg_idx} unknown"))
         }
     } else {
         // sort by index
@@ -1555,8 +1529,7 @@ fn binary_search_by_msg_index(
             Ok(filtered_msg_index)
         } else {
             Err(format!(
-                "sort_by_index, index={} not in all_msgs",
-                wanted_msg_idx
+                "sort_by_index, index={wanted_msg_idx} not in all_msgs"
             ))
         }
     }

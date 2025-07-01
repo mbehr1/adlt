@@ -156,14 +156,14 @@ pub fn get_ecuid_for_namespace(namespace: u32, name: &Option<&str>) -> DltChar4 
     let mut namespace_map = CAN_GLOBAL_ECU_MAP.write().unwrap();
     let map = namespace_map.entry(namespace).or_default();
     let next_id = map.len() + 1;
-    map.entry(name.map_or_else(|| format!("AUTO_CAN_ID_{}", next_id), |f| f.to_string()))
+    map.entry(name.map_or_else(|| format!("AUTO_CAN_ID_{next_id}"), |f| f.to_string()))
         .or_insert_with(|| {
             if next_id < 10 {
-                DltChar4::from_str(format!("CAN{}", next_id).as_str()).unwrap()
+                DltChar4::from_str(format!("CAN{next_id}").as_str()).unwrap()
             } else if next_id < 100 {
-                DltChar4::from_str(format!("CA{}", next_id).as_str()).unwrap()
+                DltChar4::from_str(format!("CA{next_id}").as_str()).unwrap()
             } else {
-                DltChar4::from_str(format!("C{}", next_id).as_str()).unwrap()
+                DltChar4::from_str(format!("C{next_id}").as_str()).unwrap()
             }
         })
         .to_owned()

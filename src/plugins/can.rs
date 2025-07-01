@@ -145,7 +145,7 @@ impl Plugin for CanPlugin {
                 msg.set_payload_text(text);
             } else if msg.payload_text.is_none() {
                 // else keep the existing payload_text (e.g. Error Frame)
-                msg.set_payload_text(format!("can plugin! got decoding err={:?}", decoded_header));
+                msg.set_payload_text(format!("can plugin! got decoding err={decoded_header:?}"));
             }
         } else if msg.is_ctrl_response()
             && !msg.is_verbose()
@@ -419,7 +419,7 @@ fn tree_item_for_signal(fd: &FibexData, signal_instance: &SignalInstance) -> ser
         let short_name = signal.short_name.as_deref().unwrap_or(no_name);
         let bit_pos_str = signal_instance
             .bit_position
-            .map(|bp| format!("bit {:2}.. ", bp))
+            .map(|bp| format!("bit {bp:2}.. "))
             .unwrap_or_else(|| "         ".to_string());
         json!({ "label": format!("{}: {}", bit_pos_str, short_name),
             "tooltip": format!("description:\n{}\n\n{}",
@@ -444,7 +444,7 @@ fn md_for_coding(fd: &FibexData, coding_ref: &str) -> String {
             md_for_compu_methods(&cod.compu_methods),
         )
     } else {
-        format!("<unknown coding_ref '{}'>", coding_ref)
+        format!("<unknown coding_ref '{coding_ref}'>")
     }
 }
 
@@ -457,7 +457,7 @@ fn md_for_compu_methods(compu_methods: &Vec<CompuMethod>) -> String {
                 r += &cm
                     .internal_to_phys_scales
                     .iter()
-                    .map(|cs| format!("{}", cs))
+                    .map(|cs| format!("{cs}"))
                     .collect::<Vec<_>>()
                     .join("\n");
             }
@@ -493,7 +493,7 @@ fn md_for_compu_methods(compu_methods: &Vec<CompuMethod>) -> String {
                                 &def_v
                             },
                             if let Some(cc) = &cs.2.compu_const {
-                                format!("{}", cc)
+                                format!("{cc}")
                             } else {
                                 "<none>".to_string()
                             }
@@ -701,11 +701,10 @@ impl CanPlugin {
         channels_by_name.sort_unstable();
 
         if files.is_empty() {
-            warnings.push(format!("No fibex files found in directory: {}", fibex_dir));
+            warnings.push(format!("No fibex files found in directory: {fibex_dir}"));
         } else if channels_by_name.is_empty() {
             warnings.push(format!(
-                "No channels parsed from fibex files found in directory: {}",
-                fibex_dir
+                "No channels parsed from fibex files found in directory: {fibex_dir}"
             ));
         }
 

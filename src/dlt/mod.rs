@@ -584,7 +584,13 @@ static TRACE_TYPE_STRS: [&str; 6] = ["", "variable", "func_in", "func_out", "sta
 static NW_TYPE_STRS: [&str; 7] = ["", "ipc", "can", "flexray", "most", "ethernet", "someip"];
 static CONTROL_TYPE_STRS: [&str; 4] = ["", "request", "response", "time"];
 
+pub const SERVICE_ID_SET_LOG_LEVEL: u32 = 1;
+pub const SERVICE_ID_SET_TRACE_STATUS: u32 = 2;
 pub const SERVICE_ID_GET_LOG_INFO: u32 = 3;
+pub const SERVICE_ID_SET_VERBOSE_MODE: u32 = 9;
+pub const SERVICE_ID_SET_TIMING_PACKETS: u32 = 11;
+pub const SERVICE_ID_SET_DEFAULT_LOG_LEVEL: u32 = 17;
+pub const SERVICE_ID_SET_DEFAULT_TRACE_STATUS: u32 = 18;
 pub const SERVICE_ID_GET_SOFTWARE_VERSION: u32 = 19;
 
 // user services as from dlt-daemon:
@@ -603,27 +609,30 @@ pub const SERVICE_ID_RESERVED_D: u32 = 0xF0D;
 pub const SERVICE_ID_RESERVED_E: u32 = 0xF0E;
 
 type HashMapNoHash<K, V> = HashMap<K, V, BuildNoHashHasher<K>>;
-static SERVICE_ID_NAMES: LazyLock<HashMapNoHash<u32, &'static str>> = LazyLock::new(|| {
+pub static SERVICE_ID_NAMES: LazyLock<HashMapNoHash<u32, &'static str>> = LazyLock::new(|| {
     let mut map = HashMapNoHash::default();
     map.extend([
-        (1, "set_log_level"),
-        (2, "set_trace_status"),
+        (SERVICE_ID_SET_LOG_LEVEL, "set_log_level"),
+        (SERVICE_ID_SET_TRACE_STATUS, "set_trace_status"),
         (SERVICE_ID_GET_LOG_INFO, "get_log_info"),
         (4, "get_default_log_level"),
         (5, "store_config"),
         (6, "reset_to_factory_default"),
         (7, "set_com_interface_status"),
         (8, "set_com_interface_max_bandwidth"),
-        (9, "set_verbose_mode"),
+        (SERVICE_ID_SET_VERBOSE_MODE, "set_verbose_mode"),
         (10, "set_message_filtering"),
-        (11, "set_timing_packets"),
+        (SERVICE_ID_SET_TIMING_PACKETS, "set_timing_packets"),
         (12, "get_local_time"),
         (13, "use_ecu_id"),
         (14, "use_session_id"),
         (15, "use_timestamp"),
         (16, "use_extended_header"),
-        (17, "set_default_log_level"),
-        (18, "set_default_trace_status"),
+        (SERVICE_ID_SET_DEFAULT_LOG_LEVEL, "set_default_log_level"),
+        (
+            SERVICE_ID_SET_DEFAULT_TRACE_STATUS,
+            "set_default_trace_status",
+        ),
         (SERVICE_ID_GET_SOFTWARE_VERSION, "get_software_version"),
         (20, "message_buffer_overflow"),
         // user services as from dlt-daemon:
@@ -979,7 +988,7 @@ impl DltMessage {
                         } else {
                             f32::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        write!(text, "{}", val)?;
+                        write!(text, "{val}")?;
                         // ryu seems not to be faster (at least in our bench dlt_payload_verb)
                         //text.push_str(ryu::Buffer::new().format(val));
                     }
@@ -989,7 +998,7 @@ impl DltMessage {
                         } else {
                             f64::from_le_bytes(arg.payload_raw.try_into().unwrap())
                         };
-                        write!(text, "{}", val)?;
+                        write!(text, "{val}")?;
                         //text.push_str(ryu::Buffer::new().format(val));
                     }
                     // f16 and f128 dont exist. todo could use create half::f16 and f128::f128 but dlt-viewer doesn't support it either
@@ -1006,9 +1015,9 @@ impl DltMessage {
                 if !arg.payload_raw.is_empty() {
                     for (i, &c) in arg.payload_raw[0..arg.payload_raw.len()].iter().enumerate() {
                         if i > 0 {
-                            write!(text, " {:02x}", c)?;
+                            write!(text, " {c:02x}")?;
                         } else {
-                            write!(text, "{:02x}", c)?;
+                            write!(text, "{c:02x}")?;
                         }
                     }
                 }
@@ -1065,7 +1074,7 @@ impl DltMessage {
                         write!(text, "<scod bin nyi! todo>")?;
                     }
                     _ => {
-                        write!(text, "<scod unknown {}>", scod)?;
+                        write!(text, "<scod unknown {scod}>")?;
                     }
                 }
             }
@@ -1109,9 +1118,9 @@ impl DltMessage {
                 DltMessageType::Control(ct) => {
                     let mut text = String::with_capacity(256); // String::new(); // can we guess the capacity upfront better? (e.g. payload len *3?)
                     if let Some(service_name) = SERVICE_ID_NAMES.get(&message_id) {
-                        write!(&mut text, "[{}", service_name)?;
+                        write!(&mut text, "[{service_name}")?;
                     } else if ct != DltMessageControlType::Time {
-                        write!(&mut text, "[service({})", message_id)?;
+                        write!(&mut text, "[service({message_id})")?;
                     }
                     let mut needs_closing_bracket = true;
                     match ct {
@@ -1148,8 +1157,8 @@ impl DltMessage {
                                         // output as json parseable array
                                         let apids_json = serde_json::to_string(&apids);
                                         match &apids_json {
-                                            Ok(apid_str) => write!(&mut text, " {}", apid_str)?,
-                                            Err(err) => write!(&mut text, " got err={:?}", err)?,
+                                            Ok(apid_str) => write!(&mut text, " {apid_str}")?,
+                                            Err(err) => write!(&mut text, " got err={err:?}")?,
                                         }
                                     }
                                     SERVICE_ID_UNREGISTER_CONTEXT => {
@@ -1161,7 +1170,7 @@ impl DltMessage {
                                                 "ctid": ctid,
                                                 "comid": comid
                                             });
-                                            write!(&mut text, " {}", val)?;
+                                            write!(&mut text, " {val}")?;
                                         } else {
                                             write!(&mut text, " ")?;
                                             crate::utils::buf_as_hex_to_write(&mut text, payload)?;
@@ -1179,7 +1188,7 @@ impl DltMessage {
                                                 },
                                                 "comid": comid
                                             });
-                                            write!(&mut text, " {}", val)?;
+                                            write!(&mut text, " {val}")?;
                                         } else {
                                             write!(&mut text, " ")?;
                                             crate::utils::buf_as_hex_to_write(&mut text, payload)?;
@@ -1233,7 +1242,7 @@ impl DltMessage {
                         est_len_ascii
                     };
                     let mut text = String::with_capacity(est_len_full.next_power_of_two());
-                    write!(&mut text, "[{}] ", message_id)?;
+                    write!(&mut text, "[{message_id}] ")?;
                     let times_replaced =
                         crate::utils::buf_as_printable_ascii_to_write(&mut text, payload, '-')?;
                     text.push('|');
@@ -1616,7 +1625,7 @@ impl<'a> Iterator for DltMessageArgIterator<'a> {
 
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
+    pub kind: ErrorKind,
 }
 
 impl Error {
@@ -1635,13 +1644,13 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.kind {
             ErrorKind::NotEnoughData(amount) => {
-                write!(f, "not enough data - missing at least {} bytes", amount)
+                write!(f, "not enough data - missing at least {amount} bytes")
             }
             ErrorKind::InvalidData(ref desc) => {
-                write!(f, "invalid data - {}", desc)
+                write!(f, "invalid data - {desc}")
             }
             ErrorKind::OtherFatal(ref desc) => {
-                write!(f, "other fatal error! - {}", desc)
+                write!(f, "other fatal error! - {desc}")
             }
         }
     }
@@ -1798,7 +1807,7 @@ pub fn parse_dlt_with_serial_header(
                                 // yes, lets use that.
                                 // we simply return an error here and let the usual skip logic apply
                                 return Err(Error::new(ErrorKind::InvalidData(
-                                                format!("skipped probably corrupt msg due to serial header pattern heuristic. serial pattern at {} vs expected {}", i, to_consume),
+                                                format!("skipped probably corrupt msg due to serial header pattern heuristic. serial pattern at {i} vs expected {to_consume}"),
                                             )));
                             }
                         }
@@ -1844,6 +1853,71 @@ pub fn parse_dlt_with_serial_header(
     } else {
         Err(Error::new(ErrorKind::NotEnoughData(
             MIN_DLT_MSG_SIZE - remaining,
+        )))
+    }
+}
+
+// TODO refactor upper functions to use this one
+
+pub fn parse_dlt_with_std_header(
+    data: &[u8],
+    index: DltMessageIndexType,
+    ecu: DltChar4, // ecu to use for storage header
+) -> Result<(usize, DltMessage), Error> {
+    // Parse the DltMessage from the buffer
+    let mut remaining = data.len();
+    if remaining >= DLT_MIN_STD_HEADER_SIZE {
+        let stdh = DltStandardHeader::from_buf(&data[0..remaining]).expect("no valid stdheader!");
+        if stdh.dlt_vers() != 1u8 {
+            return Err(Error::new(ErrorKind::InvalidData(format!(
+                "invalid DLT standard header version {}",
+                stdh.dlt_vers()
+            ))));
+        }
+        let std_ext_header_size = stdh.std_ext_header_size();
+        if stdh.len >= std_ext_header_size {
+            // do we have the remaining data?
+            if remaining >= stdh.len as usize {
+                remaining -= std_ext_header_size as usize;
+                let payload_offset = std_ext_header_size as usize;
+                let payload_size = stdh.len - std_ext_header_size;
+                remaining -= payload_size as usize; // always <= remaining as: remaining >= stdh.len >= std_ext_header_size
+                let payload =
+                    Vec::from(&data[payload_offset..payload_offset + payload_size as usize]);
+                // get current time as seconds and microseconds since epoch
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("Time went backwards");
+
+                let sh = DltStorageHeader {
+                    secs: now.as_secs() as u32,
+                    micros: now.subsec_micros(),
+                    ecu,
+                };
+                let msg = DltMessage::from_headers(
+                    index,
+                    sh,
+                    stdh,
+                    &data[DLT_MIN_STD_HEADER_SIZE..payload_offset],
+                    payload,
+                );
+                let to_consume = data.len() - remaining;
+                Ok((to_consume, msg))
+            } else {
+                // data is not enough for a complete message
+                // return the missing bytes
+                Err(Error::new(ErrorKind::NotEnoughData(
+                    stdh.len as usize - remaining,
+                )))
+            }
+        } else {
+            Err(Error::new(ErrorKind::InvalidData(String::from(
+                "stdh.len too small",
+            ))))
+        }
+    } else {
+        Err(Error::new(ErrorKind::NotEnoughData(
+            DLT_MIN_STD_HEADER_SIZE - remaining,
         )))
     }
 }
@@ -3041,6 +3115,50 @@ mod tests {
     }
 
     #[test]
+    fn parse_dlt_with_std_header_basic() {
+        let vec_m1 = get_msg_payload(1, false);
+        let vec_m2 = get_msg_payload(2, false);
+
+        let mut file = Vec::new();
+        // first message has 0 byte lost (1 byte loss is not detectable easily...)
+        file.write_all(&vec_m1.as_slice()[0..vec_m1.len() - 0])
+            .unwrap();
+        // 2nd message is ok
+        file.write_all(&vec_m2).unwrap();
+
+        // we expect an error on the first message:
+        let (parsed, m1) =
+            parse_dlt_with_std_header(&file, 1, DltChar4::from_buf(b"ECU1")).unwrap();
+        assert_eq!(parsed, vec_m1.len());
+        assert_eq!(m1.mcnt(), 1);
+
+        // so we do expect the 2nd message:
+        let (parsed, m2) =
+            parse_dlt_with_std_header(&file[parsed..], 1, DltChar4::from_buf(b"ECU1")).unwrap();
+        assert_eq!(parsed, vec_m2.len());
+        assert_eq!(m2.mcnt(), 2);
+    }
+
+    #[test]
+    fn parse_dlt_with_std_header_toofew() {
+        let vec_m1 = get_msg_payload(1, false);
+
+        let mut file = Vec::new();
+        file.write_all(&vec_m1.as_slice()[0..vec_m1.len() - 1])
+            .unwrap();
+
+        // we expect an error on the first message:
+        let res = parse_dlt_with_std_header(&file, 1, DltChar4::from_buf(b"ECU1"))
+            .err()
+            .unwrap();
+        assert!(matches!(res.kind(), ErrorKind::NotEnoughData(1)));
+        assert_eq!(
+            res.to_string(),
+            "not enough data - missing at least 1 bytes"
+        );
+    }
+
+    #[test]
     fn parse_storage() {
         let m = get_testmsg_with_payload(
             true,
@@ -3107,7 +3225,7 @@ mod tests {
         assert_eq!(m2.mcnt(), m.mcnt());
     }
 
-    fn get_serial_msg_payload(mcnt: u8) -> Vec<u8> {
+    fn get_msg_payload(mcnt: u8, with_serial_pattern: bool) -> Vec<u8> {
         let mut file = Vec::new();
 
         let standard_header = DltStandardHeader {
@@ -3117,11 +3235,12 @@ mod tests {
         };
 
         let payload = vec![0x01u8];
-        let dls_pat = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
+        if with_serial_pattern {
+            let dls_pat = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
 
-        // DLS format = serial header patter, standard header, [ext header], payload
-        file.write_all(&dls_pat).unwrap();
-        //file.write_all(&b1).unwrap();
+            // DLS format = serial header patter, standard header, [ext header], payload
+            file.write_all(&dls_pat).unwrap();
+        }
 
         DltStandardHeader::to_write(
             &mut file,
@@ -3142,8 +3261,8 @@ mod tests {
 
     #[test]
     fn parse_serial() {
-        let vec_m1 = get_serial_msg_payload(1);
-        let vec_m2 = get_serial_msg_payload(2);
+        let vec_m1 = get_msg_payload(1, true);
+        let vec_m2 = get_msg_payload(2, true);
 
         let file: Vec<_> = vec![vec_m1.clone(), vec_m2.clone()]
             .into_iter()
@@ -3160,8 +3279,8 @@ mod tests {
 
     #[test]
     fn parse_serial_corrupt() {
-        let vec_m1 = get_serial_msg_payload(1);
-        let vec_m2 = get_serial_msg_payload(2);
+        let vec_m1 = get_msg_payload(1, true);
+        let vec_m2 = get_msg_payload(2, true);
 
         let mut file = Vec::new();
         // first message has 1 byte lost

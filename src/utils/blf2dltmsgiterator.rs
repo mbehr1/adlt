@@ -132,7 +132,7 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
                         can_error.header.timestamp_ns,
                         1u8 | (2u8 << 4), // verb., Error
                         0,
-                        Some(format!("Error Frame:{}", error_json)),
+                        Some(format!("Error Frame:{error_json}")),
                     )
                 }
                 ObjectTypes::AppText65(app_text) => {
@@ -241,7 +241,7 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
                                     ch_network = attr.unescape_value().ok();
                                 }
                                 _ => {
-                                    println!("unknown channel attr: {:?}", attr);
+                                    println!("unknown channel attr: {attr:?}");
                                 }
                             }
                         }
@@ -299,7 +299,7 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
                                 if let Some(log) = self.log {
                                     slog::warn!(log, "unknown channel attr: {:?}", attr; "type" => ch_type.as_deref(), "network" => ch_network.as_deref(), "nr" => &ch_nr);
                                 } else {
-                                    println!("unknown channel attr: {:?}", attr);
+                                    println!("unknown channel attr: {attr:?}");
                                 }
                             }
                         }
