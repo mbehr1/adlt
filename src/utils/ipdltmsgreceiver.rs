@@ -9,8 +9,7 @@ use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, Socket, Type}
 use std::net::{IpAddr, SocketAddr};
 
 use crate::dlt::{
-    DltChar4, DltMessage, DltMessageIndexType, DltStandardHeader, DltStorageHeader,
-    DLT_MIN_STD_HEADER_SIZE,
+    parse_dlt_with_std_header, DltChar4, DltMessage, DltMessageIndexType, Error, ErrorKind,
 };
 
 pub enum RecvMode {
@@ -238,89 +237,45 @@ impl IpDltMsgReceiver {
         };
 
         // Parse the DltMessage from the buffer
-        let mut remaining = data.len();
-        if remaining >= DLT_MIN_STD_HEADER_SIZE {
-            // todo check for DLT v1 standard header pattern
-            let stdh =
-                DltStandardHeader::from_buf(&data[0..remaining]).expect("no valid stdheader!");
-            let std_ext_header_size = stdh.std_ext_header_size();
-            if stdh.len >= std_ext_header_size {
-                // do we have the remaining data?
-                if remaining >= stdh.len as usize {
-                    remaining -= std_ext_header_size as usize;
-                    let payload_offset = std_ext_header_size as usize;
-                    let payload_size = stdh.len - std_ext_header_size;
-                    remaining -= payload_size as usize; // always <= remaining as: remaining >= stdh.len >= std_ext_header_size
-                    let payload =
-                        Vec::from(&data[payload_offset..payload_offset + payload_size as usize]);
-                    // get current time as seconds and microseconds since epoch
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .expect("Time went backwards");
+        let data_len = data.len();
 
-                    let sh = DltStorageHeader {
-                        // todo... use start time? and header via config/parameter?
-                        secs: now.as_secs() as u32,
-                        micros: now.subsec_micros(),
-                        ecu: DltChar4::from_buf(b"RECV"), // TODO support parameter -e ecuid
-                    };
-                    let msg = DltMessage::from_headers(
-                        self.index,
-                        sh,
-                        stdh,
-                        &data[DLT_MIN_STD_HEADER_SIZE..payload_offset],
-                        payload,
+        match parse_dlt_with_std_header(data, self.index, DltChar4::from_buf(b"RECV")) {
+            Ok((to_consume, msg)) => {
+                let remaining = data_len - to_consume;
+                src_addr_buffer.clear();
+                self.index += 1; // increment index for next message
+                if remaining > 0 {
+                    // log the remaining bytes
+                    info!(
+                        self.log,
+                        "recv_msg: received {} bytes, but {} bytes are remaining after parsing",
+                        data_len,
+                        remaining
                     );
-                    self.index += 1; // increment index for next message
-                    if remaining > 0 {
-                        // log the remaining bytes
-                        info!(
-                            self.log,
-                            "recv_msg: received {} bytes, but {} bytes are remaining after parsing",
-                            data.len(),
-                            remaining
-                        );
-                        /*println!(
-                            "Received {} bytes, but {} bytes are remaining after parsing",
-                            size, remaining
-                        );*/
-                        // todo keep the remaining bytes in the buffer?
-                        // this should never happen for a valid DLT message
-                        // they are fragmented by MTU but not concatenated
-                    }
-                    // remove the src_addr_buffer if we have a complete message
-                    src_addr_buffer.clear();
-                    Ok((msg, src_addr.as_socket().unwrap()))
-                } else {
-                    // fragmented message, store the newly received data in the buffer
-                    // todo only if afterwards still <= u16::MAX
-                    src_addr_buffer.extend_from_slice(recvd_data);
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "not enough data ({} vs {}), storing fragment",
-                            remaining, stdh.len
-                        ),
-                    ))
+                    // todo keep the remaining bytes in the buffer?
+                    // this should never happen for a valid DLT message
+                    // they are fragmented by MTU but not concatenated
                 }
-            } else {
+                Ok((msg, src_addr.as_socket().unwrap()))
+            }
+            Err(Error {
+                kind: ErrorKind::NotEnoughData(missing),
+            }) => {
+                // this is not a valid DLT message, so we need to handle it as a fragmented message
+                // or an invalid message
+                src_addr_buffer.extend_from_slice(recvd_data);
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("not enough data (missing {}), storing fragment", missing),
+                ))
+            }
+            _ => {
                 src_addr_buffer.clear(); // invalid, clear (if any)
                 Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "stdh.len too small",
                 ))
             }
-        } else {
-            src_addr_buffer.clear(); // invalid, clear (if any)
-
-            // this should not be a fragmented message start!
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Received data (len={}) is too small for a valid DLT message",
-                    remaining
-                ),
-            ))
         }
     }
 }

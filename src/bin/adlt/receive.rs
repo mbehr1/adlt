@@ -17,10 +17,10 @@ use std::{
 
 use adlt::{
     dlt::{
-        DltChar4, DltMessage, DltMessageIndexType, DltStandardHeader, DltStorageHeader,
-        DLT_MIN_STD_HEADER_SIZE, SERVICE_ID_GET_LOG_INFO, SERVICE_ID_NAMES,
-        SERVICE_ID_SET_DEFAULT_LOG_LEVEL, SERVICE_ID_SET_DEFAULT_TRACE_STATUS,
-        SERVICE_ID_SET_LOG_LEVEL, SERVICE_ID_SET_TIMING_PACKETS, SERVICE_ID_SET_VERBOSE_MODE,
+        parse_dlt_with_std_header, DltChar4, DltMessage, DltMessageIndexType, DltStandardHeader,
+        SERVICE_ID_GET_LOG_INFO, SERVICE_ID_NAMES, SERVICE_ID_SET_DEFAULT_LOG_LEVEL,
+        SERVICE_ID_SET_DEFAULT_TRACE_STATUS, SERVICE_ID_SET_LOG_LEVEL,
+        SERVICE_ID_SET_TIMING_PACKETS, SERVICE_ID_SET_VERBOSE_MODE,
     },
     utils::{buf_as_hex_to_io_write, IpDltMsgReceiver, RecvMode},
 };
@@ -638,9 +638,11 @@ fn forward_serve_via_tcp(
                                                 let parse_res = parse_dlt_with_std_header(
                                                     recvd_data,
                                                     recvd_msg_index,
+                                                    DltChar4::from_buf(b"RECV"), // TODO support parameter -e ecuid
                                                 );
                                                 match parse_res {
-                                                    Ok((msg, remaining)) => {
+                                                    Ok((to_consume, msg)) => {
+                                                        let remaining = recvd_data.len().saturating_sub(to_consume);
                                                         info!(log, "Parsed message: {:?}, remaining bytes = {}", msg, remaining);
                                                         recvd_msg_index += 1;
                                                         // todo parse as msg and process control msgs (setDefaultLogLevel, setLogLevel)
@@ -893,56 +895,4 @@ fn forward_serve_via_tcp(
         Ok(s) => debug!(log, "listen_thread join was Ok {:?}", s),
     };
     Ok(())
-}
-
-// Todo refactor into generic utils
-fn parse_dlt_with_std_header(
-    data: &[u8],
-    index: DltMessageIndexType,
-) -> Result<(DltMessage, usize), usize> {
-    // Parse the DltMessage from the buffer
-    let mut remaining = data.len();
-    if remaining >= DLT_MIN_STD_HEADER_SIZE {
-        // todo check for DLT v1 standard header pattern
-        let stdh = DltStandardHeader::from_buf(&data[0..remaining]).expect("no valid stdheader!");
-        let std_ext_header_size = stdh.std_ext_header_size();
-        if stdh.len >= std_ext_header_size {
-            // do we have the remaining data?
-            if remaining >= stdh.len as usize {
-                remaining -= std_ext_header_size as usize;
-                let payload_offset = std_ext_header_size as usize;
-                let payload_size = stdh.len - std_ext_header_size;
-                remaining -= payload_size as usize; // always <= remaining as: remaining >= stdh.len >= std_ext_header_size
-                let payload =
-                    Vec::from(&data[payload_offset..payload_offset + payload_size as usize]);
-                // get current time as seconds and microseconds since epoch
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("Time went backwards");
-
-                let sh = DltStorageHeader {
-                    // todo... use start time? and header via config/parameter?
-                    secs: now.as_secs() as u32,
-                    micros: now.subsec_micros(),
-                    ecu: DltChar4::from_buf(b"RECV"), // TODO support parameter -e ecuid
-                };
-                let msg = DltMessage::from_headers(
-                    index,
-                    sh,
-                    stdh,
-                    &data[DLT_MIN_STD_HEADER_SIZE..payload_offset],
-                    payload,
-                );
-                Ok((msg, remaining))
-            } else {
-                // data is not enough for a complete message
-                // return the missing bytes
-                Err(stdh.len as usize - remaining)
-            }
-        } else {
-            Err(0) // invalid, no message
-        }
-    } else {
-        Err(DLT_MIN_STD_HEADER_SIZE - remaining) // not enough data for a standard header
-    }
 }
