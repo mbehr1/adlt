@@ -150,9 +150,7 @@ impl FileTransfer {
             }
             self.check_finished(false)
         } else {
-            println!(
-                "FileTransfer add_flda got unexpected package {package_nr} on (in)complete!"
-            );
+            println!("FileTransfer add_flda got unexpected package {package_nr} on (in)complete!");
             false
         }
     }
