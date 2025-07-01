@@ -179,7 +179,7 @@ pub fn transmit(
     Ok(())
 }
 
-fn create_send_socket(
+pub fn create_send_socket(
     send_mode: RecvMode,
     send_addr: SocketAddr,
     interface: InterfaceIndexOrAddress,
