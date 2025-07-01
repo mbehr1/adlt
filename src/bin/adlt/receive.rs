@@ -13,6 +13,7 @@ use std::{
     io::{BufWriter, Write},
     mem::MaybeUninit,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    str::FromStr,
 };
 
 use adlt::{
@@ -45,7 +46,7 @@ printf("Usage: dlt-receive [options] hostname/serial_device_name\n");
  +   printf("  -u            UDP multicast mode\n");
  +   printf("  -i addr       Host interface address\n");
     printf("  -b baudrate   Serial device baudrate (Default: 115200)\n");
-    printf("  -e ecuid      Set ECU ID (Default: RECV)\n");
+ +  printf("  -e ecuid      Set ECU ID (Default: RECV)\n");
  +   printf("  -o filename   Output messages in new DLT file\n");
  +   printf("  -c limit      Restrict file size to <limit> bytes when output to file\n");
     printf("                When limit is reached, a new file is opened. Use K,M,G as\n");
@@ -137,6 +138,13 @@ pub fn add_subcommand(app: Command) -> Command {
                 .help("Forward/serve received messages via TCP on the given port.")
                 .value_parser(clap::value_parser!(u16))
             )
+            .arg(Arg::new("ecu_id")
+                .short('e')
+                .num_args(1)
+                .default_value("RECV")
+                .value_parser(|s: &str|DltChar4::from_str(s).map_err(|_|format!("ecu contains non ascii characters")))
+                .help("Set ECU ID for received messages if they have no extended header (default: RECV)")
+            )
     )
 }
 
@@ -184,6 +192,10 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     } else {
         OutputStyle::None
     };
+    let ecu_id = sub_m
+        .get_one::<DltChar4>("ecu_id")
+        .map(|s| s.to_owned())
+        .unwrap();
 
     let recv_addr = hostname.parse::<Ipv4Addr>()?;
     let recv_addr = SocketAddr::new(IpAddr::V4(recv_addr), *port);
@@ -317,6 +329,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
                     log,
                     stop_forward,
                     port,
+                    ecu_id,
                     rx_from_recv_thread,
                     tx_for_forward_thread,
                 )
@@ -496,6 +509,7 @@ fn forward_serve_via_tcp(
     log: slog::Logger,
     stop_forward: std::sync::Arc<std::sync::atomic::AtomicBool>,
     port: u16,
+    ecu_id: DltChar4,
     rx_for_forward_thread: std::sync::mpsc::Receiver<(DltMessage, SocketAddr)>,
     tx_for_forward_thread: std::sync::mpsc::Sender<(DltMessage, SocketAddr)>,
 ) -> std::io::Result<()> {
@@ -639,7 +653,7 @@ fn forward_serve_via_tcp(
                                                 let parse_res = parse_dlt_with_std_header(
                                                     recvd_data,
                                                     recvd_msg_index,
-                                                    DltChar4::from_buf(b"RECV"), // TODO support parameter -e ecuid
+                                                    ecu_id.clone(),
                                                 );
                                                 match parse_res {
                                                     Ok((to_consume, msg)) => {
