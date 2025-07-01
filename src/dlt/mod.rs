@@ -1867,8 +1867,13 @@ pub fn parse_dlt_with_std_header(
     // Parse the DltMessage from the buffer
     let mut remaining = data.len();
     if remaining >= DLT_MIN_STD_HEADER_SIZE {
-        // todo check for DLT v1 standard header pattern
         let stdh = DltStandardHeader::from_buf(&data[0..remaining]).expect("no valid stdheader!");
+        if stdh.dlt_vers() != 1u8 {
+            return Err(Error::new(ErrorKind::InvalidData(format!(
+                "invalid DLT standard header version {}",
+                stdh.dlt_vers()
+            ))));
+        }
         let std_ext_header_size = stdh.std_ext_header_size();
         if stdh.len >= std_ext_header_size {
             // do we have the remaining data?
