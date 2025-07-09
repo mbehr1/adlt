@@ -4,14 +4,50 @@
 /// [ ] - set recv buffer size
 /// [ ] - decide whether using a single socket for all addresses is sufficient or whether we need a socket per address
 ///
-use slog::info;
+use slog::{info, warn};
 use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, Socket, Type};
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    collections::VecDeque,
+    net::{IpAddr, SocketAddr},
+};
 
 use crate::dlt::{
     parse_dlt_with_std_header, DltChar4, DltMessage, DltMessageIndexType, Error, ErrorKind,
 };
 
+pub fn set_max_buffer_size(
+    socket: &socket2::Socket,
+    send: bool,
+    size: usize,
+) -> std::io::Result<usize> {
+    let mut try_size = size;
+    while try_size > 64 * 1024 {
+        // set the send buffer size to 64kb
+        match if send {
+            socket.set_send_buffer_size(try_size)
+        } else {
+            socket.set_recv_buffer_size(size)
+        } {
+            Ok(()) => {
+                return Ok(try_size);
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::InvalidInput {
+                    // the size is too large, try a smaller size
+                    try_size /= 2;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("Failed to set send buffer size {try_size}/{size} bytes"),
+    ))
+}
+
+#[derive(PartialEq, Debug)]
 pub enum RecvMode {
     Tcp,
     Udp,
@@ -20,9 +56,9 @@ pub enum RecvMode {
 
 pub struct IpDltMsgReceiver {
     log: slog::Logger,
-    recv_mode: RecvMode,
-    interface: InterfaceIndexOrAddress,
-    addr: SocketAddr,
+    pub recv_mode: RecvMode,
+    pub interface: InterfaceIndexOrAddress,
+    pub addr: SocketAddr,
     socket: Socket,
     /// buffer for receiving fragmented messages (e.g. due to payloads > MTU)
     /// use a buffer per sock_addr that we received from (but this would require a socket per sock_addr)
@@ -32,9 +68,40 @@ pub struct IpDltMsgReceiver {
     recv_buffer_list: Vec<(SockAddr, Vec<u8>)>,
     recv_buffer: Vec<u8>,
     pub index: DltMessageIndexType,
+    buffered_msgs: VecDeque<(DltMessage, SocketAddr)>,
 }
 
 impl IpDltMsgReceiver {
+    fn new_tcp_client_socket(addr: SocketAddr) -> Result<Socket, std::io::Error> {
+        let ip_addr = addr.ip();
+        let socket = match ip_addr {
+            IpAddr::V4(_) => Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
+                .expect("ipv4 tcp socket"),
+            IpAddr::V6(_) => {
+                let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))
+                    .expect("ipv6 tcp socket");
+                socket.set_only_v6(true)?;
+                socket
+            }
+        };
+        socket.set_reuse_address(true).expect("reuse addr error");
+        // connect will be done in recv_msg
+
+        // set read timeout
+        socket // TODO which timeout to choose?
+            .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+            .expect("set read timeout error");
+
+        socket
+            .set_nonblocking(false)
+            .expect("set non-blocking error");
+
+        // set the receive buffer size. dlt-viewer uses 26214400 (400* 65536) bytes
+        set_max_buffer_size(&socket, false, 26214400).expect("set recv buffer size error");
+
+        Ok(socket)
+    }
+
     pub fn new(
         log: slog::Logger,
         // stop_receive: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -44,10 +111,7 @@ impl IpDltMsgReceiver {
         addr: SocketAddr,
     ) -> Result<Self, std::io::Error> {
         let socket = match recv_mode {
-            RecvMode::Tcp => {
-                // Initialize TCP receiver here if needed
-                panic!("TCP receiver not implemented yet");
-            }
+            RecvMode::Tcp => Self::new_tcp_client_socket(addr)?,
             RecvMode::Udp => {
                 // Initialize UDP receiver here if needed
                 let ip_addr = addr.ip();
@@ -73,6 +137,19 @@ impl IpDltMsgReceiver {
                 socket
                     .bind(&socket2::SockAddr::from(addr))
                     .expect("bind error");
+
+                // set read timeout
+                socket // TODO which timeout to choose?
+                    .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                    .expect("set read timeout error");
+
+                socket
+                    .set_nonblocking(false)
+                    .expect("set non-blocking error");
+
+                // set the receive buffer size. dlt-viewer uses 26214400 (400* 65536) bytes
+                set_max_buffer_size(&socket, false, 26214400).expect("set recv buffer size error");
+
                 socket
             }
             RecvMode::UdpMulticast => {
@@ -140,23 +217,22 @@ impl IpDltMsgReceiver {
                 socket.set_reuse_address(true).expect("reuse addr error");
                 // #[cfg(unix)] // this is currently restricted to Unix's in socket2
                 // TODO check! socket.set_reuse_port(true).expect("reuse port Error");
+
+                // set read timeout
+                socket // TODO which timeout to choose?
+                    .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                    .expect("set read timeout error");
+
+                socket
+                    .set_nonblocking(false)
+                    .expect("set non-blocking error");
+
+                // set the receive buffer size. dlt-viewer uses 26214400 (400* 65536) bytes
+                set_max_buffer_size(&socket, false, 26214400).expect("set recv buffer size error");
+
                 socket
             }
         };
-
-        // set read timeout
-        socket // TODO which timeout to choose?
-            .set_read_timeout(Some(std::time::Duration::from_millis(500)))
-            .expect("set read timeout error");
-
-        socket
-            .set_nonblocking(false)
-            .expect("set non-blocking error");
-
-        // set the receive buffer size. dlt-viewer uses 26214400 (400* 65536) bytes
-        socket
-            .set_recv_buffer_size(26214400)
-            .expect("set recv buffer size error"); // TODO this can fail if the OS does not allow this size
 
         // so try the max then... (e.g. by looping down the size until it works)
         // hmm. on osx it silently fails and uses the default size of 8388608 bytes
@@ -171,7 +247,11 @@ impl IpDltMsgReceiver {
         );
 
         // allocate a buffer for the socket for receiving messages
-        let data = Vec::<u8>::with_capacity(u16::MAX.into()); // this is the max len as part of DLTv1 standard header
+        let data = if recv_mode == RecvMode::Tcp {
+            Vec::<u8>::with_capacity(100usize * 0xffff) // this is the max len as part of DLTv1 standard header
+        } else {
+            Vec::<u8>::with_capacity(0x10000) // 64kb, this is the max len as part of DLTv1 standard header and UDP should not concat to more than that size
+        };
 
         Ok(IpDltMsgReceiver {
             log,
@@ -182,17 +262,96 @@ impl IpDltMsgReceiver {
             recv_buffer_list: Vec::with_capacity(256),
             recv_buffer: data,
             index: start_index,
+            buffered_msgs: VecDeque::with_capacity(16), // buffer for messages that will be returned on next recv_msg call
         })
     }
 
     pub fn recv_msg(&mut self) -> Result<(DltMessage, SocketAddr), std::io::Error> {
-        let recv_buffer = &mut self.recv_buffer.spare_capacity_mut();
-        let (size, src_addr) = self.socket.recv_from(recv_buffer)?;
+        if let Some((msg, addr)) = self.buffered_msgs.pop_front() {
+            // if we have buffered messages, return the first one
+            //info!(self.log, "recv_msg: returning buffered message: {:?}", msg);
+            return Ok((msg, addr));
+        }
 
-        /*info!(
-            self.log,
-            "recv_msg: received {} bytes from {:?}", size, src_addr
-        );*/
+        let recv_buffer = &mut self.recv_buffer.spare_capacity_mut();
+
+        let (size, src_addr) = if self.recv_mode == RecvMode::Tcp {
+            // info!(self.log, "recv_msg: receiving message via TCP");
+            match self.socket.recv(recv_buffer) {
+                Ok(size) => {
+                    // info!(self.log, "recv_msg: received {} bytes via TCP", size);
+                    if size > 0 {
+                        // TCP does not provide src_addr, use the bound addr
+                        (size, SockAddr::from(self.addr))
+                    } else {
+                        info!(
+                            self.log,
+                            "recv_msg: received zero bytes via TCP, shutdown socket"
+                        );
+                        // size 0 means the other side has closed the connection (called shutdown)
+                        // and is now waiting for us to close the socket
+                        // we ignore any errors from shutdown here
+                        let _ = self.socket.shutdown(std::net::Shutdown::Both);
+                        // TODO in case of an error the old socket is not dropped!
+                        self.socket = Self::new_tcp_client_socket(self.addr)?;
+
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "Received zero bytes, socket closed",
+                        ));
+                    }
+                }
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::WouldBlock,
+                            "No data available to read",
+                        ));
+                    } else if e.kind() == std::io::ErrorKind::NotConnected {
+                        info!(
+                            self.log,
+                            "recv_msg: socket not connected, trying to connect"
+                        );
+                        // connect the socket:
+                        match self.socket.connect(&SockAddr::from(self.addr)) {
+                            Ok(_) => {
+                                info!(self.log, "recv_msg: socket connected to {:?}", self.addr);
+                                return self.recv_msg(); // retry receiving after successful connecting
+                            }
+                            Err(e) => {
+                                std::thread::sleep(std::time::Duration::from_millis(50)); // TODO for test only!
+                                if e.kind() == std::io::ErrorKind::ConnectionRefused {
+                                    info!(
+                                        self.log,
+                                        "recv_msg: connection refused, trying to reconnect"
+                                    );
+                                    self.socket = Self::new_tcp_client_socket(self.addr)?;
+                                } else {
+                                    info!(
+                                        self.log,
+                                        "recv_msg: error connecting socket: {} e.kind={}",
+                                        e,
+                                        e.kind()
+                                    );
+                                }
+                                return Err(e);
+                            }
+                        }
+                    } else {
+                        warn!(
+                            self.log,
+                            "recv_msg: error receiving message: {} e.kind={}",
+                            e,
+                            e.kind()
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(50)); // TODO for test only!
+                        return Err(e);
+                    }
+                }
+            }
+        } else {
+            self.socket.recv_from(recv_buffer)?
+        };
 
         if size == 0 {
             return Err(std::io::Error::new(
@@ -230,9 +389,9 @@ impl IpDltMsgReceiver {
             recvd_data // no need to copy here, we do this only later if this is a start of a fragmented message
         } else {
             // If we have an existing buffer, extend it with the new data
-            // TODO check that it's still <= u16::MAX
+            // TODO check that it's still <= u16::MAX (might be larger with tcp but not larger than 2x u16::MAX)
             // TODO add heuristic to check whether the newly recved data is a new msg (e.g. dlt v1 header pattern)
-            src_addr_buffer.extend_from_slice(recvd_data);
+            src_addr_buffer.extend(recvd_data);
             &src_addr_buffer[..]
         };
 
@@ -240,21 +399,117 @@ impl IpDltMsgReceiver {
         let data_len = data.len();
 
         match parse_dlt_with_std_header(data, self.index, DltChar4::from_buf(b"RECV")) {
-            Ok((to_consume, msg)) => {
+            Ok((mut to_consume, msg)) => {
+                debug_assert_eq!(
+                    msg.standard_header.len as usize, to_consume,
+                    "The DLT message length should match the consumed data length"
+                );
+                /* todo add test-pattern checks
+                // check that msg payload is counting from 1 to 0xff continously except for the last byte:
+                if msg.payload.len() > 4 + 8 + 6 {
+                    for i in 4 + 8 + 6..msg.payload.len() - 1 {
+                        assert_eq!(
+                        msg.payload[i],
+                        (i -(4+8+6)) as u8,
+                        "The DLT message payload should be counting from 0 to 0xff, but got {} at index {} for msg {:?}",
+                        msg.payload[i],
+                        i, msg
+                    );
+                    }
+                }
+                assert_eq!(
+                    0xff,
+                    data[msg.standard_header.len as usize - 1],
+                    "The msg buffer should end with 0xff for test msgs {:?} {:?} with payload.len: {} index: {}, src_addr_buffer.len: {}, {:?} {:?}",
+                    msg.standard_header,
+                    msg.extended_header,
+                    msg.payload.len(),
+                    self.index,
+                    src_addr_buffer.len(),
+                    data,
+                    src_addr_buffer
+                );*/
                 let remaining = data_len - to_consume;
-                src_addr_buffer.clear();
                 self.index += 1; // increment index for next message
                 if remaining > 0 {
-                    // log the remaining bytes
-                    info!(
-                        self.log,
-                        "recv_msg: received {} bytes, but {} bytes are remaining after parsing",
-                        data_len,
-                        remaining
-                    );
-                    // todo keep the remaining bytes in the buffer?
-                    // this should never happen for a valid DLT message
-                    // they are fragmented by MTU but not concatenated
+                    // keep the remaining bytes in the buffer -> needed for TCP (and UDP might bundle few msgs into one dgram as well!
+                    // Currently dlt-daemon does not bundle msgs via UDP (dgram) but via TCP (stream) it is expected
+
+                    // parse the remaining bytes as a new message and put them into a queue
+                    // once NotEnoughData is returned, keep that buffer part
+                    while to_consume < data_len {
+                        let rem_data = &data[to_consume..];
+                        match parse_dlt_with_std_header(
+                            rem_data,
+                            self.index,
+                            DltChar4::from_buf(b"RECV"),
+                        ) {
+                            Ok((new_to_consume, new_msg)) => {
+                                debug_assert_eq!(
+                                    new_msg.standard_header.len as usize, new_to_consume,
+                                    "The inner DLT message length should match the consumed data length"
+                                );
+                                /*
+                                // check that msg payload is counting from 1 to 0xff continously except for the last byte:
+                                if new_msg.payload.len() > 4 + 8 + 6 {
+                                    for i in 4 + 8 + 6..new_msg.payload.len() - 1 {
+                                        assert_eq!(
+                                            new_msg.payload[i],
+                                            (i -(4+8+6)) as u8,
+                                            "The inner DLT message payload should be counting from 0 to 0xff, but got {} at index {} for msg {:?}",
+                                            new_msg.payload[i],
+                                            i, new_msg
+                                        );
+                                    }
+                                }
+                                assert_eq!(
+                                        0xff,
+                                        rem_data[new_msg.standard_header.len as usize - 1],
+                                        "The inner send buffer should end with 0xff for test msgs {:?} {:?} with payload.len: {}",
+                                        new_msg.standard_header,
+                                        new_msg.extended_header,
+                                        new_msg.payload.len()
+                                );*/
+
+                                self.index += 1; // increment index for next message
+                                to_consume += new_to_consume;
+                                self.buffered_msgs
+                                    .push_back((new_msg, src_addr.as_socket().unwrap()));
+                            }
+                            Err(Error {
+                                kind: ErrorKind::NotEnoughData(_),
+                            }) => {
+                                // todo: use that number for next read to get the buffers aligned again
+                                // otherwise it can happen that constantly 2 read calls are needed
+                                // to get a message (well, only if the messages are so large that the fragment
+                                // plus the new dont fit into the 64kb)
+                                break;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    self.log,
+                                    "recv_msg inner: error parsing DLT message: {} at index {}, buffered msgs: {}, data_len:{}, to_consume:{}, rem_data.len:{} outer msg: {:?}",
+                                    e,
+                                    self.index, self.buffered_msgs.len(),data_len, to_consume, rem_data.len(),
+                                     &msg
+                                );
+
+                                // invalid message, so we cannot really trust the remaining data
+                                to_consume = data_len; // consume all remaining data
+                                                       //src_addr_buffer.clear(); // clear the buffer for this src_addr
+
+                                // TODO we might have to search for the next valid message start (DLTv1 header pattern)
+                            }
+                        }
+                    }
+                }
+                if src_addr_buffer.is_empty() {
+                    let to_keep = &recvd_data[to_consume..];
+                    if !to_keep.is_empty() {
+                        src_addr_buffer.extend_from_slice(to_keep);
+                    }
+                } else {
+                    src_addr_buffer.drain(..to_consume);
                 }
                 Ok((msg, src_addr.as_socket().unwrap()))
             }
@@ -263,16 +518,26 @@ impl IpDltMsgReceiver {
             }) => {
                 // this is not a valid DLT message, so we need to handle it as a fragmented message
                 // or an invalid message
-                src_addr_buffer.extend_from_slice(recvd_data);
+                let recvd_data_len = recvd_data.len();
+                if src_addr_buffer.is_empty() {
+                    src_addr_buffer.extend_from_slice(recvd_data);
+                } // else we already extended the buffer above
+                  //src_addr_buffer.extend_from_slice(recvd_data);
+                  // it's expected for a tcp stream to receive fragments
                 Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("not enough data (missing {missing}), storing fragment"),
+                    format!("not enough data (missing {missing} recvd={recvd_data_len}), storing fragment"),
                 ))
             }
-            _ => {
+            Err(e) => {
+                warn!(
+                    self.log,
+                    "recv_msg: error parsing DLT message: {} at index {}", e, self.index
+                );
                 src_addr_buffer.clear(); // invalid, clear (if any)
+
                 Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
+                    std::io::ErrorKind::InvalidInput,
                     "stdh.len too small",
                 ))
             }

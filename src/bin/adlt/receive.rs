@@ -23,7 +23,7 @@ use adlt::{
         SERVICE_ID_SET_DEFAULT_TRACE_STATUS, SERVICE_ID_SET_LOG_LEVEL,
         SERVICE_ID_SET_TIMING_PACKETS, SERVICE_ID_SET_VERBOSE_MODE,
     },
-    utils::{buf_as_hex_to_io_write, IpDltMsgReceiver, RecvMode},
+    utils::{buf_as_hex_to_io_write, set_max_buffer_size, IpDltMsgReceiver, RecvMode},
 };
 use clap::{Arg, ArgMatches, Command};
 use slog::{debug, error, info, warn};
@@ -378,13 +378,14 @@ pub fn receive<W: std::io::Write + Send + 'static>(
                     Err(e) => {
                         match e.kind() {
                             // match Resource temporarily unavailable
-                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::InvalidData => {
                                 // no message received, continue
                                 continue;
                             }
                             _ => {
-                                info!(log, "error receiving message: {}", e);
+                                info!(log, "error receiving message: {} e.kind={} recv_mode={:?}", e, e.kind(), ip_receiver.recv_mode);
                                 // TODO exit on specific errors! break; // exit on error
+                                // break;
                             }
                         }
                     }
@@ -492,30 +493,6 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     Ok(nr_msg_received)
 }
 
-fn set_max_send_buffer_size(stream: &socket2::Socket, size: usize) -> std::io::Result<usize> {
-    let mut try_size = size;
-    while try_size > 64 * 1024 {
-        // set the send buffer size to 64kb
-        match stream.set_send_buffer_size(try_size) {
-            Ok(()) => {
-                return Ok(try_size);
-            }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::InvalidInput {
-                    // the size is too large, try a smaller size
-                    try_size /= 2;
-                } else {
-                    return Err(e);
-                }
-            }
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        format!("Failed to set send buffer size {try_size}/{size} bytes"),
-    ))
-}
-
 fn forward_serve_via_tcp(
     log: slog::Logger,
     stop_forward: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -583,7 +560,7 @@ fn forward_serve_via_tcp(
                             error!(log, "Failed to set stream to non-blocking: {}", e);
                             continue;
                         }
-                        match set_max_send_buffer_size(&viewer, 64 * 1024 * 1000) {
+                        match set_max_buffer_size(&viewer, true, 64 * 1024 * 1000) {
                             Ok(size) => {
                                 info!(log, "Set send buffer size to {} bytes", size);
                             }
@@ -810,13 +787,16 @@ fn forward_serve_via_tcp(
         })
         .unwrap();
 
+    let mut send_buf = Vec::with_capacity(64 * 1024); // 64kb send buffer that we use for a message
+                                                      // this is not to optimize for the case with multiple viewers but to avoid multiple write calls to the ip streams
+
     loop {
-        // todo or better use the rx_for_forward_thread Disconnected to not loose messages?
         // need to receive messages from the channel, forward them to the tcp clients and put it to the tx channel
         match rx_for_forward_thread.recv() {
             Ok((msg, addr)) => {
                 //info!(log, "Forwarding message to {:?}", addr);
                 let mut failed_viewers = Vec::new();
+                send_buf.clear();
 
                 for viewer in viewers.lock().unwrap().iter_mut() {
                     // send the message to all connected viewers (dlt-viewer doesn't expect the storage header)
@@ -860,20 +840,107 @@ fn forward_serve_via_tcp(
                         // skip this viewer
                         continue;
                     }
-                    match DltStandardHeader::to_write(
-                        &mut viewer.stream,
-                        &msg.standard_header,
-                        &msg.extended_header,
-                        Some(msg.ecu),
-                        None, // session_id = None, todo
-                        if msg.standard_header.has_timestamp() {
-                            Some(msg.timestamp_dms)
-                        } else {
-                            None
-                        },
-                        &msg.payload,
-                    ) {
-                        Ok(_) => {}
+
+                    if send_buf.is_empty() {
+                        // prepare the send buffer with the DLT standard header and the message
+                        if let Err(e) = DltStandardHeader::to_write(
+                            &mut send_buf,
+                            &msg.standard_header,
+                            &msg.extended_header,
+                            Some(msg.ecu),
+                            None, // session_id = None, todo
+                            if msg.standard_header.has_timestamp() {
+                                Some(msg.timestamp_dms)
+                            } else {
+                                None
+                            },
+                            &msg.payload,
+                        ) {
+                            error!(
+                                log,
+                                "Error preparing message for viewer {:?}: {}",
+                                viewer.addr.as_socket_ipv4(),
+                                e
+                            );
+                            send_buf.clear(); // clear the buffer to avoid sending partial message
+                            continue; // skip this viewer
+                        }
+                        debug_assert_eq!(
+                            msg.standard_header.len as usize,
+                            send_buf.len(),
+                            "The send buffer length should match the standard header length"
+                        );
+                        /*assert_eq!(
+                            0xff,
+                            send_buf[msg.standard_header.len as usize - 1],
+                            "The send buffer should end with 0xff for test msgs"
+                        );*/
+                        #[cfg(debug_assertions)]
+                        match parse_dlt_with_std_header(&send_buf, 0, msg.ecu) {
+                            Ok((to_consume, _)) => {
+                                assert_eq!(to_consume, send_buf.len(), "The send buffer should be fully consumed by the DLT standard header parsing");
+                            }
+                            Err(e) => {
+                                panic!("Error parsing DLT message with standard header: {e}");
+                            }
+                        }
+                    }
+
+                    /* TODO: is the write_all() sufficient for non-blocking sockets?
+                    let mut written = 0;
+                    while written < send_buf.len() {
+                        match viewer.stream.write(&send_buf[written..]) {
+                            Ok(0) => {
+                                // no bytes written, connection closed
+                                error!(
+                                    log,
+                                    "Viewer {:?} closed the connection",
+                                    viewer.addr.as_socket_ipv4()
+                                );
+                                failed_viewers.push(viewer.addr.clone());
+                                break; // exit the loop for this viewer
+                            }
+                            Ok(n) => {
+                                written += n;
+                                if written < send_buf.len() {
+                                    info!(
+                                        log,
+                                        "Viewer {:?} wrote {}/{}/{} bytes, waiting to write more",
+                                        viewer.addr.as_socket_ipv4(),
+                                        n,
+                                        written,
+                                        send_buf.len()
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                if e.kind() == std::io::ErrorKind::WouldBlock {
+                                    // would block, try again later
+                                    info!(
+                                        log,
+                                        "Viewer {:?} would block, retrying to send message",
+                                        viewer.addr.as_socket_ipv4()
+                                    );
+                                    std::thread::sleep(std::time::Duration::from_millis(50));
+                                    continue; // retry sending
+                                } else {
+                                    error!(
+                                        log,
+                                        "Error sending message to viewer {:?}: {}",
+                                        viewer.addr.as_socket_ipv4(),
+                                        e
+                                    );
+                                    failed_viewers.push(viewer.addr.clone());
+                                    break; // exit the loop for this viewer
+                                }
+                            }
+                        }
+                    }*/
+
+                    match viewer.stream.write_all(&send_buf) {
+                        Ok(()) => {
+                            // info!(log, "Sent message to viewer {:?}", viewer.addr.as_socket_ipv4());
+                        }
                         Err(e) => {
                             error!(
                                 log,
@@ -883,6 +950,7 @@ fn forward_serve_via_tcp(
                             );
                             // remove the viewer from the list
                             failed_viewers.push(viewer.addr.clone());
+                            continue; // skip this viewer
                         }
                     }
                 }

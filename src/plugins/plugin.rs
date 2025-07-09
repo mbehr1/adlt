@@ -1,3 +1,4 @@
+#![allow(non_snake_case)] // for cmdCtx (that should be json serialized like that)
 use std::{
     any::Any,
     error::Error,

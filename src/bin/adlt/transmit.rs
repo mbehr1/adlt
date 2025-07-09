@@ -161,7 +161,11 @@ pub fn transmit(
             buf.len()
         );
 
-        socket.send_to(buf, &send_to_addr).map_err(|e| {
+        // set last byte to ff to ease checking whether a payload is complete for these test messages
+        let buf_len = buf.len();
+        buf[buf_len - 1] = 0xff;
+
+        let sent_bytes = socket.send_to(buf, &send_to_addr).map_err(|e| {
             format!(
                 "Failed to send_to DLT message #{} (len={}): {}",
                 nr_msgs_sent,
@@ -169,6 +173,11 @@ pub fn transmit(
                 e
             )
         })?;
+        assert_eq!(
+            sent_bytes,
+            buf.len(),
+            "Sent bytes do not match DLT message length"
+        );
         nr_msgs_sent += 1;
         // sleep a bit to avoid flooding the network
         std::thread::sleep(std::time::Duration::from_millis(1));
