@@ -356,7 +356,9 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         })?;
     }
 
+    #[cfg(debug_assertions)]
     let adlt = DltChar4::from_buf(b"ADLT");
+    #[cfg(debug_assertions)]
     let mut next_adlt_timestamp = 0;
 
     // spawn a thread to receive messages as eg. write/flush to zip file takes too much time
@@ -399,6 +401,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     for (msg, _msg_from) in rx_from_forward_thread {
         // verify the consistency of the message TODO for test purposes only. define via parameter!
         nr_msg_received += 1;
+        #[cfg(debug_assertions)]
         if msg.ecu == adlt {
             if msg.timestamp_dms != next_adlt_timestamp {
                 info!(
