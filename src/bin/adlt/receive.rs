@@ -989,8 +989,6 @@ fn forward_serve_via_tcp(
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddrV4;
-
     use super::*;
     use crate::transmit::create_send_socket;
     use adlt::{
@@ -1011,7 +1009,6 @@ mod tests {
 
     #[test]
     fn params_wrong_port() {
-        let logger = new_logger();
         let arg_vec = vec!["t", "receive", "-p66666"];
         let sub_c = add_subcommand(Command::new("t")).try_get_matches_from(arg_vec);
         assert!(sub_c.is_err());
@@ -1073,6 +1070,47 @@ mod tests {
                 let r = receive(&logger, sub_m, std::io::stdout(), Some(stop_receive_t));
                 assert!(r.is_ok());
                 r.unwrap()
+            });
+
+            let logger_tr = logger.clone();
+            let stop_receive_tr = stop_receive.clone();
+            let tr = s.spawn(move || {
+                let logger = logger_tr;
+                let stop_receive = stop_receive_tr;
+                let recv = IpDltMsgReceiver::new(
+                    logger.clone(),
+                    0,
+                    RecvMode::Tcp,
+                    socket2::InterfaceIndexOrAddress::Address(Ipv4Addr::new(127, 0, 0, 1)).into(),
+                    std::net::SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), forward_port).into(),
+                );
+                assert!(
+                    recv.is_ok(),
+                    "Failed to create IpDltMsgReceiver: {:?}",
+                    recv.err()
+                );
+                let mut recv = recv.unwrap();
+                let mut nr_msgs_received = 0usize;
+                while !stop_receive.load(std::sync::atomic::Ordering::SeqCst) {
+                    match recv.recv_msg() {
+                        Ok((_msg, _src_addr)) => {
+                            nr_msgs_received += 1;
+                        }
+                        Err(e) => {
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::ConnectionRefused
+                            {
+                                // no data available, continue
+                                std::thread::sleep(std::time::Duration::from_millis(1));
+                            } else {
+                                error!(logger, "Error receiving message: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+                info!(logger, "received {} messages via TCP", nr_msgs_received);
+                nr_msgs_received
             });
 
             // send a test message to the UDP port
@@ -1156,6 +1194,10 @@ mod tests {
             let nr_msg_received = r.unwrap();
             assert_eq!(nr_msg_received, nr_msgs_sent);
             info!(logger, "Received {} messages", nr_msg_received);
+            let r = tr.join();
+            assert!(r.is_ok());
+            let nr_msg_received = r.unwrap();
+            assert_eq!(nr_msg_received, nr_msgs_sent);
         });
 
         // check if the file exists and is not empty
