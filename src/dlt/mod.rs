@@ -1870,8 +1870,9 @@ pub fn parse_dlt_with_std_header(
         let stdh = DltStandardHeader::from_buf(&data[0..remaining]).expect("no valid stdheader!");
         if stdh.dlt_vers() != 1u8 {
             return Err(Error::new(ErrorKind::InvalidData(format!(
-                "invalid DLT standard header version {}",
-                stdh.dlt_vers()
+                "invalid DLT standard header version {}, {:?}",
+                stdh.dlt_vers(),
+                &data[0..DLT_MIN_STD_HEADER_SIZE]
             ))));
         }
         let std_ext_header_size = stdh.std_ext_header_size();

@@ -40,6 +40,7 @@ pub mod unzip;
 pub mod progress;
 
 mod ipdltmsgreceiver;
+pub use self::ipdltmsgreceiver::set_max_buffer_size;
 pub use self::ipdltmsgreceiver::IpDltMsgReceiver;
 pub use self::ipdltmsgreceiver::RecvMode;
 
