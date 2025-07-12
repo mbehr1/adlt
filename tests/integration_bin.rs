@@ -148,6 +148,28 @@ fn bin_remote_invalidport() {
     assert.failure();
 }
 
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn bin_transmit_invalidport() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let assert = cmd
+        .args(["transmit", "-v", "127.0.0.1", "-u", "-p", "0"])
+        .assert();
+    println!("{:?}", assert.get_output());
+    assert.failure();
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn bin_receive_invalidport() {
+    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let assert = cmd
+        .args(["receive", "-v", "127.0.0.1", "-u", "-p", "66666"])
+        .assert();
+    println!("{:?}", assert.get_output());
+    assert.failure();
+}
+
 #[test]
 fn bin_remote_validport_listen() {
     let port: u16 = pick_unused_port().expect("no ports free");
