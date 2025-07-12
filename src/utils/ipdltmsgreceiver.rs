@@ -15,13 +15,19 @@ use crate::dlt::{
     parse_dlt_with_std_header, DltChar4, DltMessage, DltMessageIndexType, Error, ErrorKind,
 };
 
+/// Set the maximum buffer size for a socket, trying to set it to the given size.
+///
+/// If the size is too large, it will try to halve the size until it succeeds or reaches a minimum size.
+/// Returns the actual size set on the socket or an error if it fails to set the size.
+///
+/// size needs to be minimum 16kb, otherwise it will fail.
 pub fn set_max_buffer_size(
     socket: &socket2::Socket,
     send: bool,
     size: usize,
 ) -> std::io::Result<usize> {
     let mut try_size = size;
-    while try_size > 64 * 1024 {
+    while try_size >= 16 * 1024 {
         // set the send buffer size to 64kb
         match if send {
             socket.set_send_buffer_size(try_size)
@@ -45,6 +51,103 @@ pub fn set_max_buffer_size(
         std::io::ErrorKind::InvalidInput,
         format!("Failed to set send buffer size {try_size}/{size} bytes"),
     ))
+}
+
+pub fn create_send_socket(
+    send_mode: RecvMode,
+    send_addr: SocketAddr,
+    interface: InterfaceIndexOrAddress,
+) -> Result<socket2::Socket, std::io::Error> {
+    let socket = match send_mode {
+        RecvMode::Tcp => {
+            panic!("TCP server not implemented yet");
+        }
+        RecvMode::Udp => {
+            // Initialize UDP receiver here if needed
+            let ip_addr = send_addr.ip();
+            if ip_addr.is_multicast() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Provided address is a multicast address",
+                )); // todo auto enable multicast if not set?
+            }
+            let socket = match ip_addr {
+                IpAddr::V4(_) => Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
+                    .expect("ipv4 dgram socket"),
+                IpAddr::V6(_) => {
+                    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
+                        .expect("ipv6 dgram socket");
+                    socket.set_only_v6(true)?;
+                    socket
+                }
+            };
+            socket.set_reuse_address(true).expect("reuse addr error");
+            socket
+        }
+        RecvMode::UdpMulticast => {
+            let ip_addr = send_addr.ip();
+            if !ip_addr.is_multicast() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Provided address is not a multicast address",
+                ));
+            }
+            let socket = match ip_addr {
+                IpAddr::V4(ref mdns_v4) => {
+                    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
+                        .expect("ipv4 dgram socket");
+                    socket
+                        .join_multicast_v4_n(mdns_v4, &interface)
+                        .expect("join_multicast_v4_n");
+                    socket
+                }
+                IpAddr::V6(ref mdns_v6) => match interface {
+                    InterfaceIndexOrAddress::Index(index) => {
+                        let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
+                            .expect("ipv6 dgram socket");
+                        socket.set_only_v6(true)?;
+                        socket
+                            .join_multicast_v6(mdns_v6, index)
+                            .expect("join_multicast_v6");
+                        socket
+                    }
+                    _ => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "IPv6 multicast requires an interface index",
+                        ));
+                    }
+                },
+            };
+            socket.set_reuse_address(true).expect("reuse addr error");
+            socket
+        }
+    };
+
+    // set read timeout
+    socket // TODO which timeout to choose?
+        .set_write_timeout(Some(std::time::Duration::from_millis(500)))
+        .expect("set write timeout error");
+
+    socket
+        .set_nonblocking(false)
+        .expect("set non-blocking(false) error");
+
+    set_max_buffer_size(&socket, true, u16::MAX as usize).expect("set send buffer size error");
+
+    println!(
+        "Created send socket for {}://{}:{} with send_buffer_size={} bytes",
+        match send_mode {
+            RecvMode::Udp => "UDP",
+            RecvMode::UdpMulticast => "UDP Multicast",
+            RecvMode::Tcp => "TCP",
+        },
+        send_addr.ip(),
+        send_addr.port(),
+        socket.send_buffer_size().unwrap_or(0)
+    );
+
+    Ok(socket)
 }
 
 #[derive(PartialEq, Debug)]
@@ -591,7 +694,11 @@ impl Iterator for IpDltMsgReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dlt::DltStandardHeader;
+    use crate::dlt_args;
+    use portpicker::pick_unused_port;
     use slog::{o, Drain, Logger};
+    use std::io::IoSlice;
     use std::net::Ipv4Addr;
 
     fn new_logger() -> Logger {
@@ -615,6 +722,118 @@ mod tests {
         let interface = InterfaceIndexOrAddress::Address("127.0.0.1".parse().unwrap());
         let receiver = IpDltMsgReceiver::new(new_logger(), 42, RecvMode::Udp, interface, addr);
         assert!(receiver.is_ok());
+    }
+
+    #[test]
+    fn test_fragmented_udp_recv() {
+        let port = pick_unused_port().expect("no ports free");
+        let logger = new_logger();
+        let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
+        let interface = InterfaceIndexOrAddress::Address("127.0.0.1".parse().unwrap());
+        let receiver = IpDltMsgReceiver::new(logger.clone(), 1, RecvMode::Udp, interface, addr);
+        let mut receiver = receiver.unwrap();
+        std::thread::scope(|s| {
+            let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop_receive_r = stop_receive.clone();
+
+            let r = s.spawn(move || {
+                let stop_receive = stop_receive_r;
+                let mut rcvd_nr_msgs = 0;
+                while !stop_receive.load(std::sync::atomic::Ordering::SeqCst) {
+                    let result = receiver.recv_msg();
+                    if let Ok((msg, src_addr)) = &result {
+                        println!("Received message: {:?} from {:?}", msg, src_addr);
+                        rcvd_nr_msgs += 1;
+                        if rcvd_nr_msgs >= 4 {
+                            break;
+                        } else {
+                            continue;
+                        }
+                    }
+                    println!("No message received, got error: {:?}", result.err());
+                }
+                rcvd_nr_msgs
+            });
+
+            // send a test msg to the udp port:
+            let send_addr = std::net::SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port).into();
+            let socket = create_send_socket(
+                RecvMode::Udp,
+                send_addr,
+                socket2::InterfaceIndexOrAddress::Index(0),
+            )
+            .unwrap();
+            let send_to_addr = SockAddr::from(send_addr);
+            let mut nr_msgs_sent = 0usize;
+            let (noar, payload) = dlt_args!(nr_msgs_sent).unwrap();
+            let msg = DltMessage::get_testmsg_with_payload(true, noar, &payload);
+
+            let mut buf = Vec::with_capacity(u16::MAX as usize);
+            let mut buf_writer = std::io::Cursor::new(&mut buf);
+            DltStandardHeader::to_write(
+                &mut buf_writer,
+                &msg.standard_header,
+                &msg.extended_header,
+                Some(msg.ecu),
+                None,                      // session_id = None, todo
+                Some(nr_msgs_sent as u32), // use message count as timestamp
+                &payload,
+            )
+            .expect("Failed to write DLT message: {e}");
+
+            // let full_msg_len = buf_writer.position() as usize;
+            let buf = buf_writer.into_inner();
+
+            // two concacted full msgs and the first byte of 3rd msg
+            socket
+                .send_to_vectored(
+                    &[
+                        IoSlice::new(&buf[..]),
+                        IoSlice::new(&buf[..]),
+                        IoSlice::new(&buf[0..1]),
+                    ],
+                    &send_to_addr,
+                )
+                .unwrap();
+            info!(
+                logger,
+                "Sent message to {:?}",
+                send_to_addr.as_socket_ipv4(),
+            );
+            nr_msgs_sent += 2;
+
+            // rest of the 3rd msg and start of 4th fragmented
+            let buf_len = buf.len();
+            socket
+                .send_to_vectored(
+                    &[IoSlice::new(&buf[1..]), IoSlice::new(&buf[0..buf_len - 1])],
+                    &send_to_addr,
+                )
+                .unwrap();
+            info!(
+                logger,
+                "Sent fragmented message to {:?}",
+                send_to_addr.as_socket_ipv4(),
+            );
+            nr_msgs_sent += 1;
+            // rest of 4th msg fragmented: (this is weird for udp, but we test it anyway)
+            socket.send_to(&buf[buf_len - 1..], &send_to_addr).unwrap();
+            info!(
+                logger,
+                "Sent 2nd fragmented message to {:?}",
+                send_to_addr.as_socket_ipv4(),
+            );
+            nr_msgs_sent += 1;
+
+            // wait 100ms (to give the receiver time to start/process the messages)
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            stop_receive.store(true, std::sync::atomic::Ordering::SeqCst);
+            let r = r.join().unwrap();
+            assert_eq!(
+                r, nr_msgs_sent,
+                "Expected to receive {nr_msgs_sent} messages, but got {r}"
+            );
+        });
     }
 
     #[test]
