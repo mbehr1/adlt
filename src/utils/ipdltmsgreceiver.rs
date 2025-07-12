@@ -598,10 +598,24 @@ impl IpDltMsgReceiver {
                                 );
 
                                 // invalid message, so we cannot really trust the remaining data
-                                to_consume = data_len; // consume all remaining data
-                                                       //src_addr_buffer.clear(); // clear the buffer for this src_addr
-
-                                // TODO we might have to search for the next valid message start (DLTv1 header pattern)
+                                // consume all data until the next valid DLT standard header
+                                let idx_first_pos_header = (&rem_data[1..]).iter().position(|&b| {
+                                    (((b >> 5) & 0x07) == 1) || (((b >> 5) & 0x07) == 2)
+                                });
+                                if let Some(idx) = idx_first_pos_header {
+                                    warn!(
+                                        self.log,
+                                        "recv_msg inner: found next possible header start at idx={idx}",
+                                    );
+                                    to_consume += 1 + idx; // consume just the current byte till the next valid header
+                                } else {
+                                    warn!(
+                                        self.log,
+                                        "recv_msg inner: found no next possible header start. draining {data_len} bytes",
+                                    );
+                                    to_consume += data_len;
+                                }
+                                break;
                             }
                         }
                     }
@@ -635,9 +649,37 @@ impl IpDltMsgReceiver {
             Err(e) => {
                 warn!(
                     self.log,
-                    "recv_msg: error parsing DLT message: {} at index {}", e, self.index
+                    "recv_msg: error parsing DLT message: {} at index {} data.len={}",
+                    e,
+                    self.index,
+                    data.len()
                 );
-                src_addr_buffer.clear(); // invalid, clear (if any)
+
+                // now we prune data from start of the buffer to the first byte that could be a valid DLT standard header:
+                // we check at least the first byte to be htyp with DLT version 1 or 2
+
+                // remove from src_addr_buffer until we find a byte with 0x1<<5 or 0x2<<5 being set:
+                let idx_first_pos_header = (&data[1..])
+                    .iter()
+                    .position(|&b| (((b >> 5) & 0x07) == 1) || (((b >> 5) & 0x07) == 2));
+                if let Some(idx) = idx_first_pos_header {
+                    warn!(
+                        self.log,
+                        "recv_msg: found next possible header start at idx={idx}",
+                    );
+                    if src_addr_buffer.is_empty() {
+                        src_addr_buffer.extend_from_slice(recvd_data);
+                    }
+                    src_addr_buffer.drain(0..idx + 1);
+                    // we could optimize the extend_from_slice&drain
+                } else {
+                    warn!(
+                        self.log,
+                        "recv_msg: found no possible header start. draining {} bytes",
+                        data.len()
+                    );
+                    src_addr_buffer.clear(); // if any
+                }
 
                 Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -799,7 +841,8 @@ mod tests {
             let send_to_addr = SockAddr::from(send_addr);
             let mut nr_msgs_sent = 0usize;
             let (noar, payload) = dlt_args!(nr_msgs_sent).unwrap();
-            let msg = DltMessage::get_testmsg_with_payload(true, noar, &payload);
+            let msg =
+                DltMessage::get_testmsg_with_payload(cfg!(target_endian = "big"), noar, &payload);
 
             let mut buf = Vec::with_capacity(u16::MAX as usize);
             let mut buf_writer = std::io::Cursor::new(&mut buf);
@@ -866,6 +909,145 @@ mod tests {
                 "Sent 3rd fragmented message to {:?}",
                 send_to_addr.as_socket_ipv4(),
             );
+            nr_msgs_sent += 1;
+
+            // wait 100ms (to give the receiver time to start/process the messages)
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            stop_receive.store(true, std::sync::atomic::Ordering::SeqCst);
+            let r = r.join().unwrap();
+            assert_eq!(
+                r, nr_msgs_sent,
+                "Expected to receive {nr_msgs_sent} messages, but got {r}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_corrupt_tcp_recv() {
+        let port = pick_unused_port().expect("no ports free");
+        let logger = new_logger();
+        let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
+        let interface = InterfaceIndexOrAddress::Address("127.0.0.1".parse().unwrap());
+        let receiver = IpDltMsgReceiver::new(logger.clone(), 1, RecvMode::Tcp, interface, addr);
+        let mut receiver = receiver.unwrap();
+        std::thread::scope(|s| {
+            let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop_receive_r = stop_receive.clone();
+
+            let r = s.spawn(move || {
+                let stop_receive = stop_receive_r;
+                let mut rcvd_nr_msgs = 0;
+                while !stop_receive.load(std::sync::atomic::Ordering::SeqCst) {
+                    let result = receiver.recv_msg();
+                    if let Ok((msg, src_addr)) = &result {
+                        println!("Received message: {:?} from {:?}", msg, src_addr);
+                        rcvd_nr_msgs += 1;
+                    }
+                    println!("No message received, got error: {:?}", result.err());
+                }
+                rcvd_nr_msgs
+            });
+
+            // create a TCP listen port:
+            let listener = socket2::Socket::new(Domain::IPV4, Type::STREAM, None)
+                .expect("Failed to create TCP socket");
+            let address: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+            let address: SockAddr = address.into();
+
+            listener.set_reuse_address(true).unwrap_or_else(|_| {
+                panic!(
+                    "Failed to set reuse address on TCP socket for port {:?}",
+                    address.as_socket_ipv4()
+                )
+            });
+            listener.bind(&address).unwrap_or_else(|_| {
+                panic!(
+                    "Failed to bind TCP socket to port {:?}",
+                    address.as_socket_ipv4()
+                )
+            });
+            listener.listen(1).expect("Failed to listen on TCP socket");
+            // set the listener to non-blocking mode
+            listener
+                .set_nonblocking(true)
+                .expect("Failed to set non-blocking mode");
+
+            // wait 100ms (to give the receiver time to connect)
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let send_socket = match listener.accept() {
+                Ok((send_socket, _)) => {
+                    info!(
+                        logger,
+                        "TCP listener accepted connection from {:?}",
+                        send_socket.peer_addr().unwrap()
+                    );
+                    // set the socket to non-blocking mode
+                    send_socket
+                        .set_nonblocking(true)
+                        .expect("Failed to set non-blocking mode on accepted socket");
+                    set_max_buffer_size(&send_socket, false, 64*1024*1000) // 64MB
+                        .expect("Failed to set send buffer size on accepted send_socket");
+                    send_socket
+                }
+                Err(e) => {
+                    panic!("Failed to accept TCP connection: {}", e);
+                }
+            };
+            let (noar, payload) = dlt_args!(0xdeafbeefu32).unwrap();
+            let msg =
+                DltMessage::get_testmsg_with_payload(cfg!(target_endian = "big"), noar, &payload);
+
+            let mut buf = Vec::with_capacity(u16::MAX as usize);
+            let mut buf_writer = std::io::Cursor::new(&mut buf);
+            let mut nr_msgs_sent = 0usize;
+            DltStandardHeader::to_write(
+                &mut buf_writer,
+                &msg.standard_header,
+                &msg.extended_header,
+                Some(msg.ecu),
+                None, // session_id = None, todo
+                Some(nr_msgs_sent as u32),
+                &payload,
+            )
+            .expect("Failed to write DLT message: {e}");
+
+            // let full_msg_len = buf_writer.position() as usize;
+            let buf = buf_writer.into_inner();
+            // let buf_len = buf.len();
+
+            // send corrupt msgs (and one proper msg) to the tcp port:
+            // a corrupt header with len 0...
+            let std_hdr = DltStandardHeader {
+                htyp: 0x1u8 << 5, // DLTv1 standard header type 1 << 5
+                mcnt: (nr_msgs_sent % 256) as u8,
+                len: 0,
+            };
+            let b2 = &u16::to_be_bytes(std_hdr.len);
+            let b1 = &[std_hdr.htyp, std_hdr.mcnt, b2[0], b2[1]];
+            // send as two sep. "packets"
+            send_socket.send(b1).expect("msg header send failed");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            send_socket.send(&buf).expect("Failed to send DLT message");
+            nr_msgs_sent += 1;
+
+            // send as one pkg (to simulate a slower receiver)
+            send_socket
+                .send_vectored(&[IoSlice::new(b1), IoSlice::new(&buf[..])])
+                .expect("Failed to send DLT message via vectored send");
+            nr_msgs_sent += 1;
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            // send a 3rd, corrupt and 4th message
+            send_socket
+                .send_vectored(&[IoSlice::new(buf), IoSlice::new(b1), IoSlice::new(buf)])
+                .expect("Failed to send DLT message");
+            nr_msgs_sent += 2;
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            // send a 5th, proper message (TODO: this is currently needed as otherwise the last valid message is not returned
+            // if prev data was drained
+            send_socket
+                .send_vectored(&[IoSlice::new(&buf[..])])
+                .expect("Failed to send DLT message");
             nr_msgs_sent += 1;
 
             // wait 100ms (to give the receiver time to start/process the messages)
