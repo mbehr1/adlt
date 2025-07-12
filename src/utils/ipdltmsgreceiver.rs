@@ -599,7 +599,7 @@ impl IpDltMsgReceiver {
 
                                 // invalid message, so we cannot really trust the remaining data
                                 // consume all data until the next valid DLT standard header
-                                let idx_first_pos_header = (&rem_data[1..]).iter().position(|&b| {
+                                let idx_first_pos_header = rem_data[1..].iter().position(|&b| {
                                     (((b >> 5) & 0x07) == 1) || (((b >> 5) & 0x07) == 2)
                                 });
                                 if let Some(idx) = idx_first_pos_header {
@@ -659,7 +659,7 @@ impl IpDltMsgReceiver {
                 // we check at least the first byte to be htyp with DLT version 1 or 2
 
                 // remove from src_addr_buffer until we find a byte with 0x1<<5 or 0x2<<5 being set:
-                let idx_first_pos_header = (&data[1..])
+                let idx_first_pos_header = data[1..]
                     .iter()
                     .position(|&b| (((b >> 5) & 0x07) == 1) || (((b >> 5) & 0x07) == 2));
                 if let Some(idx) = idx_first_pos_header {
