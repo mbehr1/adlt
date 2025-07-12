@@ -782,11 +782,6 @@ mod tests {
                     if let Ok((msg, src_addr)) = &result {
                         println!("Received message: {:?} from {:?}", msg, src_addr);
                         rcvd_nr_msgs += 1;
-                        if rcvd_nr_msgs >= 4 {
-                            break;
-                        } else {
-                            continue;
-                        }
                     }
                     println!("No message received, got error: {:?}", result.err());
                 }
@@ -859,6 +854,16 @@ mod tests {
             info!(
                 logger,
                 "Sent 2nd fragmented message to {:?}",
+                send_to_addr.as_socket_ipv4(),
+            );
+            nr_msgs_sent += 1;
+
+            // now only a fragment (from an assumed empty buffer)
+            socket.send_to(&buf[0..4], &send_to_addr).unwrap();
+            socket.send_to(&buf[4..], &send_to_addr).unwrap();
+            info!(
+                logger,
+                "Sent 3rd fragmented message to {:?}",
                 send_to_addr.as_socket_ipv4(),
             );
             nr_msgs_sent += 1;
