@@ -50,7 +50,8 @@ const DLT_STD_HDR_VERSION: u8 = 0x1 << 5; // 3 bits (5,6,7) max.  [Dlt299]
 pub fn transmit(
     log: &slog::Logger,
     matches: &ArgMatches,
-) -> Result<(), Box<dyn std::error::Error>> {
+    stop_transmit_param: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<usize, Box<dyn std::error::Error>> {
     let hostname = matches.get_one::<String>("hostname").unwrap();
     let port = matches.get_one::<u16>("port").unwrap_or(&3490);
     let udp_multicast = matches.get_flag("udp_multicast");
@@ -89,12 +90,17 @@ pub fn transmit(
     );
 
     // install ctrl+c handler
-    let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let stop_recv_clone = stop_receive.clone();
+    let stop_transmit = if let Some(stop_transmit_param) = &stop_transmit_param {
+        stop_transmit_param.clone()
+    } else {
+        // create a new stop receive flag
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
+    };
+    let stop_transmit_clone = stop_transmit.clone();
     let log_c = log.clone();
     ctrlc::set_handler(move || {
         info!(log_c, "Ctrl+C received, stopping receiver...");
-        stop_receive.store(true, std::sync::atomic::Ordering::SeqCst);
+        stop_transmit.store(true, std::sync::atomic::Ordering::SeqCst);
     })?;
 
     // create send socket:
@@ -115,7 +121,7 @@ pub fn transmit(
     // init a vec with ascending numbers:
     let payload_buf = (0..u16::MAX).map(|u| u as u8).collect::<Vec<u8>>();
 
-    while !stop_recv_clone.load(std::sync::atomic::Ordering::SeqCst) {
+    while !stop_transmit_clone.load(std::sync::atomic::Ordering::SeqCst) {
         // create a test DLT message (standard-header with ext header and payload size = nr_msgs_sent % u16::MAX)
         let std_hdr = adlt::dlt::DltStandardHeader {
             htyp: DLT_STD_HDR_VERSION, // dlt_args! uses machine endianess! | DLT_STD_HDR_BIG_ENDIAN,
@@ -185,5 +191,49 @@ pub fn transmit(
 
     println!("Sent {nr_msgs_sent} test DLT messages to {hostname}:{port}");
 
-    Ok(())
+    Ok(nr_msgs_sent)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portpicker::pick_unused_port;
+    use slog::{o, Drain, Logger};
+
+    fn new_logger() -> Logger {
+        let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        Logger::root(drain, o!())
+    }
+
+    #[test]
+    fn test_transmit() {
+        let port = pick_unused_port().expect("no ports free");
+        let port_str = port.to_string();
+        let logger = new_logger();
+        let arg_vec = vec!["t", "transmit", "127.0.0.1", "-u", "-p", &port_str];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
+
+        std::thread::scope(|s| {
+            let stop_transmit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop_transmit_t = stop_transmit.clone();
+
+            let logger_t = logger.clone();
+            let t = s.spawn(move || {
+                let logger = logger_t;
+                let r = transmit(&logger, sub_m, Some(stop_transmit_t));
+                assert!(r.is_ok());
+                r.unwrap()
+            });
+
+            // wait 100ms
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            stop_transmit.store(true, std::sync::atomic::Ordering::SeqCst);
+            let r = t.join();
+            assert!(r.is_ok());
+            let nr_msgs_sent = r.unwrap();
+            assert!(nr_msgs_sent > 0, "No messages sent");
+        });
+    }
 }
