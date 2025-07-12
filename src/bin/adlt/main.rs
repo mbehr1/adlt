@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None,
         )
         .map(|_x| ()), // dont return anything here
-        Some(("transmit", sub_m)) => transmit::transmit(&log, sub_m),
+        Some(("transmit", sub_m)) => transmit::transmit(&log, sub_m, None).map(|_x| ()), // dont return anything here,
         _ => Err(Box::new(io::Error::new(
             io::ErrorKind::Unsupported,
             "unknown subcommand",
