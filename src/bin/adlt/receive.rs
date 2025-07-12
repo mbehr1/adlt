@@ -993,10 +993,10 @@ fn forward_serve_via_tcp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transmit::create_send_socket;
     use adlt::{
         dlt::{DltExtendedHeader, DLT_MIN_STD_HEADER_SIZE},
         dlt_args,
+        utils::create_send_socket,
     };
 
     use portpicker::pick_unused_port;

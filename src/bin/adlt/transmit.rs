@@ -1,12 +1,12 @@
 use clap::{Arg, ArgMatches, Command};
 use slog::info;
-use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, Socket, Type};
+use socket2::SockAddr;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use adlt::{
     dlt::{DltChar4, DltExtendedHeader, DLT_MIN_STD_HEADER_SIZE},
     dlt_args,
-    utils::RecvMode,
+    utils::{create_send_socket, RecvMode},
 };
 
 pub fn add_subcommand(app: Command) -> Command {
@@ -186,114 +186,4 @@ pub fn transmit(
     println!("Sent {nr_msgs_sent} test DLT messages to {hostname}:{port}");
 
     Ok(())
-}
-
-pub fn create_send_socket(
-    send_mode: RecvMode,
-    send_addr: SocketAddr,
-    interface: InterfaceIndexOrAddress,
-) -> Result<socket2::Socket, std::io::Error> {
-    let socket = match send_mode {
-        RecvMode::Tcp => {
-            // Initialize TCP receiver here if needed
-            panic!("TCP receiver not implemented yet");
-        }
-        RecvMode::Udp => {
-            // Initialize UDP receiver here if needed
-            let ip_addr = send_addr.ip();
-            if ip_addr.is_multicast() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Provided address is a multicast address",
-                )); // todo auto enable multicast if not set?
-            }
-            let socket = match ip_addr {
-                IpAddr::V4(_) => Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-                    .expect("ipv4 dgram socket"),
-                IpAddr::V6(_) => {
-                    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
-                        .expect("ipv6 dgram socket");
-                    socket.set_only_v6(true)?;
-                    socket
-                }
-            };
-            socket.set_reuse_address(true).expect("reuse addr error");
-            // #[cfg(unix)] // this is currently restricted to Unix's in socket2
-            // TODO check! socket.set_reuse_port(true).expect("reuse port Error");
-            /*socket TODO bind to a port by parameter?
-            .bind(&socket2::SockAddr::from(send_addr))
-            .expect("bind error");*/
-            socket
-        }
-        RecvMode::UdpMulticast => {
-            let ip_addr = send_addr.ip();
-            if !ip_addr.is_multicast() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Provided address is not a multicast address",
-                ));
-            }
-            let socket = match ip_addr {
-                IpAddr::V4(ref mdns_v4) => {
-                    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-                        .expect("ipv4 dgram socket");
-                    socket
-                        .join_multicast_v4_n(mdns_v4, &interface)
-                        .expect("join_multicast_v4_n");
-                    socket
-                }
-                IpAddr::V6(ref mdns_v6) => match interface {
-                    InterfaceIndexOrAddress::Index(index) => {
-                        let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
-                            .expect("ipv6 dgram socket");
-                        socket.set_only_v6(true)?;
-                        socket
-                            .join_multicast_v6(mdns_v6, index)
-                            .expect("join_multicast_v6");
-                        socket
-                    }
-                    _ => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "IPv6 multicast requires an interface index",
-                        ));
-                    }
-                },
-            };
-            socket.set_reuse_address(true).expect("reuse addr error");
-            // #[cfg(unix)] // this is currently restricted to Unix's in socket2
-            // TODO check! socket.set_reuse_port(true).expect("reuse port Error");
-            /*socket
-            .bind(&socket2::SockAddr::from(send_addr))
-            .expect("bind error"); TODO see above */
-            socket
-        }
-    };
-
-    // set read timeout
-    socket // TODO which timeout to choose?
-        .set_write_timeout(Some(std::time::Duration::from_millis(500)))
-        .expect("set write timeout error");
-
-    socket
-        .set_nonblocking(false)
-        .expect("set non-blocking error");
-
-    socket
-        .set_send_buffer_size(u16::MAX as usize)
-        .expect("set send buffer size error");
-
-    println!(
-        "Created send socket for {}://{}:{} with send_buffer_size={} bytes",
-        match send_mode {
-            RecvMode::Udp => "UDP",
-            RecvMode::UdpMulticast => "UDP Multicast",
-            RecvMode::Tcp => "TCP",
-        },
-        send_addr.ip(),
-        send_addr.port(),
-        socket.send_buffer_size().unwrap_or(0)
-    );
-
-    Ok(socket)
 }
