@@ -2,6 +2,33 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.62.0 - 2025-07-12
+#### Bug Fixes
+- **(receive)** support skipping corrupt msgs - (f254442) - Matthias Behr
+- **(receive)** use adlt test msg check in debug only - (b56379d) - Matthias Behr
+- **(receive)** impl tcp receiver - (a8d4d71) - Matthias Behr
+- **(receive)** add -e ecu_id parameter - (ca9184a) - Matthias Behr
+#### Features
+- **(receive)** add tcp forwarding - (53b404b) - Matthias Behr
+- **(receive)** wip for receive via udp - (7cea0bb) - Matthias Behr
+#### Miscellaneous Chores
+- clippy fixes - (6681cd9) - Matthias Behr
+- clippy fixes (automatically done) - (1571d36) - Matthias Behr
+- add check for DLT vers 1 std header - (442170b) - Matthias Behr
+- refactor parse_dlt_with_std_header - (b2c5be1) - Matthias Behr
+#### Tests
+- **(bin)** add two basic tests for receive and transmit - (a180e9f) - Matthias Behr
+- **(receive)** incr coverage for recv_msg - (95ea0e4) - Matthias Behr
+- **(receive)** basic create_send_socket tests - (df25411) - Matthias Behr
+- **(receive)** add fragmented msg recv test - (4807154) - Matthias Behr
+- **(receive)** extend with tcp receive - (9821cc3) - Matthias Behr
+- **(receive)** add test to receive via udp - (c1bfee2) - Matthias Behr
+- **(receive)** add first basic tests - (66c5b9c) - Matthias Behr
+- **(transmit)** first basic test - (48aca12) - Matthias Behr
+- parse_dlt_with_std_header - (3969e3c) - Matthias Behr
+
+- - -
+
 ## v0.61.5 - 2025-06-01
 #### Bug Fixes
 - **(filetransfer)** speedup filetransfer state generation - (3b89d85) - Matthias Behr
