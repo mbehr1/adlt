@@ -13,6 +13,8 @@ This Rust crate provides a library and tools to help you to handle automotive DL
 - Open DLT files of any size.
 - Archives (zip or if compiled with feature "libarchive": 7z, rar, tar, tar.gz, tar.bz2, tar.xz) are extracted automatically to a temp dir.
 - Multi-volume zip/7z support (simply use the .001 file, the others are opened automatically)
+- Receive DLT files via UDP, UDP multicast or TCP
+- Forward received DLT files via TCP to e.g. DLT-Viewer(s) with DLT-Viewer being able to reduce log-levels forwarded (e.g. for performance reasons)
 - **Lifecycle detection** feature including detection (a bit heuristic) of "SUSPEND/RESUME" lifecycles for ECUs with suspend-to-ram implementations.
 - **Sorting by timestamp** taking the lifecycles into account.
 - **Filter**...
@@ -41,31 +43,31 @@ Take care to not use `.txt`/`.asc`/`.blf`/`.log` extension for DLT file. Files w
 
 ### command line tool
 
-Show help for convert command:
+#### Show help for convert command:
 
 ```sh
 adlt convert -h
 ```
 
-Print ascii representation of a DLT file:
+#### Print ascii representation of a DLT file:
 
 ```sh
 adlt convert -a <dlt_file>
 ```
 
-Open all dlt files within a zip file:
+#### Open all dlt files within a zip file:
 
 ```sh
 adlt convert -a <zip_file>
 ```
 
-Open a single dlt file within a zip file via a glob pattern:
+#### Open a single dlt file within a zip file via a glob pattern:
 
 ```sh
 adlt convert -a "zip_file/**/foo.dlt" # take care to use "" around the file name to avoid your shell to try to find the glob pattern
 ```
 
-Show all lifecycles (ecu, time range, number of messages and SW verion) of a DLT file:
+#### Show all lifecycles (ecu, time range, number of messages and SW verion) of a DLT file:
 
 ```
 adlt convert <dlt_file>
@@ -76,14 +78,14 @@ LC#  2: ECU1 2021/06/24 08:54:29 RESUME - 08:55:08 #  181337 <sw version>
 LC#  3: DLOG 2021/06/24 08:54:44.945600 - 08:54:44 #       1
 ```
 
-Output/extract a specific lifecycle into file sorted by timestamps per lifecycle:
+#### Output/extract a specific lifecycle into file sorted by timestamps per lifecycle:
 
 ```sh
 adlt convert <dlt_file> # to see the lifecycle ids. here e.g. LC#  1: ... and LC#  2: ...
 adlt convert -l 1 2 -o <new_file> --sort <dlt_file> # export LC #1 and #2 sorted into new_file
 ```
 
-Output only messages fitting to a filter into a new file:
+#### Output only messages fitting to a filter into a new file:
 
 ```sh
 # filter_file can be in dlt-convert format as a list of APID CTIDs. E.g. echo "API1 CTI1  API2 CTI2 " > filter_file
@@ -92,13 +94,13 @@ adlt convert -f <filter_file> -o <new_file> <dlt_file> # export all messages fit
 # lifecycle filters -l ... or sorting --sort can be applied as well!
 ```
 
-Show lifecycles and embedded file transfers:
+#### Show lifecycles and embedded file transfers:
 
 ```sh
 adlt convert --file_transfer=true --file_transfer_apid SYS --file_transfer_ctid FILE <dlt_file>
 ```
 
-Export all core dumps to directory 'dumps' from a set of DLT files:
+#### Export all core dumps to directory 'dumps' from a set of DLT files:
 
 ```sh
 adlt convert --file_transfer='core*.gz' --file_transfer_path dumps --file_transfer_apid SYS --file_transfer_ctid FILE '**/*.dlt'
@@ -114,6 +116,19 @@ LC# 20: 'context.1585074417.controller.802.txt', 60kb
 LC# 20: 'core.1585074417.controller.802.gz', 115kb , saved as: 'dumps/core.1585074417.controller.802.gz'
 LC# 35: 'screenshot_20741013-092935_KOMBI.png', 7kb
 LC# 35: 'screenshot_20741013-092935_HUD.png', 1kb
+```
+
+#### Receive via UDP, store to zip files with automatic file splitting and forward via TCP to e.g. DLT-Viewer:
+
+As the DLT-Viewer has some issues receiving UDP msgs at a high frequency (sometimes it looses a few msgs) you can use
+adlt to record DLT files and at the same time forward to DLT-Viewer via TCP.
+
+```sh
+# receive via multicast UDP on 224.0.0.1 on default port 3490 and forward to TCP on port 3490
+# store all received logs in a zip file splitted to max 200mb
+# Files will be named recv_dlt_xxx.zip
+adlt receive 224.0.0.1 -u -t 3490 -c 200mb -o recv_dlt.zip
+# stop receiving via ctrl-c signal
 ```
 
 ## Known Issues
