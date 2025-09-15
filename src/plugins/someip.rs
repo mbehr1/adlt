@@ -357,7 +357,7 @@ sort the methods into a tree-alike structure with
 * events
 * fields (instead of 3 single items per getter,setter, notifier)
 */
-fn sorted_mids_by_type(methods: &HashMap<u16, MethodIdType>) -> Vec<(u16, MethodTreeType)> {
+fn sorted_mids_by_type(methods: &'_ HashMap<u16, MethodIdType>) -> Vec<(u16, MethodTreeType<'_>)> {
     let mut v = vec![];
     for method in methods {
         match method.1 {
