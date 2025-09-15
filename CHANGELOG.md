@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.62.1 - 2025-09-15
+#### Bug Fixes
+- **(someip)** fixed size arrays - (a326e13) - Matthias Behr
+#### Documentation
+- **(readme)** add receive cmd - (fc829f6) - Matthias Behr
+
+- - -
+
 ## v0.62.0 - 2025-07-12
 #### Bug Fixes
 - **(receive)** support skipping corrupt msgs - (f254442) - Matthias Behr
