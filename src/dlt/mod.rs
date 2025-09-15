@@ -1082,7 +1082,7 @@ impl DltMessage {
         Ok(())
     }
 
-    pub fn payload_as_text(&self) -> Result<Cow<str>, std::fmt::Error> {
+    pub fn payload_as_text(&'_ self) -> Result<Cow<'_, str>, std::fmt::Error> {
         if let Some(text) = &self.payload_text {
             return Ok(Cow::Borrowed(text));
         }

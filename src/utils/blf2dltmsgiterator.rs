@@ -245,13 +245,11 @@ impl<'a, R: BufRead + Seek> BLF2DltMsgIterator<'a, R> {
                                 }
                             }
                         }
-
-                        if ch_nr.is_some() && ch_type.is_some() && ch_network.is_some() {
-                            let ch_nr = ch_nr.unwrap();
-                            let ch_type = ch_type.unwrap();
-                            let ch_network = ch_network.unwrap();
+                        if let (Some(ch_nr), Some(ch_type), Some(ch_network)) =
+                            (ch_nr, ch_type.as_deref(), ch_network.as_deref())
+                        {
                             if ch_type == "CAN" {
-                                let ecu = self.get_ecu(ch_nr, &Some(&ch_network));
+                                let ecu = self.get_ecu(ch_nr, &Some(ch_network));
                                 /*println!(
                                     "ecu:'{:?}' assigned to ch_nr:{}, name:'{}'",
                                     ecu, ch_nr, ch_network

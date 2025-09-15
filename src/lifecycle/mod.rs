@@ -756,9 +756,7 @@ where
                             mark_lc_id_to_refresh(msg_lc, &mut lcs_to_refresh);
                         }
                         if let Err(e) = outflow(msg) {
-                            println!(
-                                "parse_lifecycles_buffered_from_stream .send 4 got err={e}"
-                            );
+                            println!("parse_lifecycles_buffered_from_stream .send 4 got err={e}");
                             break; // exit. the receiver has stopped
                         }
                     }
@@ -896,9 +894,7 @@ where
                 &mut last_lcw_refresh_index,
             );
             if let Err(e) = outflow(msg) {
-                println!(
-                    "parse_lifecycles_buffered_from_stream .send 3 got err={e}"
-                );
+                println!("parse_lifecycles_buffered_from_stream .send 3 got err={e}");
                 break;
             }
         }
@@ -927,9 +923,7 @@ where
     for m in buffered_msgs.into_iter() {
         mark_lc_id_to_refresh(m.lifecycle, &mut lcs_to_refresh);
         if let Err(e) = outflow(m) {
-            println!(
-                "parse_lifecycles_buffered_from_stream .send 4 got err={e}"
-            );
+            println!("parse_lifecycles_buffered_from_stream .send 4 got err={e}");
             break;
         }
     }
