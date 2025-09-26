@@ -59,6 +59,9 @@ pub fn create_send_socket(
     interface: InterfaceIndexOrAddress,
 ) -> Result<socket2::Socket, std::io::Error> {
     let socket = match send_mode {
+        RecvMode::Rscap(_) => {
+            panic!("RSCAP server not implemented yet");
+        }
         RecvMode::Tcp => {
             panic!("TCP server not implemented yet");
         }
@@ -141,6 +144,7 @@ pub fn create_send_socket(
             RecvMode::Udp => "UDP",
             RecvMode::UdpMulticast => "UDP Multicast",
             RecvMode::Tcp => "TCP",
+            RecvMode::Rscap(_) => "RSCAP",
         },
         send_addr.ip(),
         send_addr.port(),
@@ -155,6 +159,7 @@ pub enum RecvMode {
     Tcp,
     Udp,
     UdpMulticast,
+    Rscap(String),
 }
 
 pub struct IpDltMsgReceiver {
@@ -214,6 +219,63 @@ impl IpDltMsgReceiver {
         addr: SocketAddr,
     ) -> Result<Self, std::io::Error> {
         let socket = match recv_mode {
+            RecvMode::Rscap(interface_name) => {
+                #[cfg(feature = "rscap")]
+                {
+                    let available_interfaces = pnet::datalink::interfaces();
+                    info!(log, "Available interfaces: {:?}", available_interfaces);
+
+                    let iface = available_interfaces
+                        .into_iter()
+                        .filter(|iface| iface.name == interface_name)
+                        .next();
+
+                    if iface.is_none() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Interface {interface_name} not found"),
+                        ));
+                    }
+                    let iface = iface.unwrap();
+                    info!(log, "Using interface: {:?}", iface.name);
+                    // Create a new channel, dealing with layer 2 packets
+                    let (_tx, mut rx) = match pnet::datalink::channel(&iface, Default::default()) {
+                        Ok(pnet::datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
+                        Ok(_) => panic!("Unhandled channel type"),
+                        Err(e) => panic!(
+                            "An error occurred when creating the datalink channel: {}",
+                            e
+                        ),
+                    };
+                    let mut nr_packets = 100;
+                    while nr_packets > 0 {
+                        match rx.next() {
+                            Ok(packet) => {
+                                warn!(log, "RSCAP received packet with length: {}", packet.len());
+                                let ethernet_packet =
+                                    pnet::packet::ethernet::EthernetPacket::new(packet).unwrap();
+                                warn!(
+                                    log,
+                                    "RSCAP received ethernet_packet with ethertype: {}",
+                                    ethernet_packet.get_ethertype()
+                                );
+
+                                // dump the first 1k in hex:
+                                for byte in &packet[..packet.len().min(1024)] {
+                                    print!("{:02x} ", byte);
+                                }
+                                println!();
+                            }
+                            Err(e) => {
+                                warn!(log, "RSCAP recv error: {}", e);
+                            }
+                        }
+                        nr_packets -= 1;
+                    }
+                }
+                // TODO implement RSCAP socket creation
+                panic!("RSCAP socket creation not implemented yet for interface {interface_name}");
+            }
             RecvMode::Tcp => Self::new_tcp_client_socket(addr)?,
             RecvMode::Udp => {
                 // Initialize UDP receiver here if needed
@@ -694,6 +756,9 @@ impl Drop for IpDltMsgReceiver {
     fn drop(&mut self) {
         // Clean up resources if necessary
         match self.recv_mode {
+            RecvMode::Rscap(_) => {
+                // Clean up RSCAP receiver
+            }
             RecvMode::Tcp => {
                 // Clean up TCP receiver
             }

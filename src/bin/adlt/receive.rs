@@ -57,7 +57,7 @@ printf("Usage: dlt-receive [options] hostname/serial_device_name\n");
     printf("                Cannot be used with serial devices\n");
  */
 pub fn add_subcommand(app: Command) -> Command {
-    app.subcommand(
+    let subcmd =
         Command::new("receive")
             .about("Receive DLT messages via UDP/TCP or serial and show or save as file")
             .arg(
@@ -144,8 +144,16 @@ pub fn add_subcommand(app: Command) -> Command {
                 .default_value("RECV")
                 .value_parser(|s: &str|DltChar4::from_str(s).map_err(|_|"ecu contains non ascii characters"))
                 .help("Set ECU ID for received messages if they have no extended header (default: RECV)")
-            )
-    )
+            );
+    #[cfg(feature = "rscap")]
+    let subcmd = subcmd.arg(
+        Arg::new("interface_name")
+            .short('I')
+            .conflicts_with("hostname")
+            .num_args(1)
+            .help("interface name (e.g. eth0) to use for capture from full interface"),
+    );
+    app.subcommand(subcmd)
 }
 
 #[derive(Clone, Copy)]
@@ -181,7 +189,12 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     mut writer_screen: W,
     stop_receive_param: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    let hostname = sub_m.get_one::<String>("hostname").unwrap(); // mand. arg. cannot fail
+    let hostname = sub_m.get_one::<String>("hostname"); // either hostname of interface_name
+    let interface_name = if cfg!(feature = "rscap") {
+        sub_m.get_one::<String>("interface_name")
+    } else {
+        None
+    };
     let port = sub_m.get_one::<u16>("port").unwrap_or(&3490);
     let udp_multicast = sub_m.get_flag("udp_multicast");
     let output_style: OutputStyle = if sub_m.get_flag("hex") {
@@ -198,16 +211,29 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .map(|s| s.to_owned())
         .unwrap();
 
-    let recv_addr = hostname.parse::<Ipv4Addr>()?;
-    let recv_addr = SocketAddr::new(IpAddr::V4(recv_addr), *port);
-    let recv_mode = if udp_multicast {
-        if recv_addr.ip().is_multicast() {
-            RecvMode::UdpMulticast
+    let (recv_mode, recv_addr) = if let Some(hostname) = hostname {
+        let recv_addr = hostname.parse::<Ipv4Addr>()?;
+        let recv_addr = SocketAddr::new(IpAddr::V4(recv_addr), *port);
+        let recv_mode = if udp_multicast {
+            if recv_addr.ip().is_multicast() {
+                RecvMode::UdpMulticast
+            } else {
+                RecvMode::Udp
+            }
         } else {
-            RecvMode::Udp
-        }
+            RecvMode::Tcp
+        };
+        (recv_mode, recv_addr)
     } else {
-        RecvMode::Tcp
+        (
+            RecvMode::Rscap(
+                sub_m
+                    .get_one::<String>("interface_name")
+                    .unwrap()
+                    .to_owned(),
+            ),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        )
     };
     let interface = if let Some(addr) = sub_m.get_one::<Ipv4Addr>("interface_address") {
         socket2::InterfaceIndexOrAddress::Address(*addr)
@@ -285,12 +311,13 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     info!(
         log,
         "receive from {}:{} via {} on host interface {:?}",
-        hostname,
+        hostname.unwrap_or_else(|| interface_name.unwrap()),
         port,
         match recv_mode {
             RecvMode::Udp => "UDP",
             RecvMode::UdpMulticast => "UDP Multicast",
             RecvMode::Tcp => "TCP",
+            RecvMode::Rscap(_) => "RSCAP",
         },
         interface
     );

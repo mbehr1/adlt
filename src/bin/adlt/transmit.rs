@@ -85,6 +85,7 @@ pub fn transmit(
             RecvMode::Udp => "UDP",
             RecvMode::UdpMulticast => "UDP Multicast",
             RecvMode::Tcp => "TCP",
+            RecvMode::Rscap(_) => "RSCAP",
         },
         interface
     );
