@@ -43,7 +43,9 @@ mod ipdltmsgreceiver;
 pub use self::ipdltmsgreceiver::create_send_socket;
 pub use self::ipdltmsgreceiver::set_max_buffer_size;
 pub use self::ipdltmsgreceiver::IpDltMsgReceiver;
+pub use self::ipdltmsgreceiver::PcapParam;
 pub use self::ipdltmsgreceiver::RecvMode;
+pub mod plp_packet;
 
 use lazy_static::lazy_static;
 
@@ -504,7 +506,7 @@ pub fn buf_as_hex_to_io_write(
 /// - but not at start or end
 pub fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
     // we expect len 2 or 5 or 8 (so 2 + x*3)
-    if s.len() < 2 || (s.len() - 2) % 3 != 0 {
+    if s.len() < 2 || !(s.len() - 2).is_multiple_of(3) {
         None
     } else {
         // we can alloc the Vec size upfront:

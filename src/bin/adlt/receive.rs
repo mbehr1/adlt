@@ -15,6 +15,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str::FromStr,
 };
+use thread_priority::{set_current_thread_priority, ThreadPriority};
 
 use adlt::{
     dlt::{
@@ -57,7 +58,7 @@ printf("Usage: dlt-receive [options] hostname/serial_device_name\n");
     printf("                Cannot be used with serial devices\n");
  */
 pub fn add_subcommand(app: Command) -> Command {
-    app.subcommand(
+    let subcmd =
         Command::new("receive")
             .about("Receive DLT messages via UDP/TCP or serial and show or save as file")
             .arg(
@@ -144,8 +145,25 @@ pub fn add_subcommand(app: Command) -> Command {
                 .default_value("RECV")
                 .value_parser(|s: &str|DltChar4::from_str(s).map_err(|_|"ecu contains non ascii characters"))
                 .help("Set ECU ID for received messages if they have no extended header (default: RECV)")
-            )
-    )
+            );
+    #[cfg(feature = "pcap")]
+    let subcmd = subcmd.arg(
+        Arg::new("interface_name")
+            .short('I')
+            .conflicts_with("hostname")
+            .num_args(1)
+            .help("interface name (e.g. eth0) to use for capture from full interface"),
+    );
+    #[cfg(feature = "pcap")]
+    let subcmd = subcmd.arg(
+        Arg::new("pcap_file")
+            .long("pcap_file")
+            .conflicts_with("hostname")
+            .num_args(1)
+            .help("pcap file name to use for reading DLT messages"),
+    );
+
+    app.subcommand(subcmd)
 }
 
 #[derive(Clone, Copy)]
@@ -181,7 +199,17 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     mut writer_screen: W,
     stop_receive_param: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    let hostname = sub_m.get_one::<String>("hostname").unwrap(); // mand. arg. cannot fail
+    let hostname = sub_m.get_one::<String>("hostname"); // either hostname of interface_name
+    let interface_name = if cfg!(feature = "pcap") {
+        sub_m.get_one::<String>("interface_name")
+    } else {
+        None
+    };
+    let pcap_file = if cfg!(feature = "pcap") {
+        sub_m.get_one::<String>("pcap_file")
+    } else {
+        None
+    };
     let port = sub_m.get_one::<u16>("port").unwrap_or(&3490);
     let udp_multicast = sub_m.get_flag("udp_multicast");
     let output_style: OutputStyle = if sub_m.get_flag("hex") {
@@ -198,16 +226,47 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .map(|s| s.to_owned())
         .unwrap();
 
-    let recv_addr = hostname.parse::<Ipv4Addr>()?;
-    let recv_addr = SocketAddr::new(IpAddr::V4(recv_addr), *port);
-    let recv_mode = if udp_multicast {
-        if recv_addr.ip().is_multicast() {
-            RecvMode::UdpMulticast
+    let (recv_mode, recv_addr) = if let Some(hostname) = hostname {
+        let recv_addr = hostname.parse::<Ipv4Addr>()?;
+        let recv_addr = SocketAddr::new(IpAddr::V4(recv_addr), *port);
+        let recv_mode = if udp_multicast {
+            if recv_addr.ip().is_multicast() {
+                RecvMode::UdpMulticast
+            } else {
+                RecvMode::Udp
+            }
         } else {
-            RecvMode::Udp
-        }
+            RecvMode::Tcp
+        };
+        (recv_mode, recv_addr)
     } else {
-        RecvMode::Tcp
+        #[cfg(feature = "pcap")]
+        {
+            use adlt::utils::PcapParam;
+            if let Some(interface_name) = interface_name {
+                (
+                    RecvMode::Pcap(PcapParam::InterfaceName(interface_name.to_owned())),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                )
+            } else if let Some(pcap_file) = sub_m.get_one::<String>("pcap_file") {
+                (
+                    RecvMode::Pcap(PcapParam::File(pcap_file.to_owned())),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                )
+            } else {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Either hostname or interface_name/pcap_file must be provided",
+                )));
+            }
+        }
+        #[cfg(not(feature = "pcap"))]
+        {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Hostname must be provided",
+            )));
+        }
     };
     let interface = if let Some(addr) = sub_m.get_one::<Ipv4Addr>("interface_address") {
         socket2::InterfaceIndexOrAddress::Address(*addr)
@@ -285,13 +344,9 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     info!(
         log,
         "receive from {}:{} via {} on host interface {:?}",
-        hostname,
+        hostname.unwrap_or_else(|| interface_name.unwrap_or_else(|| pcap_file.unwrap())),
         port,
-        match recv_mode {
-            RecvMode::Udp => "UDP",
-            RecvMode::UdpMulticast => "UDP Multicast",
-            RecvMode::Tcp => "TCP",
-        },
+        recv_mode,
         interface
     );
 
@@ -369,6 +424,10 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .name("recv_thread".to_string())
         .spawn(move || {
             let log = log_clone_for_recv_thread;
+            match set_current_thread_priority(ThreadPriority::Max) {
+                Ok(_) => info!(log, "set thread priority for recv_thread to max"),
+                Err(e) => warn!(log, "failed to set thread priority: {}", e),
+            }
             while !stop_recv_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 match ip_receiver.recv_msg() {
                     Ok(msg_from_pair) => {
@@ -383,6 +442,10 @@ pub fn receive<W: std::io::Write + Send + 'static>(
                             std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::InvalidData => {
                                 // no message received, continue
                                 continue;
+                            }
+                            std::io::ErrorKind::NotFound => {
+                                warn!(log, "NotFound/EOF '{e}', stopping receiver thread.");
+                                break; // exit on error
                             }
                             _ => {
                                 info!(log, "error receiving message: {} e.kind={} recv_mode={:?}", e, e.kind(), ip_receiver.recv_mode);

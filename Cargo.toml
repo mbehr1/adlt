@@ -16,6 +16,8 @@ categories = ["command-line-utilities", "development-tools", "encoding", "parsin
 [features]
 default = []
 libarchive = ["dep:compress-tools", "compress-tools/static"]
+pcap = ["dep:pcap", "dep:pnet"]
+clippy = []
 
 [lib]
 name = "adlt"
@@ -86,3 +88,8 @@ glob = "0.3.2"
 zip = "4.2.0"
 compress-tools = { version= "0.15.1", optional = true }
 cached = "0.55.1"
+pcap = { version = "2.3.0", optional = true }
+pnet = { version="0.35.0", optional = true }
+pnet_macros = "0.35.0"
+pnet_macros_support = "0.35.0"
+thread-priority = "3.0.0"

@@ -81,11 +81,7 @@ pub fn transmit(
         "transmitting test DLT messages to {}:{} via {} on host interface {:?}",
         hostname,
         port,
-        match send_mode {
-            RecvMode::Udp => "UDP",
-            RecvMode::UdpMulticast => "UDP Multicast",
-            RecvMode::Tcp => "TCP",
-        },
+        send_mode,
         interface
     );
 
