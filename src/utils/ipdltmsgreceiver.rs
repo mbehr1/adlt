@@ -836,8 +836,9 @@ impl IpDltMsgReceiver {
                         length if length > max => max,
                         length => length,
                     };
+                    let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
                     // Use the offset to get UDP payload directly from ethernet_packet's payload
-                    if let Some(udp) = UdpPacket::new(&ethernet_packet.payload()[header_length..]){
+                    if let Some(udp) = UdpPacket::new(&ethernet_packet.payload()[header_length..header_length + payload_len]) {
                         Some((addr, udp))
                     } else {
                         None
@@ -862,8 +863,9 @@ impl IpDltMsgReceiver {
                             length if length > max => max,
                             length => length,
                         };
+                        let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
                         // Use the offset to get UDP payload directly from vlan_packet's payload
-                        if let Some(udp) = UdpPacket::new(&ethernet_packet.payload()[vlan_header_length + header_length..]){
+                        if let Some(udp) = UdpPacket::new(&ethernet_packet.payload()[vlan_header_length + header_length..vlan_header_length + header_length + payload_len]) {
                             Some((addr, udp))
                         } else {
                             None
