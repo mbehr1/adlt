@@ -935,17 +935,17 @@ impl IpDltMsgReceiver {
                                         ));
                                     } else{
                                         match ethernet_packet.get_ethertype().0 {
-                                            0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ | 0x88f7 /* Ptp */ | 0x8100 /* vlan */ => {},
+                                            0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ | 0x88f7 /* Ptp */ | 0x8100 /* vlan */ | 0x888e /* 802.1x frames? */=> {},
                                             _ => {
                                                 warn!(log, "recv_msg: ignoring non-udp/dlt PLP ethernet packet with ethertype: {} {:x}", ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
                                             }
                                         }
                                     }
                                 }else{
-                                    warn!(log, "recv_msg: ignoring PLP non ethernet packet: {:?}", ethernet_packet);
+                                    warn!(log, "recv_msg: ignoring PLP non ethernet packet: {:?}", plp_packet);
                                 }
                             } else {
-                                warn!(log, "recv_msg: ignoring invalid PLP packet");
+                                warn!(log, "recv_msg: ignoring invalid PLP packet: {:?}", ethernet_packet);
                             }
                         }
                         // todo support ipv4/udp/tcp packets on port 3490 as well?
