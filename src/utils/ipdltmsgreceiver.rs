@@ -909,10 +909,10 @@ impl IpDltMsgReceiver {
                                 if plp_packet.get_plp_type() == 0x03 &&  plp_packet.get_msg_type() == 0x80 {
                                     // todo verify length? and check for another data packet following?
                                     let ethernet_packet =EthernetPacket::new(plp_packet.payload()).unwrap();
-                                    warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{:x}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
+                                    //warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{:x}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
                                     if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(&ethernet_packet){
                                         if udp_packet.get_destination() != 3490 {
-                                            warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
+                                            // warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
                                             continue;
                                         }
                                         let payload = udp_packet.payload();
@@ -924,14 +924,17 @@ impl IpDltMsgReceiver {
                                                 len,
                                             );
                                         }
-                                        //recv_buffer[..len].copy_from_slice(&payload[..len]);
                                         return Ok((
                                             len,
-                                            //SockAddr::from(ethernet_packet.get_source()),
                                             SockAddr::from(SocketAddrV4::new(addr, 3490)),
-                                        )); // TODO get actual src_addr
+                                        ));
                                     } else{
-                                        warn!(log, "recv_msg: ignoring non-UDP PLP ethernet packet {:?}", ethernet_packet);
+                                        match ethernet_packet.get_ethertype().0 {
+                                            0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ => {},
+                                            _ => {
+                                                warn!(log, "recv_msg: ignoring non-udp/dlt PLP ethernet packet with ethertype: {} {:x}", ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
+                                            }
+                                        }
                                     }
                                 }else{
                                     warn!(log, "recv_msg: ignoring PLP non ethernet packet: {:?}", ethernet_packet);
