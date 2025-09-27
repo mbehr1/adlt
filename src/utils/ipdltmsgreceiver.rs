@@ -8,7 +8,19 @@ use slog::{info, warn};
 use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, Socket, Type};
 use std::{
     collections::VecDeque,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    time::Instant,
+};
+
+#[cfg(feature = "rscap")]
+use crate::utils::plp_packet::PlpPacket;
+#[cfg(feature = "rscap")]
+use pnet::{
+    datalink::{Channel, DataLinkReceiver},
+    packet::{
+        ethernet::EthernetPacket, ip::IpNextHeaderProtocols, ipv4::Ipv4Packet, udp::UdpPacket,
+        vlan::VlanPacket, Packet,
+    },
 };
 
 use crate::dlt::{
@@ -59,6 +71,9 @@ pub fn create_send_socket(
     interface: InterfaceIndexOrAddress,
 ) -> Result<socket2::Socket, std::io::Error> {
     let socket = match send_mode {
+        RecvMode::Rscap(_) => {
+            panic!("RSCAP server not implemented yet");
+        }
         RecvMode::Tcp => {
             panic!("TCP server not implemented yet");
         }
@@ -141,6 +156,7 @@ pub fn create_send_socket(
             RecvMode::Udp => "UDP",
             RecvMode::UdpMulticast => "UDP Multicast",
             RecvMode::Tcp => "TCP",
+            RecvMode::Rscap(_) => "RSCAP",
         },
         send_addr.ip(),
         send_addr.port(),
@@ -155,6 +171,14 @@ pub enum RecvMode {
     Tcp,
     Udp,
     UdpMulticast,
+    Rscap(String),
+}
+
+enum RecvMethod {
+    Recv(Socket),
+    RecvFrom(Socket),
+    #[cfg(feature = "rscap")]
+    DataLinkNext(Channel),
 }
 
 pub struct IpDltMsgReceiver {
@@ -162,7 +186,7 @@ pub struct IpDltMsgReceiver {
     pub recv_mode: RecvMode,
     pub interface: InterfaceIndexOrAddress,
     pub addr: SocketAddr,
-    socket: Socket,
+    recv_method: RecvMethod,
     /// buffer for receiving fragmented messages (e.g. due to payloads > MTU)
     /// use a buffer per sock_addr that we received from (but this would require a socket per sock_addr)
     /// TODO consider different sockets per sock_addr
@@ -213,8 +237,54 @@ impl IpDltMsgReceiver {
         interface: InterfaceIndexOrAddress,
         addr: SocketAddr,
     ) -> Result<Self, std::io::Error> {
-        let socket = match recv_mode {
-            RecvMode::Tcp => Self::new_tcp_client_socket(addr)?,
+        let recv_method = match recv_mode {
+            RecvMode::Rscap(ref interface_name) => {
+                if cfg!(feature = "rscap") {
+                    let available_interfaces = pnet::datalink::interfaces();
+                    info!(log, "Available interfaces: {:?}", available_interfaces);
+
+                    let iface = available_interfaces
+                        .into_iter()
+                        .find(|iface| iface.name == *interface_name);
+
+                    if iface.is_none() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Interface {interface_name} not found"),
+                        ));
+                    }
+                    let iface = iface.unwrap();
+                    info!(log, "Using interface: {:?}", iface.name);
+                    // Create a new channel, dealing with layer 2 packets
+                    // set blocking mode (with read timeout)
+                    let config = pnet::datalink::Config {
+                        read_timeout: Some(std::time::Duration::from_millis(500)),
+                        read_buffer_size: 26214400, // 400 * 65536, dlt-viewer uses that
+                        channel_type: pnet::datalink::ChannelType::Layer2,
+                        promiscuous: true,
+                        ..Default::default()
+                    };
+                    let channel = pnet::datalink::channel(&iface, config)?;
+                    RecvMethod::DataLinkNext(channel)
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "RSCAP feature not enabled in this build",
+                    ));
+                }
+            }
+            RecvMode::Tcp => {
+                let socket = Self::new_tcp_client_socket(addr)?;
+                info!(
+                    log,
+                    "created receiver socket: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
+                    socket.local_addr().unwrap().as_socket_ipv4(),
+                    socket.local_addr().unwrap().as_socket_ipv6(),
+                    socket.recv_buffer_size().unwrap_or(0),
+                    socket.read_timeout()
+                );
+                RecvMethod::Recv(socket)
+            }
             RecvMode::Udp => {
                 // Initialize UDP receiver here if needed
                 let ip_addr = addr.ip();
@@ -252,8 +322,15 @@ impl IpDltMsgReceiver {
 
                 // set the receive buffer size. dlt-viewer uses 26214400 (400* 65536) bytes
                 set_max_buffer_size(&socket, false, 26214400).expect("set recv buffer size error");
-
-                socket
+                info!(
+                    log,
+                    "created receiver socket: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
+                    socket.local_addr().unwrap().as_socket_ipv4(),
+                    socket.local_addr().unwrap().as_socket_ipv6(),
+                    socket.recv_buffer_size().unwrap_or(0),
+                    socket.read_timeout()
+                );
+                RecvMethod::RecvFrom(socket)
             }
             RecvMode::UdpMulticast => {
                 let ip_addr = addr.ip();
@@ -332,22 +409,20 @@ impl IpDltMsgReceiver {
 
                 // set the receive buffer size. dlt-viewer uses 26214400 (400* 65536) bytes
                 set_max_buffer_size(&socket, false, 26214400).expect("set recv buffer size error");
-
-                socket
+                info!(
+                    log,
+                    "created receiver socket: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
+                    socket.local_addr().unwrap().as_socket_ipv4(),
+                    socket.local_addr().unwrap().as_socket_ipv6(),
+                    socket.recv_buffer_size().unwrap_or(0),
+                    socket.read_timeout()
+                );
+                RecvMethod::RecvFrom(socket)
             }
         };
 
         // so try the max then... (e.g. by looping down the size until it works)
         // hmm. on osx it silently fails and uses the default size of 8388608 bytes
-
-        info!(
-            log,
-            "created receiver socket: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
-            socket.local_addr().unwrap().as_socket_ipv4(),
-            socket.local_addr().unwrap().as_socket_ipv6(),
-            socket.recv_buffer_size().unwrap_or(0),
-            socket.read_timeout()
-        );
 
         // allocate a buffer for the socket for receiving messages
         let data = if recv_mode == RecvMode::Tcp {
@@ -361,7 +436,7 @@ impl IpDltMsgReceiver {
             recv_mode,
             interface,
             addr,
-            socket,
+            recv_method,
             recv_buffer_list: Vec::with_capacity(256),
             recv_buffer: data,
             index: start_index,
@@ -378,82 +453,137 @@ impl IpDltMsgReceiver {
 
         let recv_buffer = &mut self.recv_buffer.spare_capacity_mut();
 
-        let (size, src_addr) = if self.recv_mode == RecvMode::Tcp {
-            // info!(self.log, "recv_msg: receiving message via TCP");
-            match self.socket.recv(recv_buffer) {
-                Ok(size) => {
-                    // info!(self.log, "recv_msg: received {} bytes via TCP", size);
-                    if size > 0 {
-                        // TCP does not provide src_addr, use the bound addr
-                        (size, SockAddr::from(self.addr))
-                    } else {
-                        info!(
-                            self.log,
-                            "recv_msg: received zero bytes via TCP, shutdown socket"
-                        );
-                        // size 0 means the other side has closed the connection (called shutdown)
-                        // and is now waiting for us to close the socket
-                        // we ignore any errors from shutdown here
-                        let _ = self.socket.shutdown(std::net::Shutdown::Both);
-                        // TODO in case of an error the old socket is not dropped!
-                        self.socket = Self::new_tcp_client_socket(self.addr)?;
+        let (size, src_addr) = match &mut self.recv_method {
+            RecvMethod::Recv(ref mut socket) => {
+                // info!(self.log, "recv_msg: receiving message via TCP");
+                match socket.recv(recv_buffer) {
+                    Ok(size) => {
+                        // info!(self.log, "recv_msg: received {} bytes via TCP", size);
+                        if size > 0 {
+                            // TCP does not provide src_addr, use the bound addr
+                            (size, SockAddr::from(self.addr))
+                        } else {
+                            info!(
+                                self.log,
+                                "recv_msg: received zero bytes via TCP, shutdown socket"
+                            );
+                            // size 0 means the other side has closed the connection (called shutdown)
+                            // and is now waiting for us to close the socket
+                            // we ignore any errors from shutdown here
+                            let _ = socket.shutdown(std::net::Shutdown::Both);
+                            // TODO in case of an error the old socket is not dropped!
+                            *socket = Self::new_tcp_client_socket(self.addr)?;
 
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::UnexpectedEof,
-                            "Received zero bytes, socket closed",
-                        ));
-                    }
-                }
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::WouldBlock {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::WouldBlock,
-                            "No data available to read",
-                        ));
-                    } else if e.kind() == std::io::ErrorKind::NotConnected {
-                        info!(
-                            self.log,
-                            "recv_msg: socket not connected, trying to connect"
-                        );
-                        // connect the socket:
-                        match self.socket.connect(&SockAddr::from(self.addr)) {
-                            Ok(_) => {
-                                info!(self.log, "recv_msg: socket connected to {:?}", self.addr);
-                                return self.recv_msg(); // retry receiving after successful connecting
-                            }
-                            Err(e) => {
-                                std::thread::sleep(std::time::Duration::from_millis(50)); // TODO for test only!
-                                if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                                    info!(
-                                        self.log,
-                                        "recv_msg: connection refused, trying to reconnect"
-                                    );
-                                    self.socket = Self::new_tcp_client_socket(self.addr)?;
-                                } else {
-                                    info!(
-                                        self.log,
-                                        "recv_msg: error connecting socket: {} e.kind={}",
-                                        e,
-                                        e.kind()
-                                    );
-                                }
-                                return Err(e);
-                            }
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::UnexpectedEof,
+                                "Received zero bytes, socket closed",
+                            ));
                         }
-                    } else {
-                        warn!(
-                            self.log,
-                            "recv_msg: error receiving message: {} e.kind={}",
-                            e,
-                            e.kind()
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(50)); // TODO for test only!
-                        return Err(e);
+                    }
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::WouldBlock {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::WouldBlock,
+                                "No data available to read",
+                            ));
+                        } else if e.kind() == std::io::ErrorKind::NotConnected {
+                            info!(
+                                self.log,
+                                "recv_msg: socket not connected, trying to connect"
+                            );
+                            // connect the socket:
+                            match socket.connect(&SockAddr::from(self.addr)) {
+                                Ok(_) => {
+                                    info!(
+                                        self.log,
+                                        "recv_msg: socket connected to {:?}", self.addr
+                                    );
+                                    return self.recv_msg(); // retry receiving after successful connecting
+                                }
+                                Err(e) => {
+                                    std::thread::sleep(std::time::Duration::from_millis(50)); // TODO for test only!
+                                    if e.kind() == std::io::ErrorKind::ConnectionRefused {
+                                        info!(
+                                            self.log,
+                                            "recv_msg: connection refused, trying to reconnect"
+                                        );
+                                        *socket = Self::new_tcp_client_socket(self.addr)?;
+                                    } else {
+                                        info!(
+                                            self.log,
+                                            "recv_msg: error connecting socket: {} e.kind={}",
+                                            e,
+                                            e.kind()
+                                        );
+                                    }
+                                    return Err(e);
+                                }
+                            }
+                        } else {
+                            warn!(
+                                self.log,
+                                "recv_msg: error receiving message: {} e.kind={}",
+                                e,
+                                e.kind()
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(50)); // TODO for test only!
+                            return Err(e);
+                        }
                     }
                 }
             }
-        } else {
-            self.socket.recv_from(recv_buffer)?
+            RecvMethod::RecvFrom(ref socket) => {
+                // info!(self.log, "recv_msg: receiving message via UDP");
+                socket.recv_from(recv_buffer)?
+            }
+            #[cfg(feature = "rscap")]
+            RecvMethod::DataLinkNext(channel) => {
+                if let Channel::Ethernet(_, ref mut rx) = channel {
+                    // info!(self.log, "recv_msg: receiving message via RSCAP");
+                    match IpDltMsgReceiver::get_dlt_from_datalink_ethernet(
+                        &self.log,
+                        recv_buffer,
+                        rx,
+                    ) {
+                        Ok(value) => value,
+                        Err(value) => return value,
+                    }
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "RSCAP channel is not Ethernet",
+                    ));
+                }
+
+                /*let mut nr_packets = 100;
+                    while nr_packets > 0 {
+                        match rx.next() {
+                            Ok(packet) => {
+                                warn!(log, "RSCAP received packet with length: {}", packet.len());
+                                let ethernet_packet =
+                                    pnet::packet::ethernet::EthernetPacket::new(packet).unwrap();
+                                warn!(
+                                    log,
+                                    "RSCAP received ethernet_packet with ethertype: {}",
+                                    ethernet_packet.get_ethertype()
+                                );
+
+                                // dump the first 1k in hex:
+                                for byte in &packet[..packet.len().min(1024)] {
+                                    print!("{:02x} ", byte);
+                                }
+                                println!();
+                            }
+                            Err(e) => {
+                                warn!(log, "RSCAP recv error: {}", e);
+                            }
+                        }
+                        nr_packets -= 1;
+                    }
+                }
+                */
+                //(0, SockAddr::from(self.addr)) // TODO implement RSCAP recv
+            }
         };
 
         if size == 0 {
@@ -688,37 +818,210 @@ impl IpDltMsgReceiver {
             }
         }
     }
+
+    fn get_udp_from_ethernet_packet<'a>(
+        log: &slog::Logger,
+        ethernet_packet: &'a EthernetPacket,
+    ) -> Option<(Ipv4Addr, UdpPacket<'a>)> {
+        match ethernet_packet.get_ethertype().0 {
+            0x0800 => {
+                // Calculate IPv4 header length to find the UDP payload offset
+                let ipv4_packet = Ipv4Packet::new(ethernet_packet.payload())?;
+                if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
+                    let addr = ipv4_packet.get_source();
+                    // Get the IPv4 header length to calculate offset
+                    let min = Ipv4Packet::minimum_packet_size();
+                    let max = ipv4_packet.packet().len();
+                    let header_length = match ipv4_packet.get_header_length() as usize * 4 {
+                        length if length < min => min,
+                        length if length > max => max,
+                        length => length,
+                    };
+                    let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
+                    // Use the offset to get UDP payload directly from ethernet_packet's payload
+                    if let Some(udp) = UdpPacket::new(&ethernet_packet.payload()[header_length..header_length + payload_len]) {
+                        Some((addr, udp))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            0x8100 /* VLAN */ => {
+                // Handle VLAN tagged packets
+                let vlan_packet = VlanPacket::new(ethernet_packet.payload())?;
+                if vlan_packet.get_ethertype().0 == 0x0800 { // todo handle another level of vlan?
+                    let vlan_header_length = VlanPacket::minimum_packet_size();
+                    let ipv4_packet = Ipv4Packet::new(vlan_packet.payload())?;
+                    if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
+                        let addr = ipv4_packet.get_source();
+                        // Get the IPv4 header length to calculate offset
+                        let min = Ipv4Packet::minimum_packet_size();
+                        let max = ipv4_packet.packet().len();
+                        let header_length = match ipv4_packet.get_header_length() as usize * 4 {
+                            length if length < min => min,
+                            length if length > max => max,
+                            length => length,
+                        };
+                        let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
+                        // Use the offset to get UDP payload directly from vlan_packet's payload
+                        if let Some(udp) = UdpPacket::new(&ethernet_packet.payload()[vlan_header_length + header_length..vlan_header_length + header_length + payload_len]) {
+                            Some((addr, udp))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    if vlan_packet.get_ethertype().0 == 0x8100 {
+                        // another vlan layer?
+                        warn!(log, "get_udp_from_ethernet_packet: ignoring double VLAN tagged packet");
+                    }
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn get_dlt_from_datalink_ethernet(
+        log: &slog::Logger,
+        recv_buffer: &mut &mut [std::mem::MaybeUninit<u8>],
+        rx: &mut Box<dyn DataLinkReceiver>,
+    ) -> Result<(usize, SockAddr), Result<(DltMessage, SocketAddr), std::io::Error>> {
+        // loop until we get a valid packet or timeout/error
+        // todo what to do if we continuously get non-dlt packets?
+        // we stop the loop after max duration of 500ms
+        let start_time = Instant::now();
+        loop {
+            match rx.next() {
+                Ok(packet) => {
+                    let ethernet_packet = EthernetPacket::new(packet).unwrap();
+                    // info!(
+                    //     log,
+                    //     "recv_msg: received ethernet_packet with ethertype: {}",
+                    //     ethernet_packet.get_ethertype()
+                    // );
+                    match ethernet_packet.get_ethertype().0 {
+                        0x2090 /* PLP */| 0x99fe /* TECMP / ASAM CMP */ => {
+                            if let Some(plp_packet)=PlpPacket::new(ethernet_packet.payload()) {
+                                // warn!(log, "recv_msg: got PLP packet {:?}", plp_packet);
+                                // TODO verify that counter is consecutive, warn on gaps
+
+                                // logging, ethernet frames?
+                                if plp_packet.get_plp_type() == 0x03 &&  plp_packet.get_msg_type() == 0x80 {
+                                    // todo verify length? and check for another data packet following?
+                                    let ethernet_packet =EthernetPacket::new(plp_packet.payload()).unwrap();
+                                    //warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{:x}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
+                                    if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet){
+                                        if udp_packet.get_destination() != 3490 {
+                                            // warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
+                                            continue;
+                                        }
+                                        let payload = udp_packet.payload();
+                                        let len = payload.len().min(recv_buffer.len());
+                                        unsafe {
+                                            std::ptr::copy_nonoverlapping(
+                                                payload.as_ptr(),
+                                                recv_buffer.as_mut_ptr() as *mut u8,
+                                                len,
+                                            );
+                                        }
+                                        return Ok((
+                                            len,
+                                            SockAddr::from(SocketAddrV4::new(addr, 3490)),
+                                        ));
+                                    } else{
+                                        match ethernet_packet.get_ethertype().0 {
+                                            0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ | 0x88f7 /* Ptp */ | 0x8100 /* vlan */ | 0x888e /* 802.1x frames? */=> {},
+                                            _ => {
+                                                warn!(log, "recv_msg: ignoring non-udp/dlt PLP ethernet packet with ethertype: {} {:x}", ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
+                                            }
+                                        }
+                                    }
+                                }else{
+                                    match plp_packet.get_plp_type() {
+                                        0x00 => { /* ctrl message? */ }
+                                        0x01 => {
+                                            // status device
+                                        }
+                                        0x02 => {
+                                            // status bus
+                                        }
+                                        _ => {
+                                            warn!(log, "recv_msg: ignoring PLP unknown type packet: {:?}", plp_packet);
+                                        }
+                                    }
+                                }
+                            } else {
+                                warn!(log, "recv_msg: ignoring invalid PLP packet: {:?}", ethernet_packet);
+                            }
+                        }
+                        // todo support ipv4/udp/tcp packets on port 3490 as well?
+                        _ => {
+                            /*warn!(
+                                log,
+                                "recv_msg: ignoring non-ip packet with ethertype: {} {:x}",
+                                ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0
+                            );*/
+                        }
+                    }
+                }
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::TimedOut {
+                        return Err(Err(std::io::Error::new(
+                            std::io::ErrorKind::WouldBlock,
+                            "No data available to read",
+                        )));
+                    }
+                    warn!(log, "RSCAP recv error: {}", e);
+                    return Err(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("RSCAP recv error: {}", e),
+                    )));
+                }
+            }
+            if start_time.elapsed() > std::time::Duration::from_millis(500) {
+                return Err(Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "No data available to read",
+                )));
+            }
+        }
+    }
 }
 
 impl Drop for IpDltMsgReceiver {
     fn drop(&mut self) {
-        // Clean up resources if necessary
-        match self.recv_mode {
-            RecvMode::Tcp => {
-                // Clean up TCP receiver
-            }
-            RecvMode::Udp => {
-                // Clean up UDP receiver
-            }
-            RecvMode::UdpMulticast => {
-                // Clean up UDP multicast receiver
-                match self.addr.ip() {
-                    IpAddr::V4(ref mdns_v4) => {
-                        self.socket
-                            .leave_multicast_v4_n(mdns_v4, &self.interface)
-                            .expect("leave_multicast_v4_n");
-                    }
-                    IpAddr::V6(ref mdns_v6) => {
-                        if let socket2::InterfaceIndexOrAddress::Index(idx) = self.interface {
-                            self.socket
-                                .leave_multicast_v6(mdns_v6, idx)
-                                .expect("leave_multicast_v6");
-                        };
+        match self.recv_method {
+            RecvMethod::Recv(ref socket) | RecvMethod::RecvFrom(ref socket) => {
+                if self.recv_mode == RecvMode::UdpMulticast {
+                    // Clean up UDP multicast receiver
+                    match self.addr.ip() {
+                        IpAddr::V4(ref mdns_v4) => {
+                            socket
+                                .leave_multicast_v4_n(mdns_v4, &self.interface)
+                                .expect("leave_multicast_v4_n");
+                        }
+                        IpAddr::V6(ref mdns_v6) => {
+                            if let socket2::InterfaceIndexOrAddress::Index(idx) = self.interface {
+                                socket
+                                    .leave_multicast_v6(mdns_v6, idx)
+                                    .expect("leave_multicast_v6");
+                            };
+                        }
                     }
                 }
+
+                info!(self.log, "Dropping receiver socket: {:?}", socket);
+            }
+            #[cfg(feature = "rscap")]
+            RecvMethod::DataLinkNext(_) => {
+                info!(self.log, "Dropping RSCAP receiver");
             }
         }
-        info!(self.log, "Droping receiver socket: {:?}", self.socket);
     }
 }
 
