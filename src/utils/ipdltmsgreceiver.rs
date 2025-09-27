@@ -954,7 +954,6 @@ impl IpDltMsgReceiver {
                                             warn!(log, "recv_msg: ignoring PLP unknown type packet: {:?}", plp_packet);
                                         }
                                     }
-                                    warn!(log, "recv_msg: ignoring PLP non ethernet packet: {:?}", plp_packet);
                                 }
                             } else {
                                 warn!(log, "recv_msg: ignoring invalid PLP packet: {:?}", ethernet_packet);
