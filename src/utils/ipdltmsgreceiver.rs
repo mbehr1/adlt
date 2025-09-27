@@ -821,12 +821,13 @@ impl IpDltMsgReceiver {
 
     fn get_udp_from_ethernet_packet<'a>(
         ethernet_packet: &'a EthernetPacket,
-    ) -> Option<UdpPacket<'a>> {
+    ) -> Option<(Ipv4Addr, UdpPacket<'a>)> {
         match ethernet_packet.get_ethertype().0 {
             0x0800 => {
                 // Calculate IPv4 header length to find the UDP payload offset
                 let ipv4_packet = Ipv4Packet::new(ethernet_packet.payload())?;
                 if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
+                    let addr = ipv4_packet.get_source();
                     // Get the IPv4 header length to calculate offset
                     let min = Ipv4Packet::minimum_packet_size();
                     let max = ipv4_packet.packet().len();
@@ -836,7 +837,11 @@ impl IpDltMsgReceiver {
                         length => length,
                     };
                     // Use the offset to get UDP payload directly from ethernet_packet's payload
-                    UdpPacket::new(&ethernet_packet.payload()[header_length..])
+                    if let Some(udp) = UdpPacket::new(&ethernet_packet.payload()[header_length..]){
+                        Some((addr, udp))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -848,6 +853,7 @@ impl IpDltMsgReceiver {
                     let vlan_header_length = VlanPacket::minimum_packet_size();
                     let ipv4_packet = Ipv4Packet::new(vlan_packet.payload())?;
                     if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
+                        let addr = ipv4_packet.get_source();
                         // Get the IPv4 header length to calculate offset
                         let min = Ipv4Packet::minimum_packet_size();
                         let max = ipv4_packet.packet().len();
@@ -857,7 +863,11 @@ impl IpDltMsgReceiver {
                             length => length,
                         };
                         // Use the offset to get UDP payload directly from vlan_packet's payload
-                        UdpPacket::new(&ethernet_packet.payload()[vlan_header_length + header_length..])
+                        if let Some(udp) = UdpPacket::new(&ethernet_packet.payload()[vlan_header_length + header_length..]){
+                            Some((addr, udp))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -898,7 +908,11 @@ impl IpDltMsgReceiver {
                                     // todo verify length? and check for another data packet following?
                                     let ethernet_packet =EthernetPacket::new(plp_packet.payload()).unwrap();
                                     warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{:x}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
-                                    if let Some(udp_packet)=IpDltMsgReceiver::get_udp_from_ethernet_packet(&ethernet_packet){
+                                    if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(&ethernet_packet){
+                                        if udp_packet.get_destination() != 3490 {
+                                            warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
+                                            continue;
+                                        }
                                         let payload = udp_packet.payload();
                                         let len = payload.len().min(recv_buffer.len());
                                         unsafe {
@@ -911,10 +925,11 @@ impl IpDltMsgReceiver {
                                         //recv_buffer[..len].copy_from_slice(&payload[..len]);
                                         return Ok((
                                             len,
-                                            SockAddr::from(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 3490)),
+                                            //SockAddr::from(ethernet_packet.get_source()),
+                                            SockAddr::from(SocketAddrV4::new(addr, 3490)),
                                         )); // TODO get actual src_addr
                                     } else{
-                                        warn!(log, "recv_msg: ignoring non-UDP PLP ethernet packet");
+                                        warn!(log, "recv_msg: ignoring non-UDP PLP ethernet packet {:?}", ethernet_packet);
                                     }
                                 }else{
                                     warn!(log, "recv_msg: ignoring PLP non ethernet packet: {:?}", ethernet_packet);
