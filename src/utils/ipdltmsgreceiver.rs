@@ -820,6 +820,7 @@ impl IpDltMsgReceiver {
     }
 
     fn get_udp_from_ethernet_packet<'a>(
+        log: &slog::Logger,
         ethernet_packet: &'a EthernetPacket,
     ) -> Option<(Ipv4Addr, UdpPacket<'a>)> {
         match ethernet_packet.get_ethertype().0 {
@@ -850,7 +851,7 @@ impl IpDltMsgReceiver {
             0x8100 /* VLAN */ => {
                 // Handle VLAN tagged packets
                 let vlan_packet = VlanPacket::new(ethernet_packet.payload())?;
-                if vlan_packet.get_ethertype().0 == 0x0800 {
+                if vlan_packet.get_ethertype().0 == 0x0800 { // todo handle another level of vlan?
                     let vlan_header_length = VlanPacket::minimum_packet_size();
                     let ipv4_packet = Ipv4Packet::new(vlan_packet.payload())?;
                     if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
@@ -874,6 +875,10 @@ impl IpDltMsgReceiver {
                         None
                     }
                 } else {
+                    if vlan_packet.get_ethertype().0 == 0x8100 {
+                        // another vlan layer?
+                        warn!(log, "get_udp_from_ethernet_packet: ignoring double VLAN tagged packet");
+                    }
                     None
                 }
             }
@@ -910,7 +915,7 @@ impl IpDltMsgReceiver {
                                     // todo verify length? and check for another data packet following?
                                     let ethernet_packet =EthernetPacket::new(plp_packet.payload()).unwrap();
                                     //warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{:x}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
-                                    if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(&ethernet_packet){
+                                    if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet){
                                         if udp_packet.get_destination() != 3490 {
                                             // warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
                                             continue;
@@ -930,7 +935,7 @@ impl IpDltMsgReceiver {
                                         ));
                                     } else{
                                         match ethernet_packet.get_ethertype().0 {
-                                            0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ => {},
+                                            0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ | 0x88f7 /* Ptp */ | 0x8100 /* vlan */ => {},
                                             _ => {
                                                 warn!(log, "recv_msg: ignoring non-udp/dlt PLP ethernet packet with ethertype: {} {:x}", ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
                                             }
