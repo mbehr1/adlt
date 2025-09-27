@@ -942,6 +942,18 @@ impl IpDltMsgReceiver {
                                         }
                                     }
                                 }else{
+                                    match plp_packet.get_plp_type() {
+                                        0x00 => { /* ctrl message? */ }
+                                        0x01 => {
+                                            // status device
+                                        }
+                                        0x02 => {
+                                            // status bus
+                                        }
+                                        _ => {
+                                            warn!(log, "recv_msg: ignoring PLP unknown type packet: {:?}", plp_packet);
+                                        }
+                                    }
                                     warn!(log, "recv_msg: ignoring PLP non ethernet packet: {:?}", plp_packet);
                                 }
                             } else {
