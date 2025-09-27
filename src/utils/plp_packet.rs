@@ -1,5 +1,5 @@
 use pnet_macros::packet;
-use pnet_macros_support::types::u16be;
+use pnet_macros_support::types::{u16be, u64be};
 
 #[allow(unexpected_cfgs)]
 #[packet]
@@ -11,6 +11,9 @@ pub struct Plp {
     pub msg_type: u16be, // aka data_type in tecmp?
     pub reserved: u16be,
     pub probe_flags: u16be,
+    pub timestamp: u64be,
+    pub length: u16be,
+    pub data_flags: u16be,
     #[payload]
     pub payload: Vec<u8>,
 }

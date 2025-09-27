@@ -838,21 +838,33 @@ impl IpDltMsgReceiver {
                     match ethernet_packet.get_ethertype().0 {
                         0x2090 /* PLP */| 0x99fe /* TECMP / ASAM CMP */ => {
                             if let Some(plp_packet)=PlpPacket::new(ethernet_packet.payload()) {
-                                warn!(log, "recv_msg: got PLP packet {:?}", plp_packet);
-                                let payload = plp_packet.payload();
-                                let len = payload.len().min(recv_buffer.len());
-                                unsafe {
-                                    std::ptr::copy_nonoverlapping(
-                                        payload.as_ptr(),
-                                        recv_buffer.as_mut_ptr() as *mut u8,
+                                // warn!(log, "recv_msg: got PLP packet {:?}", plp_packet);
+                                // TODO verify that counter is consecutive, warn on gaps
+
+                                // logging, ethernet frames?
+                                if plp_packet.get_plp_type() == 0x03 &&  plp_packet.get_msg_type() == 0x80 {
+                                    // todo verify length? and check for another data packet following?
+                                    let ethernet_packet =
+                                        pnet::packet::ethernet::EthernetPacket::new(plp_packet.payload()).unwrap();
+                                    warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
+
+                                    let payload = ethernet_packet.payload();                                    
+                                    let len = payload.len().min(recv_buffer.len());
+                                    unsafe {
+                                        std::ptr::copy_nonoverlapping(
+                                            payload.as_ptr(),
+                                            recv_buffer.as_mut_ptr() as *mut u8,
+                                            len,
+                                        );
+                                    }
+                                    //recv_buffer[..len].copy_from_slice(&payload[..len]);
+                                    return Ok((
                                         len,
-                                    );
+                                        SockAddr::from(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 3490)),
+                                    )); // TODO get actual src_addr
+                                }else{
+                                    warn!(log, "recv_msg: ignoring PLP non ethernet packet: {:?}", ethernet_packet);
                                 }
-                                //recv_buffer[..len].copy_from_slice(&payload[..len]);
-                                return Ok((
-                                    len,
-                                    SockAddr::from(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 3490)),
-                                )); // TODO get actual src_addr
                             } else {
                                 warn!(log, "recv_msg: ignoring invalid PLP packet");
                             }
