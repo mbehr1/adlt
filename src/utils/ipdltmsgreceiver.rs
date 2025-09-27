@@ -17,7 +17,10 @@ use crate::utils::plp_packet::PlpPacket;
 #[cfg(feature = "rscap")]
 use pnet::{
     datalink::{Channel, DataLinkReceiver},
-    packet::Packet,
+    packet::{
+        ethernet::EthernetPacket, ip::IpNextHeaderProtocols, ipv4::Ipv4Packet, udp::UdpPacket,
+        vlan::VlanPacket, Packet,
+    },
 };
 
 use crate::dlt::{
@@ -816,6 +819,56 @@ impl IpDltMsgReceiver {
         }
     }
 
+    fn get_udp_from_ethernet_packet<'a>(
+        ethernet_packet: &'a EthernetPacket,
+    ) -> Option<UdpPacket<'a>> {
+        match ethernet_packet.get_ethertype().0 {
+            0x0800 => {
+                // Calculate IPv4 header length to find the UDP payload offset
+                let ipv4_packet = Ipv4Packet::new(ethernet_packet.payload())?;
+                if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
+                    // Get the IPv4 header length to calculate offset
+                    let min = Ipv4Packet::minimum_packet_size();
+                    let max = ipv4_packet.packet().len();
+                    let header_length = match ipv4_packet.get_header_length() as usize * 4 {
+                        length if length < min => min,
+                        length if length > max => max,
+                        length => length,
+                    };
+                    // Use the offset to get UDP payload directly from ethernet_packet's payload
+                    UdpPacket::new(&ethernet_packet.payload()[header_length..])
+                } else {
+                    None
+                }
+            }
+            0x8100 /* VLAN */ => {
+                // Handle VLAN tagged packets
+                let vlan_packet = VlanPacket::new(ethernet_packet.payload())?;
+                if vlan_packet.get_ethertype().0 == 0x0800 {
+                    let vlan_header_length = VlanPacket::minimum_packet_size();
+                    let ipv4_packet = Ipv4Packet::new(vlan_packet.payload())?;
+                    if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
+                        // Get the IPv4 header length to calculate offset
+                        let min = Ipv4Packet::minimum_packet_size();
+                        let max = ipv4_packet.packet().len();
+                        let header_length = match ipv4_packet.get_header_length() as usize * 4 {
+                            length if length < min => min,
+                            length if length > max => max,
+                            length => length,
+                        };
+                        // Use the offset to get UDP payload directly from vlan_packet's payload
+                        UdpPacket::new(&ethernet_packet.payload()[vlan_header_length + header_length..])
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn get_dlt_from_datalink_ethernet(
         log: &slog::Logger,
         recv_buffer: &mut &mut [std::mem::MaybeUninit<u8>],
@@ -828,8 +881,7 @@ impl IpDltMsgReceiver {
         loop {
             match rx.next() {
                 Ok(packet) => {
-                    let ethernet_packet =
-                        pnet::packet::ethernet::EthernetPacket::new(packet).unwrap();
+                    let ethernet_packet = EthernetPacket::new(packet).unwrap();
                     // info!(
                     //     log,
                     //     "recv_msg: received ethernet_packet with ethertype: {}",
@@ -844,24 +896,26 @@ impl IpDltMsgReceiver {
                                 // logging, ethernet frames?
                                 if plp_packet.get_plp_type() == 0x03 &&  plp_packet.get_msg_type() == 0x80 {
                                     // todo verify length? and check for another data packet following?
-                                    let ethernet_packet =
-                                        pnet::packet::ethernet::EthernetPacket::new(plp_packet.payload()).unwrap();
+                                    let ethernet_packet =EthernetPacket::new(plp_packet.payload()).unwrap();
                                     warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{:x}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
-
-                                    let payload = ethernet_packet.payload();                                    
-                                    let len = payload.len().min(recv_buffer.len());
-                                    unsafe {
-                                        std::ptr::copy_nonoverlapping(
-                                            payload.as_ptr(),
-                                            recv_buffer.as_mut_ptr() as *mut u8,
+                                    if let Some(udp_packet)=IpDltMsgReceiver::get_udp_from_ethernet_packet(&ethernet_packet){
+                                        let payload = udp_packet.payload();
+                                        let len = payload.len().min(recv_buffer.len());
+                                        unsafe {
+                                            std::ptr::copy_nonoverlapping(
+                                                payload.as_ptr(),
+                                                recv_buffer.as_mut_ptr() as *mut u8,
+                                                len,
+                                            );
+                                        }
+                                        //recv_buffer[..len].copy_from_slice(&payload[..len]);
+                                        return Ok((
                                             len,
-                                        );
+                                            SockAddr::from(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 3490)),
+                                        )); // TODO get actual src_addr
+                                    } else{
+                                        warn!(log, "recv_msg: ignoring non-UDP PLP ethernet packet");
                                     }
-                                    //recv_buffer[..len].copy_from_slice(&payload[..len]);
-                                    return Ok((
-                                        len,
-                                        SockAddr::from(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 3490)),
-                                    )); // TODO get actual src_addr
                                 }else{
                                     warn!(log, "recv_msg: ignoring PLP non ethernet packet: {:?}", ethernet_packet);
                                 }
