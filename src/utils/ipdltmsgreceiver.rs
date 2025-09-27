@@ -846,7 +846,7 @@ impl IpDltMsgReceiver {
                                     // todo verify length? and check for another data packet following?
                                     let ethernet_packet =
                                         pnet::packet::ethernet::EthernetPacket::new(plp_packet.payload()).unwrap();
-                                    warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
+                                    warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{:x}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
 
                                     let payload = ethernet_packet.payload();                                    
                                     let len = payload.len().min(recv_buffer.len());
