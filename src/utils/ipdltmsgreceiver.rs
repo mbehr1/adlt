@@ -194,6 +194,13 @@ enum RecvMethod {
     DataLinkNext(Channel),
 }
 
+struct PlpStats {
+    last_plp_counter: u16,
+    start_time: u64,
+    nr_packets: u64,
+    packets_lost: u64,
+}
+
 pub struct IpDltMsgReceiver {
     log: slog::Logger,
     pub recv_mode: RecvMode,
@@ -210,7 +217,7 @@ pub struct IpDltMsgReceiver {
     pub index: DltMessageIndexType,
     buffered_msgs: VecDeque<(DltMessage, SocketAddr)>,
     #[cfg(feature = "rscap")]
-    last_plp_counter: Option<u16>, // last seen plp counter for rscap recv mode
+    plp_stats: Option<PlpStats>,
 }
 
 impl IpDltMsgReceiver {
@@ -471,7 +478,7 @@ impl IpDltMsgReceiver {
             index: start_index,
             buffered_msgs: VecDeque::with_capacity(16), // buffer for messages that will be returned on next recv_msg call
             #[cfg(feature = "rscap")]
-            last_plp_counter: None,
+            plp_stats: None,
         })
     }
 
@@ -575,7 +582,7 @@ impl IpDltMsgReceiver {
                         &self.log,
                         recv_buffer,
                         rx,
-                        &mut self.last_plp_counter,
+                        &mut self.plp_stats,
                     ) {
                         Ok(value) => value,
                         Err(value) => return value,
@@ -895,7 +902,7 @@ impl IpDltMsgReceiver {
         log: &slog::Logger,
         recv_buffer: &mut &mut [std::mem::MaybeUninit<u8>],
         rx: &mut Box<dyn DataLinkReceiver>,
-        last_plp_counter: &mut Option<u16>,
+        plp_stats: &mut Option<PlpStats>,
     ) -> Result<(usize, SockAddr), Result<(DltMessage, SocketAddr), std::io::Error>> {
         // loop until we get a valid packet or timeout/error
         // todo what to do if we continuously get non-dlt packets?
@@ -916,14 +923,26 @@ impl IpDltMsgReceiver {
                                 // warn!(log, "recv_msg: got PLP packet {:?}", plp_packet);
                                 // TODO verify that counter is consecutive, warn on gaps
                                 let counter = plp_packet.get_counter();
-                                if let Some(last_counter) = last_plp_counter {
-                                    let expected = last_counter.wrapping_add(1);
+                                if let Some(ref mut plp_stats)=plp_stats {
+                                    plp_stats.nr_packets += 1;
+                                    let expected = plp_stats.last_plp_counter.wrapping_add(1);
                                     if counter != expected {
-                                        warn!(log, "recv_msg: PLP packet counter gap: expected {}, got {}", expected, counter);
+                                        let nr_lost = counter.wrapping_sub(expected);
+                                        plp_stats.packets_lost += nr_lost as u64;
+                                        let timestamp_secs = (plp_packet.get_timestamp() - plp_stats.start_time)/1000_000_000;
+                                        let lost_per_sec = plp_stats.packets_lost
+                                            / (timestamp_secs.max(1) as u64);
+                                        warn!(log, "recv_msg: PLP packet counter gap: expected {}, got {}, lost: {}, total_lost: {}/{}s/{}, lost_per_sec: {}", expected, counter, nr_lost, plp_stats.packets_lost, timestamp_secs, plp_stats.nr_packets,lost_per_sec);
                                     }
+                                    plp_stats.last_plp_counter = counter;
+                                } else {
+                                    *plp_stats = Some(PlpStats{
+                                        last_plp_counter: counter,
+                                        start_time: plp_packet.get_timestamp(),
+                                        nr_packets:1,
+                                        packets_lost:0
+                                    });
                                 }
-                                *last_plp_counter = Some(counter);
-
                                 // logging, ethernet frames?
                                 if plp_packet.get_plp_type() == 0x03 &&  plp_packet.get_msg_type() == 0x80 {
                                     // todo verify length? and check for another data packet following?
