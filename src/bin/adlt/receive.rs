@@ -15,6 +15,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str::FromStr,
 };
+use thread_priority::{set_current_thread_priority, ThreadPriority};
 
 use adlt::{
     dlt::{
@@ -429,6 +430,10 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .name("recv_thread".to_string())
         .spawn(move || {
             let log = log_clone_for_recv_thread;
+            match set_current_thread_priority(ThreadPriority::Max) {
+                Ok(_) => info!(log, "set thread priority for recv_thread to max"),
+                Err(e) => warn!(log, "failed to set thread priority: {}", e),
+            }
             while !stop_recv_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 match ip_receiver.recv_msg() {
                     Ok(msg_from_pair) => {

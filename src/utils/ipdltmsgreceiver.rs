@@ -285,7 +285,7 @@ impl IpDltMsgReceiver {
                 */
                 let config = pnet::datalink::pcap::Config {
                     read_timeout: Some(std::time::Duration::from_millis(500)),
-                    read_buffer_size: 26214400, // 400 * 65536, dlt-viewer uses that
+                    read_buffer_size: 4 * 1024 * 65536, // 400 * 65536, dlt-viewer uses that
                     promiscuous: true,
                     ..Default::default()
                 };
@@ -979,7 +979,7 @@ impl IpDltMsgReceiver {
                         }
                         // todo support ipv4/udp/tcp packets on port 3490 as well?
                         _ => {
-                            if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet){
+                            if let Some((_addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet){
                                 if udp_packet.get_destination() != 3490 {
                                     // warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
                                     continue;
