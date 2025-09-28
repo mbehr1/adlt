@@ -971,8 +971,8 @@ impl IpDltMsgReceiver {
                         _ => {
                             warn!(
                                 log,
-                                "recv_msg: ignoring non-ip packet with ethertype: {} {:x}",
-                                ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0
+                                "recv_msg: ignoring non-ip packet with ethertype: {} {:x} {:?}",
+                                ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0, ethernet_packet
                             );
                         }
                     }
