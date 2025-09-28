@@ -942,7 +942,7 @@ impl IpDltMsgReceiver {
                                         match ethernet_packet.get_ethertype().0 {
                                             0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ | 0x88f7 /* Ptp */ | 0x8100 /* vlan */ | 0x888e /* 802.1x frames? */ | 0x9101 /* ?? */=> {},
                                             _ => {
-                                                warn!(log, "recv_msg: ignoring non-udp/dlt PLP ethernet packet with ethertype: {} {:x}", ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
+                                                warn!(log, "recv_msg: ignoring non-udp/dlt PLP ethernet packet with ethertype: {} {:x} {:?}", ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0, ethernet_packet);
                                             }
                                         }
                                     }
