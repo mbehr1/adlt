@@ -153,6 +153,15 @@ pub fn add_subcommand(app: Command) -> Command {
             .num_args(1)
             .help("interface name (e.g. eth0) to use for capture from full interface"),
     );
+    #[cfg(feature = "rscap")]
+    let subcmd = subcmd.arg(
+        Arg::new("pcap_file")
+            .long("pcap_file")
+            .conflicts_with("hostname")
+            .num_args(1)
+            .help("pcap file name to use for reading DLT messages"),
+    );
+
     app.subcommand(subcmd)
 }
 
@@ -195,6 +204,11 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     } else {
         None
     };
+    let pcap_file = if cfg!(feature = "rscap") {
+        sub_m.get_one::<String>("pcap_file")
+    } else {
+        None
+    };
     let port = sub_m.get_one::<u16>("port").unwrap_or(&3490);
     let udp_multicast = sub_m.get_flag("udp_multicast");
     let output_style: OutputStyle = if sub_m.get_flag("hex") {
@@ -225,15 +239,33 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         };
         (recv_mode, recv_addr)
     } else {
-        (
-            RecvMode::Rscap(
-                sub_m
-                    .get_one::<String>("interface_name")
-                    .unwrap()
-                    .to_owned(),
-            ),
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-        )
+        #[cfg(feature = "rscap")]
+        {
+            use adlt::utils::RscapParam;
+            if let Some(interface_name) = interface_name {
+                (
+                    RecvMode::Rscap(RscapParam::InterfaceName(interface_name.to_owned())),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                )
+            } else if let Some(pcap_file) = sub_m.get_one::<String>("pcap_file") {
+                (
+                    RecvMode::Rscap(RscapParam::File(pcap_file.to_owned())),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                )
+            } else {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Either hostname or interface_name/pcap_file must be provided",
+                )));
+            }
+        }
+        #[cfg(not(feature = "rscap"))]
+        {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Hostname must be provided",
+            )));
+        }
     };
     let interface = if let Some(addr) = sub_m.get_one::<Ipv4Addr>("interface_address") {
         socket2::InterfaceIndexOrAddress::Address(*addr)
@@ -311,12 +343,13 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     info!(
         log,
         "receive from {}:{} via {} on host interface {:?}",
-        hostname.unwrap_or_else(|| interface_name.unwrap()),
+        hostname.unwrap_or_else(|| interface_name.unwrap_or_else(|| pcap_file.unwrap())),
         port,
         match recv_mode {
             RecvMode::Udp => "UDP",
             RecvMode::UdpMulticast => "UDP Multicast",
             RecvMode::Tcp => "TCP",
+            #[cfg(feature = "rscap")]
             RecvMode::Rscap(_) => "RSCAP",
         },
         interface
@@ -410,6 +443,10 @@ pub fn receive<W: std::io::Write + Send + 'static>(
                             std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::InvalidData => {
                                 // no message received, continue
                                 continue;
+                            }
+                            std::io::ErrorKind::NotFound => {
+                                warn!(log, "NotFound/EOF '{e}', stopping receiver thread.");
+                                break; // exit on error
                             }
                             _ => {
                                 info!(log, "error receiving message: {} e.kind={} recv_mode={:?}", e, e.kind(), ip_receiver.recv_mode);

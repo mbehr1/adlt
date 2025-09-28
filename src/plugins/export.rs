@@ -455,7 +455,7 @@ impl Plugin for ExportPlugin {
             }
         }
         self.nr_processed_msgs += 1;
-        if self.nr_processed_msgs % 10_000 == 0 {
+        if self.nr_processed_msgs.is_multiple_of(10_000) {
             self.update_state()
         }
         true

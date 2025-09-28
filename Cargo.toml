@@ -16,7 +16,8 @@ categories = ["command-line-utilities", "development-tools", "encoding", "parsin
 [features]
 default = []
 libarchive = ["dep:compress-tools", "compress-tools/static"]
-rscap = ["dep:pnet"]
+rscap = ["dep:pnet", "pnet/pcap"]
+clippy = []
 
 [lib]
 name = "adlt"

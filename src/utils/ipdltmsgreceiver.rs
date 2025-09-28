@@ -8,8 +8,7 @@ use slog::{info, warn};
 use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, Socket, Type};
 use std::{
     collections::VecDeque,
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
-    time::Instant,
+    net::{IpAddr, SocketAddr},
 };
 
 #[cfg(feature = "rscap")]
@@ -21,6 +20,11 @@ use pnet::{
         ethernet::EthernetPacket, ip::IpNextHeaderProtocols, ipv4::Ipv4Packet, udp::UdpPacket,
         vlan::VlanPacket, Packet,
     },
+};
+#[cfg(feature = "rscap")]
+use std::{
+    net::{Ipv4Addr, SocketAddrV4},
+    time::Instant,
 };
 
 use crate::dlt::{
@@ -71,6 +75,7 @@ pub fn create_send_socket(
     interface: InterfaceIndexOrAddress,
 ) -> Result<socket2::Socket, std::io::Error> {
     let socket = match send_mode {
+        #[cfg(feature = "rscap")]
         RecvMode::Rscap(_) => {
             panic!("RSCAP server not implemented yet");
         }
@@ -156,6 +161,7 @@ pub fn create_send_socket(
             RecvMode::Udp => "UDP",
             RecvMode::UdpMulticast => "UDP Multicast",
             RecvMode::Tcp => "TCP",
+            #[cfg(feature = "rscap")]
             RecvMode::Rscap(_) => "RSCAP",
         },
         send_addr.ip(),
@@ -167,11 +173,18 @@ pub fn create_send_socket(
 }
 
 #[derive(PartialEq, Debug)]
+pub enum RscapParam {
+    InterfaceName(String),
+    File(String),
+}
+
+#[derive(PartialEq, Debug)]
 pub enum RecvMode {
     Tcp,
     Udp,
     UdpMulticast,
-    Rscap(String),
+    #[cfg(feature = "rscap")]
+    Rscap(RscapParam),
 }
 
 enum RecvMethod {
@@ -196,6 +209,8 @@ pub struct IpDltMsgReceiver {
     recv_buffer: Vec<u8>,
     pub index: DltMessageIndexType,
     buffered_msgs: VecDeque<(DltMessage, SocketAddr)>,
+    #[cfg(feature = "rscap")]
+    last_plp_counter: Option<u16>, // last seen plp counter for rscap recv mode
 }
 
 impl IpDltMsgReceiver {
@@ -238,40 +253,44 @@ impl IpDltMsgReceiver {
         addr: SocketAddr,
     ) -> Result<Self, std::io::Error> {
         let recv_method = match recv_mode {
-            RecvMode::Rscap(ref interface_name) => {
-                if cfg!(feature = "rscap") {
-                    let available_interfaces = pnet::datalink::interfaces();
-                    info!(log, "Available interfaces: {:?}", available_interfaces);
+            #[cfg(feature = "rscap")]
+            RecvMode::Rscap(RscapParam::InterfaceName(ref interface_name)) => {
+                let available_interfaces = pnet::datalink::interfaces();
+                info!(log, "Available interfaces: {:?}", available_interfaces);
 
-                    let iface = available_interfaces
-                        .into_iter()
-                        .find(|iface| iface.name == *interface_name);
+                let iface = available_interfaces
+                    .into_iter()
+                    .find(|iface| iface.name == *interface_name);
 
-                    if iface.is_none() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            format!("Interface {interface_name} not found"),
-                        ));
-                    }
-                    let iface = iface.unwrap();
-                    info!(log, "Using interface: {:?}", iface.name);
-                    // Create a new channel, dealing with layer 2 packets
-                    // set blocking mode (with read timeout)
-                    let config = pnet::datalink::Config {
-                        read_timeout: Some(std::time::Duration::from_millis(500)),
-                        read_buffer_size: 26214400, // 400 * 65536, dlt-viewer uses that
-                        channel_type: pnet::datalink::ChannelType::Layer2,
-                        promiscuous: true,
-                        ..Default::default()
-                    };
-                    let channel = pnet::datalink::channel(&iface, config)?;
-                    RecvMethod::DataLinkNext(channel)
-                } else {
+                if iface.is_none() {
                     return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "RSCAP feature not enabled in this build",
+                        std::io::ErrorKind::NotFound,
+                        format!("Interface {interface_name} not found"),
                     ));
                 }
+                let iface = iface.unwrap();
+                info!(log, "Using interface: {:?}", iface.name);
+                // Create a new channel, dealing with layer 2 packets
+                // set blocking mode (with read timeout)
+                let config = pnet::datalink::Config {
+                    read_timeout: Some(std::time::Duration::from_millis(500)),
+                    read_buffer_size: 26214400, // 400 * 65536, dlt-viewer uses that
+                    channel_type: pnet::datalink::ChannelType::Layer2,
+                    promiscuous: true,
+                    ..Default::default()
+                };
+                let channel = pnet::datalink::channel(&iface, config)?;
+                RecvMethod::DataLinkNext(channel)
+            }
+            #[cfg(feature = "rscap")]
+            RecvMode::Rscap(RscapParam::File(ref file_name)) => {
+                let config = pnet::datalink::pcap::Config {
+                    read_buffer_size: 26214400, // or stick with default for file?
+                    promiscuous: true,
+                    ..Default::default()
+                };
+                let channel = pnet::datalink::pcap::from_file(file_name, config)?;
+                RecvMethod::DataLinkNext(channel)
             }
             RecvMode::Tcp => {
                 let socket = Self::new_tcp_client_socket(addr)?;
@@ -441,6 +460,8 @@ impl IpDltMsgReceiver {
             recv_buffer: data,
             index: start_index,
             buffered_msgs: VecDeque::with_capacity(16), // buffer for messages that will be returned on next recv_msg call
+            #[cfg(feature = "rscap")]
+            last_plp_counter: None,
         })
     }
 
@@ -544,6 +565,7 @@ impl IpDltMsgReceiver {
                         &self.log,
                         recv_buffer,
                         rx,
+                        &mut self.last_plp_counter,
                     ) {
                         Ok(value) => value,
                         Err(value) => return value,
@@ -554,35 +576,6 @@ impl IpDltMsgReceiver {
                         "RSCAP channel is not Ethernet",
                     ));
                 }
-
-                /*let mut nr_packets = 100;
-                    while nr_packets > 0 {
-                        match rx.next() {
-                            Ok(packet) => {
-                                warn!(log, "RSCAP received packet with length: {}", packet.len());
-                                let ethernet_packet =
-                                    pnet::packet::ethernet::EthernetPacket::new(packet).unwrap();
-                                warn!(
-                                    log,
-                                    "RSCAP received ethernet_packet with ethertype: {}",
-                                    ethernet_packet.get_ethertype()
-                                );
-
-                                // dump the first 1k in hex:
-                                for byte in &packet[..packet.len().min(1024)] {
-                                    print!("{:02x} ", byte);
-                                }
-                                println!();
-                            }
-                            Err(e) => {
-                                warn!(log, "RSCAP recv error: {}", e);
-                            }
-                        }
-                        nr_packets -= 1;
-                    }
-                }
-                */
-                //(0, SockAddr::from(self.addr)) // TODO implement RSCAP recv
             }
         };
 
@@ -819,6 +812,7 @@ impl IpDltMsgReceiver {
         }
     }
 
+    #[cfg(feature = "rscap")]
     fn get_udp_from_ethernet_packet<'a>(
         log: &slog::Logger,
         ethernet_packet: &'a EthernetPacket,
@@ -886,10 +880,12 @@ impl IpDltMsgReceiver {
         }
     }
 
+    #[cfg(feature = "rscap")]
     fn get_dlt_from_datalink_ethernet(
         log: &slog::Logger,
         recv_buffer: &mut &mut [std::mem::MaybeUninit<u8>],
         rx: &mut Box<dyn DataLinkReceiver>,
+        last_plp_counter: &mut Option<u16>,
     ) -> Result<(usize, SockAddr), Result<(DltMessage, SocketAddr), std::io::Error>> {
         // loop until we get a valid packet or timeout/error
         // todo what to do if we continuously get non-dlt packets?
@@ -909,6 +905,14 @@ impl IpDltMsgReceiver {
                             if let Some(plp_packet)=PlpPacket::new(ethernet_packet.payload()) {
                                 // warn!(log, "recv_msg: got PLP packet {:?}", plp_packet);
                                 // TODO verify that counter is consecutive, warn on gaps
+                                let counter = plp_packet.get_counter();
+                                if let Some(last_counter) = last_plp_counter {
+                                    let expected = last_counter.wrapping_add(1);
+                                    if counter != expected {
+                                        warn!(log, "recv_msg: PLP packet counter gap: expected {}, got {}", expected, counter);
+                                    }
+                                }
+                                *last_plp_counter = Some(counter);
 
                                 // logging, ethernet frames?
                                 if plp_packet.get_plp_type() == 0x03 &&  plp_packet.get_msg_type() == 0x80 {
@@ -929,13 +933,14 @@ impl IpDltMsgReceiver {
                                                 len,
                                             );
                                         }
+                                        // todo use timestamp (except upper two bits) from plp packet
                                         return Ok((
                                             len,
                                             SockAddr::from(SocketAddrV4::new(addr, 3490)),
                                         ));
                                     } else{
                                         match ethernet_packet.get_ethertype().0 {
-                                            0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ | 0x88f7 /* Ptp */ | 0x8100 /* vlan */ | 0x888e /* 802.1x frames? */=> {},
+                                            0x88e5 /*macsec */ | 0x86dd /*ipv6 */ | 0x22f0 /* avb */ | 0x0800 /* ipv4 */ | 0x88f7 /* Ptp */ | 0x8100 /* vlan */ | 0x888e /* 802.1x frames? */ | 0x9101 /* ?? */=> {},
                                             _ => {
                                                 warn!(log, "recv_msg: ignoring non-udp/dlt PLP ethernet packet with ethertype: {} {:x}", ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
                                             }
@@ -950,6 +955,9 @@ impl IpDltMsgReceiver {
                                         0x02 => {
                                             // status bus
                                         }
+                                        0x04 => {
+                                            // status config
+                                        }
                                         _ => {
                                             warn!(log, "recv_msg: ignoring PLP unknown type packet: {:?}", plp_packet);
                                         }
@@ -961,11 +969,11 @@ impl IpDltMsgReceiver {
                         }
                         // todo support ipv4/udp/tcp packets on port 3490 as well?
                         _ => {
-                            /*warn!(
+                            warn!(
                                 log,
                                 "recv_msg: ignoring non-ip packet with ethertype: {} {:x}",
                                 ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0
-                            );*/
+                            );
                         }
                     }
                 }
@@ -975,8 +983,28 @@ impl IpDltMsgReceiver {
                             std::io::ErrorKind::WouldBlock,
                             "No data available to read",
                         )));
+                    } else if e.kind() == std::io::ErrorKind::Other {
+                        if let Some(inner_err) = e.get_ref() {
+                            if inner_err
+                                .to_string()
+                                .contains("no more packets to read from the file")
+                            {
+                                // delay for a short time to avoid busy looping
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                return Err(Err(std::io::Error::new(
+                                    std::io::ErrorKind::NotFound,
+                                    "No more packets",
+                                )));
+                            }
+                            warn!(
+                                log,
+                                "RSCAP recv inner error: {:?}: '{}'",
+                                inner_err,
+                                inner_err.to_string()
+                            );
+                        }
                     }
-                    warn!(log, "RSCAP recv error: {}", e);
+                    warn!(log, "RSCAP recv error: {:?}", e);
                     return Err(Err(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         format!("RSCAP recv error: {}", e),
