@@ -199,6 +199,7 @@ struct PlpStats {
     start_time: u64,
     nr_packets: u64,
     packets_lost: u64,
+    last_dump_time: u64,
 }
 
 pub struct IpDltMsgReceiver {
@@ -766,6 +767,7 @@ impl IpDltMsgReceiver {
                         src_addr_buffer.extend_from_slice(to_keep);
                     }
                 } else {
+                    let max_to_consume = std::cmp::min(to_consume, src_addr_buffer.len());
                     src_addr_buffer.drain(..to_consume);
                 }
                 Ok((msg, src_addr.as_socket().unwrap()))
@@ -929,10 +931,14 @@ impl IpDltMsgReceiver {
                                     if counter != expected {
                                         let nr_lost = counter.wrapping_sub(expected);
                                         plp_stats.packets_lost += nr_lost as u64;
-                                        let timestamp_secs = (plp_packet.get_timestamp() - plp_stats.start_time)/1000_000_000;
-                                        let lost_per_sec = plp_stats.packets_lost
-                                            / (timestamp_secs.max(1) as u64);
-                                        warn!(log, "recv_msg: PLP packet counter gap: expected {}, got {}, lost: {}, total_lost: {}/{}s/{}, lost_per_sec: {}", expected, counter, nr_lost, plp_stats.packets_lost, timestamp_secs, plp_stats.nr_packets,lost_per_sec);
+                                        let packet_timestamp = plp_packet.get_timestamp();
+                                        if packet_timestamp.saturating_sub(plp_stats.last_dump_time) > 1000_000_000 {
+                                            plp_stats.last_dump_time = packet_timestamp;
+                                            let timestamp_secs = (packet_timestamp- plp_stats.start_time)/1000_000_000;
+                                            let lost_per_sec = plp_stats.packets_lost
+                                                / (timestamp_secs.max(1) as u64);
+                                            warn!(log, "recv_msg: PLP packet counter gap: expected {}, got {}, lost: {}, total_lost: {}/{}s/{}, lost_per_sec: {}", expected, counter, nr_lost, plp_stats.packets_lost, timestamp_secs, plp_stats.nr_packets,lost_per_sec);
+                                        }
                                     }
                                     plp_stats.last_plp_counter = counter;
                                 } else {
@@ -940,7 +946,8 @@ impl IpDltMsgReceiver {
                                         last_plp_counter: counter,
                                         start_time: plp_packet.get_timestamp(),
                                         nr_packets:1,
-                                        packets_lost:0
+                                        packets_lost:0,
+                                        last_dump_time:0
                                     });
                                 }
                                 // logging, ethernet frames?
