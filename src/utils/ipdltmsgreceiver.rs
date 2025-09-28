@@ -969,11 +969,24 @@ impl IpDltMsgReceiver {
                         }
                         // todo support ipv4/udp/tcp packets on port 3490 as well?
                         _ => {
-                            warn!(
-                                log,
-                                "recv_msg: ignoring non-ip packet with ethertype: {} {:x} {:?}",
-                                ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0, ethernet_packet
-                            );
+                            if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet){
+                                if udp_packet.get_destination() != 3490 {
+                                    // warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
+                                    continue;
+                                }
+                                warn!(
+                                    log,
+                                    "recv_msg: ignoring non-plp udp dlt packet: {:?}",
+                                    udp_packet
+                                );
+                            }else{
+                                use slog::debug;
+                                debug!(
+                                    log,
+                                    "recv_msg: ignoring non-ip packet with ethertype: {} {:x} {:?}",
+                                    ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0, ethernet_packet
+                                );
+                            }
                         }
                     }
                 }
