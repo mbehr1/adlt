@@ -255,7 +255,8 @@ impl IpDltMsgReceiver {
         let recv_method = match recv_mode {
             #[cfg(feature = "rscap")]
             RecvMode::Rscap(RscapParam::InterfaceName(ref interface_name)) => {
-                let available_interfaces = pnet::datalink::interfaces();
+                let available_interfaces = pnet::datalink::pcap::interfaces();
+                //let available_interfaces = pnet::datalink::interfaces();
                 info!(log, "Available interfaces: {:?}", available_interfaces);
 
                 let iface = available_interfaces
@@ -272,6 +273,7 @@ impl IpDltMsgReceiver {
                 info!(log, "Using interface: {:?}", iface.name);
                 // Create a new channel, dealing with layer 2 packets
                 // set blocking mode (with read timeout)
+                /*
                 let config = pnet::datalink::Config {
                     read_timeout: Some(std::time::Duration::from_millis(500)),
                     read_buffer_size: 26214400, // 400 * 65536, dlt-viewer uses that
@@ -280,6 +282,14 @@ impl IpDltMsgReceiver {
                     ..Default::default()
                 };
                 let channel = pnet::datalink::channel(&iface, config)?;
+                */
+                let config = pnet::datalink::pcap::Config {
+                    read_timeout: Some(std::time::Duration::from_millis(500)),
+                    read_buffer_size: 26214400, // 400 * 65536, dlt-viewer uses that
+                    promiscuous: true,
+                    ..Default::default()
+                };
+                let channel = pnet::datalink::pcap::channel(&iface, config)?;
                 RecvMethod::DataLinkNext(channel)
             }
             #[cfg(feature = "rscap")]
