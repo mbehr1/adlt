@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.63.0 - 2025-10-12
+#### Features
+- **(pcap)** Add tecmp/plp support from full capture via libpcap - (c7f5f97) - Matthias Behr
+
+- - -
+
 ## v0.62.1 - 2025-09-15
 #### Bug Fixes
 - **(someip)** fixed size arrays - (a326e13) - Matthias Behr
