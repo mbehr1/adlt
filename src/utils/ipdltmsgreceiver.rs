@@ -27,6 +27,25 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 #[cfg(feature = "pcap")]
 type Ipv4FragmentKey = (Ipv4Addr, Ipv4Addr, IpNextHeaderProtocol, u16);
 
+#[cfg(feature = "pcap")]
+#[derive(Debug)]
+struct FragmentInfo {
+    /// Map of fragment offset (in bytes) to fragment data
+    fragments: HashMap<usize, Vec<u8>>,
+    /// Total expected length when all fragments are received (only known when last fragment arrives)
+    total_length: Option<usize>,
+}
+
+#[cfg(feature = "pcap")]
+impl FragmentInfo {
+    fn new() -> Self {
+        Self {
+            fragments: HashMap::new(),
+            total_length: None,
+        }
+    }
+}
+
 use crate::dlt::{
     parse_dlt_with_std_header, DltChar4, DltMessage, DltMessageIndexType, Error, ErrorKind,
 };
@@ -279,7 +298,7 @@ pub struct IpDltMsgReceiver {
     #[cfg(feature = "pcap")]
     plp_stats: Option<PlpStats>,
     #[cfg(feature = "pcap")]
-    fragment_cache: HashMap<Ipv4FragmentKey, Vec<u8>>,
+    fragment_cache: HashMap<Ipv4FragmentKey, FragmentInfo>,
 }
 
 impl IpDltMsgReceiver {
@@ -930,7 +949,7 @@ impl IpDltMsgReceiver {
     fn get_udp_from_ethernet_packet<'a>(
         log: &slog::Logger,
         ethernet_packet: &'a EthernetPacket,
-        fragment_cache: &mut HashMap<Ipv4FragmentKey, Vec<u8>>,
+        fragment_cache: &mut HashMap<Ipv4FragmentKey, FragmentInfo>,
     ) -> Option<(Ipv4Addr, UdpPacketRef<'a>)> {
         match ethernet_packet.get_ethertype().0 {
             0x0800 => {
@@ -1044,7 +1063,7 @@ impl IpDltMsgReceiver {
     fn handle_fragmented_ipv4_packet(
         log: &slog::Logger,
         ipv4_packet: &Ipv4Packet,
-        fragment_cache: &mut HashMap<Ipv4FragmentKey, Vec<u8>>,
+        fragment_cache: &mut HashMap<Ipv4FragmentKey, FragmentInfo>,
     ) -> Option<Vec<u8>> {
         let is_fragmented =
             ipv4_packet.get_flags() & 0x1 != 0 || ipv4_packet.get_fragment_offset() != 0;
@@ -1059,50 +1078,89 @@ impl IpDltMsgReceiver {
             ipv4_packet.get_identification(),
         );
 
-        if is_last_fragment {
-            // check whether we have the remaining payload:
-            if let Some(mut existing_payload) = fragment_cache.remove(&cache_key) {
-                // append the current payload
-                existing_payload.extend_from_slice(ipv4_packet.payload());
-                Some(existing_payload)
-            } else {
-                warn!(
-                    log,
-                    "handle_fragmented_ipv4_packet: received last fragment but no existing fragments found: {:?}",
-                    ipv4_packet
-                );
-                None
-            }
-        } else {
-            // we assume the fragments come in order! this is not according to the spec! (todo!)
-            let entry = fragment_cache.entry(cache_key).or_default();
-            if entry.len() != ipv4_packet.get_fragment_offset() as usize * 8 {
-                // if it's the first packet we can keep the new one...
-                if ipv4_packet.get_fragment_offset() == 0 {
-                    debug!(
-                        log,
-                        "handle_fragmented_ipv4_packet: fragment offset mismatch on first fragment, expected {}, got {}, replacing fragment: {:?}",
-                        entry.len(),
-                        ipv4_packet.get_fragment_offset() as usize * 8,
-                        ipv4_packet
-                    );
-                    entry.clear();
-                    entry.extend_from_slice(ipv4_packet.payload());
-                    return None;
-                }
+        let fragment_offset = ipv4_packet.get_fragment_offset() as usize * 8;
+        let payload = ipv4_packet.payload();
 
-                warn!(
+        // Get or create fragment info for this packet
+        let frag_info = fragment_cache.entry(cache_key).or_insert_with(FragmentInfo::new);
+
+        // Handle the case where we receive the first fragment (offset 0) again
+        // This might be a retransmission or a new fragmented packet with the same ID
+        if fragment_offset == 0 && !frag_info.fragments.is_empty() {
+            debug!(
+                log,
+                "handle_fragmented_ipv4_packet: received first fragment again, replacing existing fragments: {:?}",
+                ipv4_packet
+            );
+            frag_info.fragments.clear();
+            frag_info.total_length = None;
+        }
+
+        // Store the fragment at its offset
+        frag_info.fragments.insert(fragment_offset, payload.to_vec());
+
+        // If this is the last fragment, we know the total length
+        if is_last_fragment {
+            let total_length = fragment_offset + payload.len();
+            frag_info.total_length = Some(total_length);
+
+            // Check if we have all fragments
+            if let Some(assembled) = Self::try_assemble_fragments(log, frag_info, total_length) {
+                // Remove the entry from cache and return the assembled payload
+                fragment_cache.remove(&cache_key);
+                return Some(assembled);
+            } else {
+                debug!(
                     log,
-                    "handle_fragmented_ipv4_packet: fragment offset mismatch, expected {}, got {}, ignoring fragment: {:?}",
-                    entry.len(),
-                    ipv4_packet.get_fragment_offset() as usize * 8,
+                    "handle_fragmented_ipv4_packet: received last fragment but missing some intermediate fragments, waiting for more: {:?}",
                     ipv4_packet
                 );
-                // delete the existing entry as it's invalid now
-                fragment_cache.remove(&cache_key);
+            }
+        }
+
+        None
+    }
+
+    #[cfg(feature = "pcap")]
+    fn try_assemble_fragments(
+        log: &slog::Logger,
+        frag_info: &FragmentInfo,
+        total_length: usize,
+    ) -> Option<Vec<u8>> {
+        // Check if we have all fragments by verifying no gaps exist
+        let mut result = vec![0u8; total_length];
+        let mut covered = vec![false; total_length];
+
+        for (&offset, fragment_data) in &frag_info.fragments {
+            let end = offset + fragment_data.len();
+            if end > total_length {
+                warn!(
+                    log,
+                    "try_assemble_fragments: fragment extends beyond total length: offset={}, len={}, total={}",
+                    offset,
+                    fragment_data.len(),
+                    total_length
+                );
                 return None;
             }
-            entry.extend_from_slice(ipv4_packet.payload());
+            result[offset..end].copy_from_slice(fragment_data);
+            for covered_byte in covered.iter_mut().take(end).skip(offset) {
+                *covered_byte = true;
+            }
+        }
+
+        // Check if all bytes are covered
+        if covered.iter().all(|&c| c) {
+            Some(result)
+        } else {
+            // Find the first gap for debugging
+            if let Some(gap_start) = covered.iter().position(|&c| !c) {
+                debug!(
+                    log,
+                    "try_assemble_fragments: missing fragment data starting at offset {}",
+                    gap_start
+                );
+            }
             None
         }
     }
@@ -1112,7 +1170,7 @@ impl IpDltMsgReceiver {
         log: &slog::Logger,
         recv_buffer: &mut &mut [std::mem::MaybeUninit<u8>],
         packet: &pcap::Packet, // rx: &mut Box<dyn DataLinkReceiver>,
-        fragment_cache: &mut HashMap<Ipv4FragmentKey, Vec<u8>>,
+        fragment_cache: &mut HashMap<Ipv4FragmentKey, FragmentInfo>,
         plp_stats: &mut Option<PlpStats>,
     ) -> Option<(usize, SockAddr)> {
         let packet = packet.data;
@@ -2186,7 +2244,8 @@ mod tests {
         udp_packet.extend_from_slice(&dlt_buf);
 
         // Split the UDP packet into two fragments
-        let fragment_size = 20; // First fragment gets 20 bytes of UDP data
+        // Fragment size must be multiple of 8 bytes for proper IP fragmentation
+        let fragment_size = 16; // First fragment gets 16 bytes of UDP data
         let first_fragment_data = &udp_packet[..fragment_size];
         let second_fragment_data = &udp_packet[fragment_size..];
 
@@ -2426,9 +2485,8 @@ mod tests {
     fn test_fragmentation_out_of_order() {
         let logger = new_logger();
 
-        // Test that out-of-order fragments are rejected
-        // TODO this is only for the current implementation which does not handle out-of-order fragments
-        // We want to be able to handle fragmentation!
+        // Test that out-of-order fragments are handled correctly
+        // We should cache the last fragment and wait for earlier fragments
         let src_ip = Ipv4Addr::new(172, 16, 0, 100);
         let identification = 0xabcdu16;
 
@@ -2466,7 +2524,7 @@ mod tests {
         let mut plp_stats = None;
         let mut fragment_cache = HashMap::new();
 
-        // Should return None and not cache anything (out of order)
+        // Should return None and cache the fragment (waiting for earlier fragments)
         let result = IpDltMsgReceiver::get_dlt_from_pcap_packet(
             &logger,
             &mut recv_buffer,
@@ -2476,8 +2534,8 @@ mod tests {
         );
 
         assert!(result.is_none());
-        // Cache should be empty because we received last fragment without first
-        assert_eq!(fragment_cache.len(), 0);
+        // Cache should have one entry because we're waiting for the first fragment
+        assert_eq!(fragment_cache.len(), 1);
     }
 
     // TODO add tests for fragmentation handling in TCP receiver
