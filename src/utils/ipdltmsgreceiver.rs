@@ -4,7 +4,7 @@
 /// [ ] - set recv buffer size
 /// [ ] - decide whether using a single socket for all addresses is sufficient or whether we need a socket per address
 ///
-use slog::{info, warn};
+use slog::{debug, info, warn};
 use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, Socket, Type};
 use std::{
     collections::VecDeque,
@@ -17,15 +17,69 @@ use crate::utils::plp_packet::PlpPacket;
 use pcap::{Active, Capture, Offline};
 #[cfg(feature = "pcap")]
 use pnet::packet::{
-    ethernet::EthernetPacket, ip::IpNextHeaderProtocols, ipv4::Ipv4Packet, udp::UdpPacket,
-    vlan::VlanPacket, Packet,
+    ethernet::EthernetPacket, ip::IpNextHeaderProtocol, ip::IpNextHeaderProtocols,
+    ipv4::Ipv4Packet, udp::UdpPacket, vlan::VlanPacket, Packet,
 };
 #[cfg(feature = "pcap")]
+use std::collections::HashMap;
+#[cfg(feature = "pcap")]
 use std::net::{Ipv4Addr, SocketAddrV4};
+#[cfg(feature = "pcap")]
+type Ipv4FragmentKey = (Ipv4Addr, Ipv4Addr, IpNextHeaderProtocol, u16);
 
 use crate::dlt::{
     parse_dlt_with_std_header, DltChar4, DltMessage, DltMessageIndexType, Error, ErrorKind,
 };
+
+#[cfg(feature = "pcap")]
+struct UdpPacketOwned {
+    buffer: Vec<u8>,
+}
+
+#[cfg(feature = "pcap")]
+impl UdpPacketOwned {
+    fn new(data: Vec<u8>) -> Option<Self> {
+        // Validate that the data is a valid UDP packet
+        if UdpPacket::new(&data).is_some() {
+            Some(Self { buffer: data })
+        } else {
+            None
+        }
+    }
+
+    fn packet(&'_ self) -> UdpPacket<'_> {
+        // This is only safe if constructed via new()
+        UdpPacket::new(&self.buffer).unwrap()
+    }
+
+    fn payload(&self) -> &[u8] {
+        let udp_header_length = UdpPacket::minimum_packet_size();
+        &self.buffer[udp_header_length..]
+    }
+}
+
+#[cfg(feature = "pcap")]
+enum UdpPacketRef<'a> {
+    Borrowed(UdpPacket<'a>),
+    Owned(UdpPacketOwned),
+}
+
+#[cfg(feature = "pcap")]
+impl<'a> UdpPacketRef<'a> {
+    fn payload(&self) -> &[u8] {
+        match self {
+            UdpPacketRef::Borrowed(udp) => udp.payload(),
+            UdpPacketRef::Owned(udp) => udp.payload(),
+        }
+    }
+
+    fn get_destination(&self) -> u16 {
+        match self {
+            UdpPacketRef::Borrowed(udp) => udp.get_destination(),
+            UdpPacketRef::Owned(udp) => udp.packet().get_destination(),
+        }
+    }
+}
 
 /// Set the maximum buffer size for a socket, trying to set it to the given size.
 ///
@@ -224,6 +278,8 @@ pub struct IpDltMsgReceiver {
     buffered_msgs: VecDeque<(DltMessage, SocketAddr)>,
     #[cfg(feature = "pcap")]
     plp_stats: Option<PlpStats>,
+    #[cfg(feature = "pcap")]
+    fragment_cache: HashMap<Ipv4FragmentKey, Vec<u8>>,
 }
 
 impl IpDltMsgReceiver {
@@ -475,6 +531,8 @@ impl IpDltMsgReceiver {
             buffered_msgs: VecDeque::with_capacity(16), // buffer for messages that will be returned on next recv_msg call
             #[cfg(feature = "pcap")]
             plp_stats: None,
+            #[cfg(feature = "pcap")]
+            fragment_cache: HashMap::new(),
         })
     }
 
@@ -578,6 +636,7 @@ impl IpDltMsgReceiver {
                             &self.log,
                             recv_buffer,
                             &pkt,
+                            &mut self.fragment_cache,
                             &mut self.plp_stats,
                         ) {
                             Some(value) => value,
@@ -608,6 +667,7 @@ impl IpDltMsgReceiver {
                             &self.log,
                             recv_buffer,
                             &pkt,
+                            &mut self.fragment_cache,
                             &mut self.plp_stats,
                         ) {
                             Some(value) => value,
@@ -770,7 +830,7 @@ impl IpDltMsgReceiver {
                                     "recv_msg inner: error parsing DLT message: {} at index {}, buffered msgs: {}, data_len:{}, to_consume:{}, rem_data.len:{} outer msg: {:?}",
                                     e,
                                     self.index, self.buffered_msgs.len(),data_len, to_consume, rem_data.len(),
-                                     &msg
+                                     &msg.standard_header
                                 );
 
                                 // invalid message, so we cannot really trust the remaining data
@@ -870,24 +930,33 @@ impl IpDltMsgReceiver {
     fn get_udp_from_ethernet_packet<'a>(
         log: &slog::Logger,
         ethernet_packet: &'a EthernetPacket,
-    ) -> Option<(Ipv4Addr, UdpPacket<'a>)> {
+        fragment_cache: &mut HashMap<Ipv4FragmentKey, Vec<u8>>,
+    ) -> Option<(Ipv4Addr, UdpPacketRef<'a>)> {
         match ethernet_packet.get_ethertype().0 {
             0x0800 => {
                 // Calculate IPv4 header length to find the UDP payload offset
                 let ipv4_packet = Ipv4Packet::new(ethernet_packet.payload())?;
                 if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
                     let addr = ipv4_packet.get_source();
-                    // Get the IPv4 header length to calculate offset
                     let min = Ipv4Packet::minimum_packet_size();
-                    let max = ipv4_packet.packet().len();
-                    let header_length = match ipv4_packet.get_header_length() as usize * 4 {
-                        length if length < min => min,
-                        length if length > max => max,
-                        length => length,
-                    };
-                    let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
-                    // Use the offset to get UDP payload directly from ethernet_packet's payload
-                    UdpPacket::new(&ethernet_packet.payload()[header_length..header_length + payload_len]).map(|udp| (addr, udp))
+                    // fragmented packet?
+                    let is_fragmented = ipv4_packet.get_flags() & 0x1 != 0 || ipv4_packet.get_fragment_offset() != 0;
+                    if is_fragmented {
+                        let payload = IpDltMsgReceiver::handle_fragmented_ipv4_packet(log, &ipv4_packet, fragment_cache)?;
+                        let udp_owned = UdpPacketOwned::new(payload)?;
+                        Some((addr, UdpPacketRef::Owned(udp_owned)))
+                    } else {
+                        // Get the IPv4 header length to calculate offset
+                        let max = ipv4_packet.packet().len();
+                        let header_length = match ipv4_packet.get_header_length() as usize * 4 {
+                            length if length < min => min,
+                            length if length > max => max,
+                            length => length,
+                        };
+                        let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
+                        // Use the offset to get UDP payload directly from ethernet_packet's payload
+                        UdpPacket::new(&ethernet_packet.payload()[header_length..header_length + payload_len]).map(|udp| (addr, UdpPacketRef::Borrowed(udp)))
+                    }
                 } else {
                     None
                 }
@@ -904,17 +973,25 @@ impl IpDltMsgReceiver {
                     }
                     if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
                         let addr = ipv4_packet.get_source();
-                        // Get the IPv4 header length to calculate offset
                         let min = Ipv4Packet::minimum_packet_size();
-                        let max = ipv4_packet.packet().len();
-                        let header_length = match ipv4_packet.get_header_length() as usize * 4 {
-                            length if length < min => min,
-                            length if length > max => max,
-                            length => length,
-                        };
-                        let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
-                        // Use the offset to get UDP payload directly from vlan_packet's payload
-                        UdpPacket::new(&ethernet_packet.payload()[vlan_header_length + header_length..vlan_header_length + header_length + payload_len]).map(|udp| (addr, udp))
+                        // fragmented packet?
+                        let is_fragmented = ipv4_packet.get_flags() & 0x1 != 0 || ipv4_packet.get_fragment_offset() != 0;
+                        if is_fragmented {
+                            let payload = IpDltMsgReceiver::handle_fragmented_ipv4_packet(log, &ipv4_packet, fragment_cache)?;
+                            let udp_owned = UdpPacketOwned::new(payload)?;
+                            Some((addr, UdpPacketRef::Owned(udp_owned)))
+                        }else{
+                            // Get the IPv4 header length to calculate offset
+                            let max = ipv4_packet.packet().len();
+                            let header_length = match ipv4_packet.get_header_length() as usize * 4 {
+                                length if length < min => min,
+                                length if length > max => max,
+                                length => length,
+                            };
+                            let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
+                            // Use the offset to get UDP payload directly from vlan_packet's payload
+                            UdpPacket::new(&ethernet_packet.payload()[vlan_header_length + header_length..vlan_header_length + header_length + payload_len]).map(|udp| (addr, UdpPacketRef::Borrowed(udp)))
+                        }
                     } else {
                         None
                     }
@@ -927,18 +1004,26 @@ impl IpDltMsgReceiver {
                             }
                             if ipv4_packet.get_next_level_protocol() == IpNextHeaderProtocols::Udp {
                                 let addr = ipv4_packet.get_source();
-                                // Get the IPv4 header length to calculate offset
                                 let min = Ipv4Packet::minimum_packet_size();
-                                let max = ipv4_packet.packet().len();
-                                let header_length = match ipv4_packet.get_header_length() as usize * 4 {
-                                    length if length < min => min,
-                                    length if length > max => max,
-                                    length => length,
-                                };
-                                let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
-                                // Use the offset to get UDP payload directly from vlan_packet's payload
-                                let wd_offset = VlanPacket::minimum_packet_size() + VlanPacket::minimum_packet_size() + header_length;
-                                UdpPacket::new(&ethernet_packet.payload()[wd_offset..wd_offset + payload_len]).map(|udp| (addr, udp))
+                                // fragmented packet?
+                                let is_fragmented = ipv4_packet.get_flags() & 0x1 != 0 || ipv4_packet.get_fragment_offset() != 0;
+                                if is_fragmented {
+                                    let payload = IpDltMsgReceiver::handle_fragmented_ipv4_packet(log, &ipv4_packet, fragment_cache)?;
+                                    let udp_owned = UdpPacketOwned::new(payload)?;
+                                    Some((addr, UdpPacketRef::Owned(udp_owned)))
+                                } else {
+                                    // Get the IPv4 header length to calculate offset
+                                    let max = ipv4_packet.packet().len();
+                                    let header_length = match ipv4_packet.get_header_length() as usize * 4 {
+                                        length if length < min => min,
+                                        length if length > max => max,
+                                        length => length,
+                                    };
+                                    let payload_len = (ipv4_packet.get_total_length() as usize).saturating_sub(header_length);
+                                    // Use the offset to get UDP payload directly from vlan_packet's payload
+                                    let wd_offset = VlanPacket::minimum_packet_size() + VlanPacket::minimum_packet_size() + header_length;
+                                    UdpPacket::new(&ethernet_packet.payload()[wd_offset..wd_offset + payload_len]).map(|udp| (addr, UdpPacketRef::Borrowed(udp)))
+                                }
                             } else {
                                 None
                             }
@@ -956,10 +1041,78 @@ impl IpDltMsgReceiver {
     }
 
     #[cfg(feature = "pcap")]
+    fn handle_fragmented_ipv4_packet(
+        log: &slog::Logger,
+        ipv4_packet: &Ipv4Packet,
+        fragment_cache: &mut HashMap<Ipv4FragmentKey, Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        let is_fragmented =
+            ipv4_packet.get_flags() & 0x1 != 0 || ipv4_packet.get_fragment_offset() != 0;
+        let is_last_fragment = is_fragmented && ipv4_packet.get_flags() & 0x1 == 0;
+
+        assert!(is_fragmented);
+
+        let cache_key: Ipv4FragmentKey = (
+            ipv4_packet.get_source(),
+            ipv4_packet.get_destination(),
+            ipv4_packet.get_next_level_protocol(),
+            ipv4_packet.get_identification(),
+        );
+
+        if is_last_fragment {
+            // check whether we have the remaining payload:
+            if let Some(mut existing_payload) = fragment_cache.remove(&cache_key) {
+                // append the current payload
+                existing_payload.extend_from_slice(ipv4_packet.payload());
+                Some(existing_payload)
+            } else {
+                warn!(
+                    log,
+                    "handle_fragmented_ipv4_packet: received last fragment but no existing fragments found: {:?}",
+                    ipv4_packet
+                );
+                None
+            }
+        } else {
+            // we assume the fragments come in order! this is not according to the spec! (todo!)
+            let entry = fragment_cache.entry(cache_key).or_default();
+            if entry.len() != ipv4_packet.get_fragment_offset() as usize * 8 {
+                // if it's the first packet we can keep the new one...
+                if ipv4_packet.get_fragment_offset() == 0 {
+                    debug!(
+                        log,
+                        "handle_fragmented_ipv4_packet: fragment offset mismatch on first fragment, expected {}, got {}, replacing fragment: {:?}",
+                        entry.len(),
+                        ipv4_packet.get_fragment_offset() as usize * 8,
+                        ipv4_packet
+                    );
+                    entry.clear();
+                    entry.extend_from_slice(ipv4_packet.payload());
+                    return None;
+                }
+
+                warn!(
+                    log,
+                    "handle_fragmented_ipv4_packet: fragment offset mismatch, expected {}, got {}, ignoring fragment: {:?}",
+                    entry.len(),
+                    ipv4_packet.get_fragment_offset() as usize * 8,
+                    ipv4_packet
+                );
+                // delete the existing entry as it's invalid now
+                fragment_cache.remove(&cache_key);
+                return None;
+            }
+            entry.extend_from_slice(ipv4_packet.payload());
+            None
+        }
+    }
+
+    #[cfg(feature = "pcap")]
     fn get_dlt_from_pcap_packet(
         log: &slog::Logger,
         recv_buffer: &mut &mut [std::mem::MaybeUninit<u8>],
         packet: &pcap::Packet, // rx: &mut Box<dyn DataLinkReceiver>,
+        fragment_cache: &mut HashMap<Ipv4FragmentKey, Vec<u8>>,
         plp_stats: &mut Option<PlpStats>,
     ) -> Option<(usize, SockAddr)> {
         let packet = packet.data;
@@ -1010,7 +1163,7 @@ impl IpDltMsgReceiver {
                         let ethernet_packet =EthernetPacket::new(plp_packet.payload()).unwrap();
 
                         //warn!(log, "recv_msg: got PLP ethernet packet {:?}, ethertype: {}:{:x}", plp_packet, ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0);
-                        if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet){
+                        if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet, fragment_cache){
                             if udp_packet.get_destination() != 3490 {
                                 // warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
                                 return None;
@@ -1060,7 +1213,7 @@ impl IpDltMsgReceiver {
             }
             // support ipv4/udp packets on port 3490 as well:
             _ => {
-                if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet){
+                if let Some((addr, udp_packet))=IpDltMsgReceiver::get_udp_from_ethernet_packet(log, &ethernet_packet, fragment_cache){
                     if udp_packet.get_destination() != 3490 {
                         // warn!(log, "recv_msg: ignoring UDP PLP ethernet packet not for port 3490: {:?}", udp_packet);
                         return None;
@@ -1079,12 +1232,12 @@ impl IpDltMsgReceiver {
                         SockAddr::from(SocketAddrV4::new(addr, 3490)),
                     ));
                 }else{
-                    use slog::debug;
-                    debug!(
+                    // this is not correct if we had a fragmented ipv4 packet! So removing the log for now.
+                    /*debug!(
                         log,
                         "recv_msg: ignoring non-ip packet with ethertype: {} {:x} {:?}",
                         ethernet_packet.get_ethertype(), ethernet_packet.get_ethertype().0, ethernet_packet
-                    );
+                    );*/
                 }
             }
         };
@@ -1606,6 +1759,7 @@ mod tests {
             &logger,
             &mut recv_buffer,
             &pcap_packet,
+            &mut HashMap::new(),
             &mut plp_stats,
         );
 
@@ -1695,6 +1849,7 @@ mod tests {
             &logger,
             &mut recv_buffer,
             &pcap_packet,
+            &mut HashMap::new(),
             &mut plp_stats,
         );
 
@@ -1811,6 +1966,7 @@ mod tests {
             &logger,
             &mut recv_buffer,
             &pcap_packet,
+            &mut HashMap::new(),
             &mut plp_stats,
         );
 
@@ -1871,6 +2027,7 @@ mod tests {
             &logger,
             &mut recv_buffer,
             &pcap_packet,
+            &mut HashMap::new(),
             &mut plp_stats,
         );
 
@@ -1924,6 +2081,7 @@ mod tests {
             &logger,
             &mut recv_buffer,
             &pcap_packet,
+            &mut HashMap::new(),
             &mut plp_stats,
         );
 
@@ -1978,6 +2136,7 @@ mod tests {
             &logger,
             &mut recv_buffer,
             &pcap_packet,
+            &mut HashMap::new(),
             &mut plp_stats,
         );
 
@@ -1990,4 +2149,336 @@ mod tests {
         assert_eq!(stats.nr_packets, 6);
         assert_eq!(stats.packets_lost, 5); // gap of 5 packets (0xffff, 0, 1,2,3)
     }
+
+    #[cfg(feature = "pcap")]
+    #[test]
+    fn test_get_dlt_from_pcap_packet_fragmented_ipv4() {
+        let logger = new_logger();
+
+        // Create a test DLT message
+        let (noar, payload) = dlt_args!(0x1234abcd_u32).unwrap();
+        let msg = DltMessage::get_testmsg_with_payload(cfg!(target_endian = "big"), noar, &payload);
+
+        let mut dlt_buf = Vec::new();
+        let mut buf_writer = std::io::Cursor::new(&mut dlt_buf);
+        DltStandardHeader::to_write(
+            &mut buf_writer,
+            &msg.standard_header,
+            &msg.extended_header,
+            Some(msg.ecu),
+            None,
+            Some(100),
+            &payload,
+        )
+        .unwrap();
+
+        let src_ip = Ipv4Addr::new(192, 168, 10, 50);
+        let dst_port = 3490u16;
+        let src_port = 33333u16;
+
+        // Build UDP header + DLT payload
+        let udp_len = 8 + dlt_buf.len() as u16;
+        let mut udp_packet = Vec::new();
+        udp_packet.extend_from_slice(&src_port.to_be_bytes());
+        udp_packet.extend_from_slice(&dst_port.to_be_bytes());
+        udp_packet.extend_from_slice(&udp_len.to_be_bytes());
+        udp_packet.extend_from_slice(&0u16.to_be_bytes());
+        udp_packet.extend_from_slice(&dlt_buf);
+
+        // Split the UDP packet into two fragments
+        let fragment_size = 20; // First fragment gets 20 bytes of UDP data
+        let first_fragment_data = &udp_packet[..fragment_size];
+        let second_fragment_data = &udp_packet[fragment_size..];
+
+        // Build first IPv4 fragment
+        let identification = 0x1234u16;
+        let ip_total_len_1 = 20 + first_fragment_data.len() as u16;
+        let mut ipv4_fragment1 = Vec::new();
+        ipv4_fragment1.push(0x45);
+        ipv4_fragment1.push(0x00);
+        ipv4_fragment1.extend_from_slice(&ip_total_len_1.to_be_bytes());
+        ipv4_fragment1.extend_from_slice(&identification.to_be_bytes());
+        ipv4_fragment1.extend_from_slice(&0x2000u16.to_be_bytes()); // More fragments flag set, offset 0
+        ipv4_fragment1.push(64);
+        ipv4_fragment1.push(17); // UDP
+        ipv4_fragment1.extend_from_slice(&0u16.to_be_bytes());
+        ipv4_fragment1.extend_from_slice(&src_ip.octets());
+        ipv4_fragment1.extend_from_slice(&Ipv4Addr::new(192, 168, 10, 1).octets());
+        ipv4_fragment1.extend_from_slice(first_fragment_data);
+
+        // Build second IPv4 fragment (last fragment)
+        let ip_total_len_2 = 20 + second_fragment_data.len() as u16;
+        let fragment_offset = (fragment_size / 8) as u16; // Offset in 8-byte units
+        let mut ipv4_fragment2 = Vec::new();
+        ipv4_fragment2.push(0x45);
+        ipv4_fragment2.push(0x00);
+        ipv4_fragment2.extend_from_slice(&ip_total_len_2.to_be_bytes());
+        ipv4_fragment2.extend_from_slice(&identification.to_be_bytes());
+        ipv4_fragment2.extend_from_slice(&fragment_offset.to_be_bytes()); // No more fragments, offset set
+        ipv4_fragment2.push(64);
+        ipv4_fragment2.push(17); // UDP
+        ipv4_fragment2.extend_from_slice(&0u16.to_be_bytes());
+        ipv4_fragment2.extend_from_slice(&src_ip.octets());
+        ipv4_fragment2.extend_from_slice(&Ipv4Addr::new(192, 168, 10, 1).octets());
+        ipv4_fragment2.extend_from_slice(second_fragment_data);
+
+        // Create ethernet frames for both fragments
+        let mut ethernet_frame1 = Vec::new();
+        ethernet_frame1.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        ethernet_frame1.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb]);
+        ethernet_frame1.extend_from_slice(&0x0800u16.to_be_bytes());
+        ethernet_frame1.extend_from_slice(&ipv4_fragment1);
+
+        let mut ethernet_frame2 = Vec::new();
+        ethernet_frame2.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        ethernet_frame2.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb]);
+        ethernet_frame2.extend_from_slice(&0x0800u16.to_be_bytes());
+        ethernet_frame2.extend_from_slice(&ipv4_fragment2);
+
+        let mut recv_buffer_raw = vec![std::mem::MaybeUninit::<u8>::uninit(); 65536];
+        let mut recv_buffer = recv_buffer_raw.as_mut_slice();
+        let mut plp_stats = None;
+        let mut fragment_cache = HashMap::new();
+
+        // Process first fragment - should return None (incomplete)
+        let pcap_packet1 = pcap::Packet {
+            header: &pcap::PacketHeader {
+                ts: unsafe { std::mem::zeroed() },
+                caplen: ethernet_frame1.len() as u32,
+                len: ethernet_frame1.len() as u32,
+            },
+            data: &ethernet_frame1,
+        };
+
+        let result1 = IpDltMsgReceiver::get_dlt_from_pcap_packet(
+            &logger,
+            &mut recv_buffer,
+            &pcap_packet1,
+            &mut fragment_cache,
+            &mut plp_stats,
+        );
+        assert!(result1.is_none(), "First fragment should return None");
+        assert_eq!(
+            fragment_cache.len(),
+            1,
+            "Fragment cache should have one entry"
+        );
+
+        // Process second fragment - should return complete packet
+        let pcap_packet2 = pcap::Packet {
+            header: &pcap::PacketHeader {
+                ts: unsafe { std::mem::zeroed() },
+                caplen: ethernet_frame2.len() as u32,
+                len: ethernet_frame2.len() as u32,
+            },
+            data: &ethernet_frame2,
+        };
+
+        let result2 = IpDltMsgReceiver::get_dlt_from_pcap_packet(
+            &logger,
+            &mut recv_buffer,
+            &pcap_packet2,
+            &mut fragment_cache,
+            &mut plp_stats,
+        );
+
+        assert!(
+            result2.is_some(),
+            "Second fragment should complete the packet"
+        );
+        let (size, sock_addr) = result2.unwrap();
+        assert_eq!(size, dlt_buf.len());
+        assert_eq!(sock_addr.as_socket_ipv4().unwrap().ip(), &src_ip);
+        assert_eq!(sock_addr.as_socket_ipv4().unwrap().port(), 3490);
+        assert_eq!(
+            fragment_cache.len(),
+            0,
+            "Fragment cache should be empty after completion"
+        );
+    }
+
+    #[cfg(feature = "pcap")]
+    #[test]
+    fn test_get_dlt_from_pcap_packet_fragmented_vlan() {
+        let logger = new_logger();
+
+        // Create a test DLT message
+        let (noar, payload) = dlt_args!(0x5678dcba_u32).unwrap();
+        let msg = DltMessage::get_testmsg_with_payload(cfg!(target_endian = "big"), noar, &payload);
+
+        let mut dlt_buf = Vec::new();
+        let mut buf_writer = std::io::Cursor::new(&mut dlt_buf);
+        DltStandardHeader::to_write(
+            &mut buf_writer,
+            &msg.standard_header,
+            &msg.extended_header,
+            Some(msg.ecu),
+            None,
+            Some(200),
+            &payload,
+        )
+        .unwrap();
+
+        let src_ip = Ipv4Addr::new(10, 20, 30, 40);
+        let dst_port = 3490u16;
+        let src_port = 44444u16;
+
+        // Build UDP header + DLT payload
+        let udp_len = 8 + dlt_buf.len() as u16;
+        let mut udp_packet = Vec::new();
+        udp_packet.extend_from_slice(&src_port.to_be_bytes());
+        udp_packet.extend_from_slice(&dst_port.to_be_bytes());
+        udp_packet.extend_from_slice(&udp_len.to_be_bytes());
+        udp_packet.extend_from_slice(&0u16.to_be_bytes());
+        udp_packet.extend_from_slice(&dlt_buf);
+
+        // Split into three fragments to test multiple fragment reassembly
+        let frag1_size = 16;
+        let frag2_size = 16;
+        let frag1_data = &udp_packet[..frag1_size];
+        let frag2_data = &udp_packet[frag1_size..frag1_size + frag2_size];
+        let frag3_data = &udp_packet[frag1_size + frag2_size..];
+
+        let identification = 0x5678u16;
+
+        // Build three IPv4 fragments
+        let create_fragment = |data: &[u8], offset_bytes: usize, more_fragments: bool| {
+            let ip_total_len = 20 + data.len() as u16;
+            let mut ipv4_frag = Vec::new();
+            ipv4_frag.push(0x45);
+            ipv4_frag.push(0x00);
+            ipv4_frag.extend_from_slice(&ip_total_len.to_be_bytes());
+            ipv4_frag.extend_from_slice(&identification.to_be_bytes());
+            let flags_offset = if more_fragments {
+                0x2000 | ((offset_bytes / 8) as u16)
+            } else {
+                (offset_bytes / 8) as u16
+            };
+            ipv4_frag.extend_from_slice(&flags_offset.to_be_bytes());
+            ipv4_frag.push(64);
+            ipv4_frag.push(17); // UDP
+            ipv4_frag.extend_from_slice(&0u16.to_be_bytes());
+            ipv4_frag.extend_from_slice(&src_ip.octets());
+            ipv4_frag.extend_from_slice(&Ipv4Addr::new(10, 20, 30, 1).octets());
+            ipv4_frag.extend_from_slice(data);
+            ipv4_frag
+        };
+
+        let ipv4_frag1 = create_fragment(frag1_data, 0, true);
+        let ipv4_frag2 = create_fragment(frag2_data, frag1_size, true);
+        let ipv4_frag3 = create_fragment(frag3_data, frag1_size + frag2_size, false);
+
+        // Wrap in VLAN ethernet frames
+        let create_vlan_ethernet = |ipv4_data: &[u8]| {
+            let mut eth = Vec::new();
+            eth.extend_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+            eth.extend_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+            eth.extend_from_slice(&0x8100u16.to_be_bytes()); // VLAN
+            eth.extend_from_slice(&0x0032u16.to_be_bytes()); // VLAN ID 50
+            eth.extend_from_slice(&0x0800u16.to_be_bytes()); // IPv4
+            eth.extend_from_slice(ipv4_data);
+            eth
+        };
+
+        let eth_frame1 = create_vlan_ethernet(&ipv4_frag1);
+        let eth_frame2 = create_vlan_ethernet(&ipv4_frag2);
+        let eth_frame3 = create_vlan_ethernet(&ipv4_frag3);
+
+        let mut recv_buffer_raw = vec![std::mem::MaybeUninit::<u8>::uninit(); 65536];
+        let mut recv_buffer = recv_buffer_raw.as_mut_slice();
+        let mut plp_stats = None;
+        let mut fragment_cache = HashMap::new();
+
+        // Process fragments
+        for (i, eth_frame) in [&eth_frame1, &eth_frame2, &eth_frame3].iter().enumerate() {
+            let pcap_packet = pcap::Packet {
+                header: &pcap::PacketHeader {
+                    ts: unsafe { std::mem::zeroed() },
+                    caplen: eth_frame.len() as u32,
+                    len: eth_frame.len() as u32,
+                },
+                data: eth_frame,
+            };
+
+            let result = IpDltMsgReceiver::get_dlt_from_pcap_packet(
+                &logger,
+                &mut recv_buffer,
+                &pcap_packet,
+                &mut fragment_cache,
+                &mut plp_stats,
+            );
+
+            if i < 2 {
+                assert!(result.is_none(), "Fragment {} should return None", i + 1);
+            } else {
+                assert!(result.is_some(), "Last fragment should complete the packet");
+                let (size, sock_addr) = result.unwrap();
+                assert_eq!(size, dlt_buf.len());
+                assert_eq!(sock_addr.as_socket_ipv4().unwrap().ip(), &src_ip);
+            }
+        }
+
+        assert_eq!(fragment_cache.len(), 0, "Fragment cache should be empty");
+    }
+
+    #[cfg(feature = "pcap")]
+    #[test]
+    fn test_fragmentation_out_of_order() {
+        let logger = new_logger();
+
+        // Test that out-of-order fragments are rejected
+        // TODO this is only for the current implementation which does not handle out-of-order fragments
+        // We want to be able to handle fragmentation!
+        let src_ip = Ipv4Addr::new(172, 16, 0, 100);
+        let identification = 0xabcdu16;
+
+        // Create second fragment first (offset != 0, more fragments = false)
+        let mut ipv4_frag2 = Vec::new();
+        ipv4_frag2.push(0x45);
+        ipv4_frag2.push(0x00);
+        ipv4_frag2.extend_from_slice(&40u16.to_be_bytes()); // total length
+        ipv4_frag2.extend_from_slice(&identification.to_be_bytes());
+        ipv4_frag2.extend_from_slice(&0x0002u16.to_be_bytes()); // offset=2 (16 bytes), no more fragments
+        ipv4_frag2.push(64);
+        ipv4_frag2.push(17); // UDP
+        ipv4_frag2.extend_from_slice(&0u16.to_be_bytes());
+        ipv4_frag2.extend_from_slice(&src_ip.octets());
+        ipv4_frag2.extend_from_slice(&Ipv4Addr::new(172, 16, 0, 1).octets());
+        ipv4_frag2.extend_from_slice(&[0u8; 20]); // dummy data
+
+        let mut ethernet_frame = Vec::new();
+        ethernet_frame.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        ethernet_frame.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb]);
+        ethernet_frame.extend_from_slice(&0x0800u16.to_be_bytes());
+        ethernet_frame.extend_from_slice(&ipv4_frag2);
+
+        let pcap_packet = pcap::Packet {
+            header: &pcap::PacketHeader {
+                ts: unsafe { std::mem::zeroed() },
+                caplen: ethernet_frame.len() as u32,
+                len: ethernet_frame.len() as u32,
+            },
+            data: &ethernet_frame,
+        };
+
+        let mut recv_buffer_raw = vec![std::mem::MaybeUninit::<u8>::uninit(); 65536];
+        let mut recv_buffer = recv_buffer_raw.as_mut_slice();
+        let mut plp_stats = None;
+        let mut fragment_cache = HashMap::new();
+
+        // Should return None and not cache anything (out of order)
+        let result = IpDltMsgReceiver::get_dlt_from_pcap_packet(
+            &logger,
+            &mut recv_buffer,
+            &pcap_packet,
+            &mut fragment_cache,
+            &mut plp_stats,
+        );
+
+        assert!(result.is_none());
+        // Cache should be empty because we received last fragment without first
+        assert_eq!(fragment_cache.len(), 0);
+    }
+
+    // TODO add tests for fragmentation handling in TCP receiver
 }
