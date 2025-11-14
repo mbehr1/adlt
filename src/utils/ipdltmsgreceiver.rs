@@ -28,10 +28,23 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 type Ipv4FragmentKey = (Ipv4Addr, Ipv4Addr, IpNextHeaderProtocol, u16);
 
 #[cfg(feature = "pcap")]
+#[derive(Debug, Clone)]
+struct Hole {
+    /// Start offset of the hole (inclusive)
+    first: usize,
+    /// End offset of the hole (exclusive)
+    last: usize,
+}
+
+#[cfg(feature = "pcap")]
 #[derive(Debug)]
 struct FragmentInfo {
-    /// Map of fragment offset (in bytes) to fragment data
-    fragments: HashMap<usize, Vec<u8>>,
+    /// Single buffer for the complete packet payload (RFC 815)
+    buffer: Vec<u8>,
+    /// List of holes (gaps) in the buffer where data is still missing (RFC 815)
+    holes: Vec<Hole>,
+    /// Fragments received before we know total length
+    pending_fragments: Vec<(usize, Vec<u8>)>,
     /// Total expected length when all fragments are received (only known when last fragment arrives)
     total_length: Option<usize>,
 }
@@ -40,9 +53,21 @@ struct FragmentInfo {
 impl FragmentInfo {
     fn new() -> Self {
         Self {
-            fragments: HashMap::new(),
+            buffer: Vec::new(),
+            holes: Vec::new(),
+            pending_fragments: Vec::new(),
             total_length: None,
         }
+    }
+
+    /// Initialize the buffer and holes when we know the total length
+    fn initialize(&mut self, total_length: usize) {
+        self.buffer.resize(total_length, 0);
+        self.holes = vec![Hole {
+            first: 0,
+            last: total_length,
+        }];
+        self.total_length = Some(total_length);
     }
 }
 
@@ -1080,91 +1105,134 @@ impl IpDltMsgReceiver {
 
         let fragment_offset = ipv4_packet.get_fragment_offset() as usize * 8;
         let payload = ipv4_packet.payload();
+        let fragment_end = fragment_offset + payload.len();
 
         // Get or create fragment info for this packet
         let frag_info = fragment_cache.entry(cache_key).or_insert_with(FragmentInfo::new);
 
-        // Handle the case where we receive a duplicate fragment at the same offset
-        // This might be a retransmission or a new fragmented packet with the same ID
-        if fragment_offset == 0 && frag_info.fragments.contains_key(&0) {
+        // If this is the last fragment, we now know the total length
+        if is_last_fragment && frag_info.total_length.is_none() {
+            let total_length = fragment_end;
+            frag_info.initialize(total_length);
             debug!(
                 log,
-                "handle_fragmented_ipv4_packet: received duplicate first fragment, replacing all fragments: {:?}",
+                "handle_fragmented_ipv4_packet: received last fragment, total_length={}: {:?}",
+                total_length,
                 ipv4_packet
             );
-            frag_info.fragments.clear();
-            frag_info.total_length = None;
-        }
 
-        // Store the fragment at its offset
-        frag_info.fragments.insert(fragment_offset, payload.to_vec());
-
-        // If this is the last fragment, we know the total length
-        if is_last_fragment {
-            let total_length = fragment_offset + payload.len();
-            frag_info.total_length = Some(total_length);
-        }
-
-        // Check if we can assemble (either we just received the last fragment, or we already had it)
-        if let Some(total_length) = frag_info.total_length {
-            if let Some(assembled) = Self::try_assemble_fragments(log, frag_info, total_length) {
-                // Remove the entry from cache and return the assembled payload
-                fragment_cache.remove(&cache_key);
-                return Some(assembled);
-            } else if is_last_fragment {
-                debug!(
-                    log,
-                    "handle_fragmented_ipv4_packet: received last fragment but missing some intermediate fragments, waiting for more: {:?}",
-                    ipv4_packet
-                );
+            // Process any pending fragments we received before the last fragment
+            let pending = std::mem::take(&mut frag_info.pending_fragments);
+            for (offset, data) in pending {
+                let end = offset + data.len();
+                Self::insert_fragment(log, frag_info, offset, end, &data);
             }
         }
 
-        None
-    }
-
-    #[cfg(feature = "pcap")]
-    fn try_assemble_fragments(
-        log: &slog::Logger,
-        frag_info: &FragmentInfo,
-        total_length: usize,
-    ) -> Option<Vec<u8>> {
-        // Check if we have all fragments by verifying no gaps exist
-        let mut result = vec![0u8; total_length];
-        let mut covered = vec![false; total_length];
-
-        for (&offset, fragment_data) in &frag_info.fragments {
-            let end = offset + fragment_data.len();
-            if end > total_length {
-                warn!(
-                    log,
-                    "try_assemble_fragments: fragment extends beyond total length: offset={}, len={}, total={}",
-                    offset,
-                    fragment_data.len(),
-                    total_length
-                );
-                return None;
-            }
-            result[offset..end].copy_from_slice(fragment_data);
-            for covered_byte in covered.iter_mut().take(end).skip(offset) {
-                *covered_byte = true;
-            }
+        // If we don't know the total length yet, buffer this fragment
+        if frag_info.total_length.is_none() {
+            debug!(
+                log,
+                "handle_fragmented_ipv4_packet: buffering fragment until total length is known: offset={}, len={}",
+                fragment_offset,
+                payload.len()
+            );
+            frag_info.pending_fragments.push((fragment_offset, payload.to_vec()));
+            return None;
         }
 
-        // Check if all bytes are covered
-        if covered.iter().all(|&c| c) {
+        // Copy fragment data into buffer and update holes (RFC 815 algorithm)
+        Self::insert_fragment(log, frag_info, fragment_offset, fragment_end, payload);
+
+        // Check if all holes are filled
+        if frag_info.holes.is_empty() {
+            // All fragments received, return the complete payload
+            let result = frag_info.buffer.clone();
+            fragment_cache.remove(&cache_key);
+            debug!(
+                log,
+                "handle_fragmented_ipv4_packet: reassembly complete, size={}",
+                result.len()
+            );
             Some(result)
         } else {
-            // Find the first gap for debugging
-            if let Some(gap_start) = covered.iter().position(|&c| !c) {
-                debug!(
-                    log,
-                    "try_assemble_fragments: missing fragment data starting at offset {}",
-                    gap_start
-                );
-            }
+            debug!(
+                log,
+                "handle_fragmented_ipv4_packet: {} holes remaining: {:?}",
+                frag_info.holes.len(),
+                frag_info.holes
+            );
             None
         }
+    }
+
+    /// Insert a fragment into the buffer and update the holes list (RFC 815 algorithm)
+    #[cfg(feature = "pcap")]
+    fn insert_fragment(
+        log: &slog::Logger,
+        frag_info: &mut FragmentInfo,
+        fragment_first: usize,
+        fragment_last: usize,
+        payload: &[u8],
+    ) {
+        // Copy fragment data into buffer
+        if fragment_last > frag_info.buffer.len() {
+            warn!(
+                log,
+                "insert_fragment: fragment extends beyond buffer: first={}, last={}, buffer_len={}",
+                fragment_first,
+                fragment_last,
+                frag_info.buffer.len()
+            );
+            return;
+        }
+
+        frag_info.buffer[fragment_first..fragment_last].copy_from_slice(payload);
+
+        // Update holes list according to RFC 815
+        let mut new_holes = Vec::new();
+        
+        for hole in &frag_info.holes {
+            // Case 1: Fragment is completely outside this hole (before or after)
+            if fragment_last <= hole.first || fragment_first >= hole.last {
+                // Keep the hole unchanged
+                new_holes.push(hole.clone());
+            }
+            // Case 2: Fragment completely fills this hole
+            else if fragment_first <= hole.first && fragment_last >= hole.last {
+                // Delete the hole (don't add it to new_holes)
+            }
+            // Case 3: Fragment partially fills the hole from the left
+            else if fragment_first <= hole.first && fragment_last < hole.last {
+                // Create a new hole for the remaining part
+                new_holes.push(Hole {
+                    first: fragment_last,
+                    last: hole.last,
+                });
+            }
+            // Case 4: Fragment partially fills the hole from the right
+            else if fragment_first > hole.first && fragment_last >= hole.last {
+                // Create a new hole for the remaining part
+                new_holes.push(Hole {
+                    first: hole.first,
+                    last: fragment_first,
+                });
+            }
+            // Case 5: Fragment is in the middle of the hole
+            else if fragment_first > hole.first && fragment_last < hole.last {
+                // Split the hole into two
+                new_holes.push(Hole {
+                    first: hole.first,
+                    last: fragment_first,
+                });
+                new_holes.push(Hole {
+                    first: fragment_last,
+                    last: hole.last,
+                });
+            }
+        }
+
+        frag_info.holes = new_holes;
     }
 
     #[cfg(feature = "pcap")]
