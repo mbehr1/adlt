@@ -24,7 +24,9 @@ use adlt::{
         SERVICE_ID_SET_DEFAULT_TRACE_STATUS, SERVICE_ID_SET_LOG_LEVEL,
         SERVICE_ID_SET_TIMING_PACKETS, SERVICE_ID_SET_VERBOSE_MODE,
     },
-    utils::{buf_as_hex_to_io_write, set_max_buffer_size, IpDltMsgReceiver, RecvMode},
+    utils::{
+        buf_as_hex_to_io_write, set_max_buffer_size, IpDltMsgReceiver, RecvMode, SerialParams,
+    },
 };
 use clap::{Arg, ArgMatches, Command};
 use slog::{debug, error, info, warn};
@@ -105,6 +107,13 @@ pub fn add_subcommand(app: Command) -> Command {
                     .help("save messages in a DLT file (overwrite existing file!) If name ends with .zip, the file is zipped."),
             )
             .arg(
+                Arg::new("baudrate")
+                    .short('b')
+                    .num_args(1)
+                    .help("baudrate to use. E.g. 115200. If provided the hostname/serial arg needs to be a serial device name")
+                    .value_parser(clap::value_parser!(u32)),
+            )
+            .arg(
                 Arg::new("port")
                     .short('p')
                     .num_args(1)
@@ -150,7 +159,7 @@ pub fn add_subcommand(app: Command) -> Command {
     let subcmd = subcmd.arg(
         Arg::new("interface_name")
             .short('I')
-            .conflicts_with("hostname")
+            .conflicts_with_all(["hostname", "baudrate"])
             .num_args(1)
             .help("interface name (e.g. eth0) to use for capture from full interface"),
     );
@@ -158,7 +167,7 @@ pub fn add_subcommand(app: Command) -> Command {
     let subcmd = subcmd.arg(
         Arg::new("pcap_file")
             .long("pcap_file")
-            .conflicts_with("hostname")
+            .conflicts_with_all(["hostname", "baudrate"])
             .num_args(1)
             .help("pcap file name to use for reading DLT messages"),
     );
@@ -210,6 +219,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     } else {
         None
     };
+    let baudrate = sub_m.get_one::<u32>("baudrate");
     let port = sub_m.get_one::<u16>("port").unwrap_or(&3490);
     let udp_multicast = sub_m.get_flag("udp_multicast");
     let output_style: OutputStyle = if sub_m.get_flag("hex") {
@@ -226,7 +236,17 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .map(|s| s.to_owned())
         .unwrap();
 
-    let (recv_mode, recv_addr) = if let Some(hostname) = hostname {
+    let (recv_mode, recv_addr) = if let (Some(baudrate), Some(hostname)) = (baudrate, hostname) {
+        let serial_params = SerialParams {
+            device_name: hostname.to_owned(),
+            baudrate: *baudrate,
+        };
+        let recv_mode = RecvMode::Serial(serial_params);
+        (
+            recv_mode,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        )
+    } else if let Some(hostname) = hostname {
         let recv_addr = hostname.parse::<Ipv4Addr>()?;
         let recv_addr = SocketAddr::new(IpAddr::V4(recv_addr), *port);
         let recv_mode = if udp_multicast {
