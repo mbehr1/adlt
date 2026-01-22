@@ -45,6 +45,7 @@ pub use self::ipdltmsgreceiver::set_max_buffer_size;
 pub use self::ipdltmsgreceiver::IpDltMsgReceiver;
 pub use self::ipdltmsgreceiver::PcapParam;
 pub use self::ipdltmsgreceiver::RecvMode;
+pub use self::ipdltmsgreceiver::SerialParams;
 pub mod plp_packet;
 
 use lazy_static::lazy_static;

@@ -125,6 +125,9 @@ pub fn create_send_socket(
     interface: InterfaceIndexOrAddress,
 ) -> Result<socket2::Socket, std::io::Error> {
     let socket = match send_mode {
+        RecvMode::Serial(_) => {
+            panic!("Serial server not implemented yet");
+        }
         #[cfg(feature = "pcap")]
         RecvMode::Pcap(_) => {
             panic!("PCAP server not implemented yet");
@@ -223,10 +226,17 @@ pub enum PcapParam {
 }
 
 #[derive(PartialEq, Debug)]
+pub struct SerialParams {
+    pub device_name: String,
+    pub baudrate: u32,
+}
+
+#[derive(PartialEq, Debug)]
 pub enum RecvMode {
     Tcp,
     Udp,
     UdpMulticast,
+    Serial(SerialParams),
     #[cfg(feature = "pcap")]
     Pcap(PcapParam),
 }
@@ -234,6 +244,7 @@ pub enum RecvMode {
 enum RecvMethod {
     Recv(Socket),
     RecvFrom(Socket),
+    Serial(serial2::SerialPort),
     #[cfg(feature = "pcap")]
     PcapCaptureOffline(Capture<Offline>),
     #[cfg(feature = "pcap")]
@@ -255,6 +266,7 @@ impl std::fmt::Display for RecvMode {
             RecvMode::Udp => write!(f, "UDP"),
             RecvMode::UdpMulticast => write!(f, "UDP Multicast"),
             RecvMode::Tcp => write!(f, "TCP"),
+            RecvMode::Serial(_) => write!(f, "Serial"),
             #[cfg(feature = "pcap")]
             RecvMode::Pcap(_) => write!(f, "PCAP"),
         }
@@ -322,6 +334,41 @@ impl IpDltMsgReceiver {
         addr: SocketAddr,
     ) -> Result<Self, std::io::Error> {
         let recv_method = match recv_mode {
+            RecvMode::Serial(ref params) => {
+                let available_interfaces =
+                    serial2::SerialPort::available_ports().unwrap_or_else(|_| vec![]);
+                info!(
+                    log,
+                    "Available serial interfaces (#{}):",
+                    available_interfaces.len()
+                );
+                available_interfaces.iter().for_each(|iface| {
+                    info!(log, " {:?}", iface);
+                });
+
+                let mut serial_port = serial2::SerialPort::open(
+                    &params.device_name,
+                    |mut settings: serial2::Settings| {
+                        settings.set_raw();
+                        settings.set_baud_rate(params.baudrate)?;
+                        settings.set_char_size(serial2::CharSize::Bits8);
+                        settings.set_parity(serial2::Parity::None);
+                        settings.set_stop_bits(serial2::StopBits::One);
+                        settings.set_flow_control(serial2::FlowControl::None);
+                        Ok(settings)
+                    },
+                )
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("Failed to open serial port {}: {}", params.device_name, e),
+                    )
+                })?;
+                serial_port.discard_buffers()?;
+                serial_port.set_read_timeout(std::time::Duration::from_millis(500))?; // TODO which timeout to choose to get a good accurate timing?
+                RecvMethod::Serial(serial_port)
+                // panic!("Serial server not implemented yet");
+            }
             #[cfg(feature = "pcap")]
             RecvMode::Pcap(PcapParam::InterfaceName(ref interface_name)) => {
                 let available_interfaces = pcap::Device::list().unwrap_or_else(|_| vec![]);
@@ -546,6 +593,54 @@ impl IpDltMsgReceiver {
         let recv_buffer = &mut self.recv_buffer.spare_capacity_mut();
 
         let (size, src_addr) = match &mut self.recv_method {
+            RecvMethod::Serial(ref serial_port) => {
+                debug!(self.log, "recv_msg: receiving message via serial");
+                // SAFETY: We're treating MaybeUninit<u8> as u8 for the read operation
+                // The serial port will initialize the bytes it writes to
+                let buffer_slice = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        (*recv_buffer).as_mut_ptr() as *mut u8,
+                        (*recv_buffer).len(),
+                    )
+                };
+                match serial_port.read(buffer_slice) {
+                    Ok(size) => {
+                        debug!(self.log, "recv_msg: received {} bytes via serial", size);
+                        if size > 0 {
+                            // Serial does not provide src_addr, use a dummy addr
+                            (size, SockAddr::from(self.addr))
+                        } else {
+                            info!(
+                                self.log,
+                                "recv_msg: received zero bytes via Serial, retrying"
+                            );
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::UnexpectedEof,
+                                "Received zero bytes from serial",
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::WouldBlock,
+                                "No data available to read from serial",
+                            ));
+                        } else {
+                            warn!(
+                                self.log,
+                                "recv_msg: error receiving message from serial: {} e.kind={}",
+                                e,
+                                e.kind()
+                            );
+                            return Err(e);
+                        }
+                    }
+                }
+            }
             RecvMethod::Recv(ref mut socket) => {
                 // info!(self.log, "recv_msg: receiving message via TCP");
                 match socket.recv(recv_buffer) {
@@ -1268,6 +1363,9 @@ impl Drop for IpDltMsgReceiver {
                 }
 
                 info!(self.log, "Dropping receiver socket: {:?}", socket);
+            }
+            RecvMethod::Serial(serial_port) => {
+                info!(self.log, "Closing serial port: {:?}", serial_port);
             }
             #[cfg(feature = "pcap")]
             RecvMethod::PcapCaptureOffline(_) => {

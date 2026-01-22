@@ -6,10 +6,15 @@ authors = ["Matthias Behr"]
 license = "CC-BY-NC-SA-4.0"
 repository = "https://github.com/mbehr1/adlt/"
 homepage = "https://github.com/mbehr1/adlt/"
-readme= "README.md"
+readme = "README.md"
 description = "Library and tools to handle automotive DLT- (diagnostic log and trace) files."
 keywords = ["dlt", "automotive", "log", "trace", "analysis"]
-categories = ["command-line-utilities", "development-tools", "encoding", "parsing"]
+categories = [
+  "command-line-utilities",
+  "development-tools",
+  "encoding",
+  "parsing",
+]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -58,7 +63,7 @@ slog = "2.7.0"
 slog-term = "2.9.1"
 slog-async = "2.8.0"
 socket2 = "0.5.10"
-clap = {version="4.5", features = ["cargo"]}
+clap = { version = "4.5", features = ["cargo"] }
 chrono = "0.4.41"
 rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
@@ -86,10 +91,11 @@ asomeip = "0.9.3"
 fancy-regex = "0.14.0"
 glob = "0.3.2"
 zip = "4.2.0"
-compress-tools = { version= "0.15.1", optional = true }
+compress-tools = { version = "0.15.1", optional = true }
 cached = "0.55.1"
 pcap = { version = "2.3.0", optional = true }
-pnet = { version="0.35.0", optional = true }
+pnet = { version = "0.35.0", optional = true }
 pnet_macros = "0.35.0"
 pnet_macros_support = "0.35.0"
 thread-priority = "3.0.0"
+serial2 = "0.2.33"
