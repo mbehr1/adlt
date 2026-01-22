@@ -28,6 +28,11 @@ bench = false
 name = "adlt"
 bench = false
 
+[[bin]]
+name = "dd_dlt"
+path = "src/bin/dd_dlt/main.rs"
+bench = false
+
 [[bench]]
 name = "dlt_benches"
 harness = false
