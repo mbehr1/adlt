@@ -227,6 +227,7 @@ pub fn group_by_archive_multi_vol(filenames: Vec<String>) -> Vec<Vec<String>> {
     groups
 }
 
+use std::time::Duration;
 #[cached(
     size = 100,
     time = 60,
@@ -568,7 +569,7 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                         std::fs::create_dir_all(target_dir)?;
                     } else if file.is_file() {
                         let new_file_name = if let Some(new_file_name) =
-                            rename_map.get(file_name.to_string_lossy().as_ref())
+                            rename_map.get(&*file_name.to_string_lossy())
                         {
                             PathBuf::from(&new_file_name)
                         } else {

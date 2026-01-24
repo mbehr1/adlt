@@ -1,6 +1,6 @@
 /// integration tests for full binary
 use adlt::utils::remote_types::{self, BinType};
-use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use portpicker::pick_unused_port;
 use predicates::prelude::*;
 use std::{
@@ -11,7 +11,7 @@ use tungstenite::Message;
 
 #[test]
 fn bin_version() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let assert = cmd.arg("-V").assert();
     assert
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")))
@@ -20,14 +20,14 @@ fn bin_version() {
 
 #[test]
 fn bin_convert_notext() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let assert = cmd.args(["convert", "foo.dlt"]).assert();
     assert.failure();
 }
 
 #[test]
 fn bin_convert_ex2() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     test_file.push("tests");
     test_file.push("lc_ex002.dlt");
@@ -40,7 +40,7 @@ fn bin_convert_ex2() {
 
 #[test]
 fn bin_convert_ex2_lc_filter() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     test_file.push("tests");
     test_file.push("lc_ex002.dlt");
@@ -58,7 +58,7 @@ fn bin_convert_ex2_lc_filter() {
 
 #[test]
 fn bin_convert_ex3() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     test_file.push("tests");
     test_file.push("lc_ex003.dlt");
@@ -75,7 +75,7 @@ fn bin_convert_ex3() {
 
 #[test]
 fn bin_convert_ex3_mixed() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     test_file.push("tests");
     test_file.push("lc_ex003.dlt");
@@ -100,7 +100,7 @@ fn bin_convert_ex3_mixed() {
 
 #[test]
 fn bin_convert_ex3_headers() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     test_file.push("tests");
     test_file.push("lc_ex003.dlt");
@@ -125,7 +125,7 @@ fn bin_convert_ex3_headers() {
 
 #[test]
 fn bin_convert_can() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     test_file.push("tests");
     test_file.push("can_example1.asc");
@@ -142,7 +142,7 @@ fn bin_convert_can() {
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn bin_remote_invalidport() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let assert = cmd.args(["remote", "-v", "-p", "1"]).assert();
     println!("{:?}", assert.get_output());
     assert.failure();
@@ -151,7 +151,7 @@ fn bin_remote_invalidport() {
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn bin_transmit_invalidport() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let assert = cmd
         .args(["transmit", "-v", "127.0.0.1", "-u", "-p", "0"])
         .assert();
@@ -162,7 +162,7 @@ fn bin_transmit_invalidport() {
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn bin_receive_invalidport() {
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let assert = cmd
         .args(["receive", "-v", "127.0.0.1", "-u", "-p", "66666"])
         .assert();
@@ -174,7 +174,7 @@ fn bin_receive_invalidport() {
 fn bin_remote_validport_listen() {
     let port: u16 = pick_unused_port().expect("no ports free");
 
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let assert = cmd
         .args(["remote", "-v", "-p", &format!("{}", port)])
         .timeout(std::time::Duration::from_secs(1))
@@ -190,7 +190,7 @@ fn bin_remote_validport_listen() {
 #[test]
 fn bin_remote_validport_connect() {
     let port: u16 = pick_unused_port().expect("no ports free");
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
 
     // start the client that connects and sends close
     let t = std::thread::spawn(move || {
@@ -199,7 +199,7 @@ fn bin_remote_validport_connect() {
         let mut ws;
         let start_time = Instant::now();
         loop {
-            match tungstenite::client::connect(format!("wss://127.0.0.1:{}", port)) {
+            match tungstenite::client::connect(format!("ws://127.0.0.1:{}", port)) {
                 Ok(p) => {
                     ws = p.0;
                     break;
@@ -219,12 +219,13 @@ fn bin_remote_validport_connect() {
             start_time.elapsed().as_millis()
         );
 
-        ws.write_message(tungstenite::protocol::Message::Text("close".to_string()))
+        ws.write(tungstenite::protocol::Message::Text("close".into()))
             .unwrap();
-        let answer = ws.read_message().unwrap();
+        ws.flush().unwrap();
+        let answer = ws.read().unwrap();
         assert!(answer.is_text());
         assert_eq!(
-            answer.into_text().unwrap(),
+            answer.into_text().unwrap().as_str(),
             "err: close failed as no file open. open first!"
         );
         std::thread::sleep(Duration::from_millis(20));
@@ -252,7 +253,7 @@ const BINCODE_CONFIG: config::Configuration<config::LittleEndian, config::Fixint
 #[test]
 fn bin_remote_ex002_open() {
     let port: u16 = pick_unused_port().expect("no ports free");
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     test_file.push("tests");
     test_file.push("lc_ex002.dlt");
@@ -262,7 +263,7 @@ fn bin_remote_ex002_open() {
         let mut ws;
         let start_time = Instant::now();
         loop {
-            match tungstenite::client::connect(format!("wss://127.0.0.1:{}", port)) {
+            match tungstenite::client::connect(format!("ws://127.0.0.1:{}", port)) {
                 Ok(p) => {
                     ws = p.0;
                     break;
@@ -276,15 +277,19 @@ fn bin_remote_ex002_open() {
                 }
             }
         }
-        ws.write_message(tungstenite::protocol::Message::Text(format!(
-            r#"open {{"files":[{}]}}"#,
-            serde_json::json!(test_file.to_str().unwrap()),
-        )))
+        ws.write(tungstenite::protocol::Message::Text(
+            format!(
+                r#"open {{"files":[{}]}}"#,
+                serde_json::json!(test_file.to_str().unwrap()),
+            )
+            .into(),
+        ))
         .unwrap();
-        let answer = ws.read_message().unwrap();
+        ws.flush().unwrap();
+        let answer = ws.read().unwrap();
         assert!(answer.is_text());
         assert_eq!(
-            answer.into_text().unwrap(),
+            answer.into_text().unwrap().as_str(),
             "ok: open {\"plugins_active\":[]}"
         );
         // check for the expected msgs:
@@ -295,7 +300,7 @@ fn bin_remote_ex002_open() {
         let mut got_lcs = HashMap::new();
         let mut got_eac = HashMap::new();
 
-        while let Ok(msg) = ws.read_message() {
+        while let Ok(msg) = ws.read() {
             if let Message::Binary(d) = msg {
                 if let Ok((btype, _)) =
                     bincode::decode_from_slice::<remote_types::BinType, _>(&d, BINCODE_CONFIG)
@@ -336,15 +341,16 @@ fn bin_remote_ex002_open() {
             }
         }
         // send close
-        ws.write_message(tungstenite::protocol::Message::Text("close".to_string()))
+        ws.write(tungstenite::protocol::Message::Text("close".into()))
             .unwrap();
+        ws.flush().unwrap();
         loop {
-            let answer = ws.read_message().unwrap();
+            let answer = ws.read().unwrap();
             if answer.is_binary() {
                 continue;
             }
             assert!(answer.is_text(), "answer={:?}", answer);
-            assert_eq!(answer.into_text().unwrap(), "ok: 'close'!");
+            assert_eq!(answer.into_text().unwrap().as_str(), "ok: 'close'!");
             break;
         }
         ws.close(None).unwrap();
@@ -364,7 +370,7 @@ fn bin_remote_ex002_open() {
 #[test]
 fn bin_remote_ex002_stream() {
     let port: u16 = pick_unused_port().expect("no ports free");
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME")).unwrap();
+    let mut cmd = cargo_bin_cmd!();
     let mut test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     test_file.push("tests");
     test_file.push("lc_ex002.dlt");
@@ -374,7 +380,7 @@ fn bin_remote_ex002_stream() {
         let mut ws;
         let start_time = Instant::now();
         loop {
-            match tungstenite::client::connect(format!("wss://127.0.0.1:{}", port)) {
+            match tungstenite::client::connect(format!("ws://127.0.0.1:{}", port)) {
                 Ok(p) => {
                     ws = p.0;
                     break;
@@ -388,28 +394,33 @@ fn bin_remote_ex002_stream() {
                 }
             }
         }
-        ws.write_message(tungstenite::protocol::Message::Text(format!(
-            r#"open {{"files":[{}]}}"#,
-            serde_json::json!(test_file.to_str().unwrap()),
-        )))
+        ws.write(tungstenite::protocol::Message::Text(
+            format!(
+                r#"open {{"files":[{}]}}"#,
+                serde_json::json!(test_file.to_str().unwrap()),
+            )
+            .into(),
+        ))
         .unwrap();
-        let answer = ws.read_message().unwrap();
+        ws.flush().unwrap();
+        let answer = ws.read().unwrap();
         assert!(answer.is_text());
         assert_eq!(
-            answer.into_text().unwrap(),
+            answer.into_text().unwrap().as_str(),
             "ok: open {\"plugins_active\":[]}"
         );
 
-        ws.write_message(tungstenite::protocol::Message::Text(
-            r#"stream {"window":[1000,2000], "binary":true}"#.to_string(),
+        ws.write(tungstenite::protocol::Message::Text(
+            r#"stream {"window":[1000,2000], "binary":true}"#.into(),
         ))
         .unwrap();
+        ws.flush().unwrap();
         // check for the expected # of streamed msgs:
 
         let mut got_stream_ok = false;
         let mut got_msgs = 0usize;
 
-        while let Ok(msg) = ws.read_message() {
+        while let Ok(msg) = ws.read() {
             match msg {
                 Message::Binary(d) => {
                     if let Ok((btype, _)) =
@@ -435,7 +446,7 @@ fn bin_remote_ex002_stream() {
                 }
                 Message::Text(s) => {
                     println!("got text msg: {}", s);
-                    if s.starts_with("ok: stream") {
+                    if s.as_str().starts_with("ok: stream") {
                         // todo check stream id {"id":x,...} and compare with DltMsgs stream_id
                         got_stream_ok = true;
                     }
@@ -447,15 +458,16 @@ fn bin_remote_ex002_stream() {
             }
         }
         // send close
-        ws.write_message(tungstenite::protocol::Message::Text("close".to_string()))
+        ws.write(tungstenite::protocol::Message::Text("close".into()))
             .unwrap();
+        ws.flush().unwrap();
         loop {
-            let answer = ws.read_message().unwrap();
+            let answer = ws.read().unwrap();
             if answer.is_binary() {
                 continue;
             }
             assert!(answer.is_text(), "answer={:?}", answer);
-            assert_eq!(answer.into_text().unwrap(), "ok: 'close'!");
+            assert_eq!(answer.into_text().unwrap().as_str(), "ok: 'close'!");
             break;
         }
 
