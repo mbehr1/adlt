@@ -1,5 +1,6 @@
 use crate::dlt::{
-    parse_dlt_with_serial_header, parse_dlt_with_storage_header, DltMessage, DltMessageIndexType,
+    parse_dlt_with_serial_header, parse_dlt_with_storage_header, DltChar4, DltMessage,
+    DltMessageIndexType,
 };
 use slog::debug;
 use std::io::BufRead;
@@ -66,7 +67,12 @@ where
                 }
             }
             if !self.detected_storage_header {
-                match parse_dlt_with_serial_header(self.index, self.reader.fill_buf().unwrap()) {
+                match parse_dlt_with_serial_header(
+                    self.index,
+                    self.reader.fill_buf().unwrap(),
+                    DltChar4::from_buf(b"DLS\0"),
+                    false,
+                ) {
                     Ok((res, msg)) => {
                         if let Some((l_index, l_bytes_processed, reason)) = &self.log_skipped {
                             if let Some(log) = self.log {

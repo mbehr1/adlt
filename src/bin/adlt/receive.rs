@@ -380,14 +380,8 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     //let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_recv_clone = stop_receive.clone();
 
-    let mut ip_receiver = IpDltMsgReceiver::new(
-        log.clone(),
-        // stop_recv_clone,
-        0,
-        recv_mode,
-        interface,
-        recv_addr,
-    )?;
+    let mut ip_receiver =
+        IpDltMsgReceiver::new(log.clone(), 0, recv_mode, interface, recv_addr, ecu_id)?;
 
     // channels used:
     // tx_for_recv_thread -> receiver thread will put messages into this channel/end (and they will end at rx_from_recv_thread)
@@ -1169,6 +1163,7 @@ mod tests {
                     RecvMode::Tcp,
                     socket2::InterfaceIndexOrAddress::Address(Ipv4Addr::new(127, 0, 0, 1)).into(),
                     std::net::SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), forward_port).into(),
+                    DltChar4::from_buf(b"EcuU"),
                 );
                 assert!(
                     recv.is_ok(),

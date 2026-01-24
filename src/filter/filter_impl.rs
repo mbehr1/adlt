@@ -187,11 +187,10 @@ impl Filter {
     pub fn from_json(json_str: &str) -> Result<Filter, Error> {
         // Parse the string of data into serde_json::Value.
         let v = serde_json::from_str(json_str);
-        if v.is_err() {
+        if let Err(e) = v {
             return Err(Error::new(ErrorKind::InvalidData(format!(
                 "json err '{:?}' parsing '{}'",
-                v.unwrap_err(),
-                json_str
+                e, json_str
             ))));
         }
         let v: Value = v.unwrap();
