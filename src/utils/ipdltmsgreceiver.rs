@@ -28,7 +28,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 type Ipv4FragmentKey = (Ipv4Addr, Ipv4Addr, IpNextHeaderProtocol, u16);
 
 use crate::dlt::{
-    parse_dlt_with_std_header, DltChar4, DltMessage, DltMessageIndexType, Error, ErrorKind,
+    first_idx_of_serial_pattern, parse_dlt_with_serial_header, parse_dlt_with_std_header, DltChar4,
+    DltMessage, DltMessageIndexType, Error, ErrorKind, DLT_SERIAL_HEADER_SIZE,
 };
 
 #[cfg(feature = "pcap")]
@@ -273,12 +274,19 @@ impl std::fmt::Display for RecvMode {
     }
 }
 
+enum ExpectedHeader {
+    Serial, // expect DLT_SERIAL_HEADER
+    Std,    // expect no header but directly the DLT standard header
+}
+
 pub struct IpDltMsgReceiver {
     log: slog::Logger,
     pub recv_mode: RecvMode,
     pub interface: InterfaceIndexOrAddress,
     pub addr: SocketAddr,
     recv_method: RecvMethod,
+    expected_header: ExpectedHeader,
+    storage_header_ecu: DltChar4,
     /// buffer for receiving fragmented messages (e.g. due to payloads > MTU)
     /// use a buffer per sock_addr that we received from (but this would require a socket per sock_addr)
     /// TODO consider different sockets per sock_addr
@@ -332,6 +340,7 @@ impl IpDltMsgReceiver {
         recv_mode: RecvMode,
         interface: InterfaceIndexOrAddress,
         addr: SocketAddr,
+        storage_header_ecu: DltChar4,
     ) -> Result<Self, std::io::Error> {
         let recv_method = match recv_mode {
             RecvMode::Serial(ref params) => {
@@ -566,12 +575,19 @@ impl IpDltMsgReceiver {
             Vec::<u8>::with_capacity(0x10000) // 64kb, this is the max len as part of DLTv1 standard header and UDP should not concat to more than that size
         };
 
+        let expected_header = match recv_mode {
+            RecvMode::Serial(_) => ExpectedHeader::Serial,
+            _ => ExpectedHeader::Std,
+        };
+
         Ok(IpDltMsgReceiver {
             log,
             recv_mode,
             interface,
             addr,
             recv_method,
+            expected_header,
+            storage_header_ecu,
             recv_buffer_list: Vec::with_capacity(256),
             recv_buffer: data,
             index: start_index,
@@ -594,7 +610,7 @@ impl IpDltMsgReceiver {
 
         let (size, src_addr) = match &mut self.recv_method {
             RecvMethod::Serial(ref serial_port) => {
-                debug!(self.log, "recv_msg: receiving message via serial");
+                // debug!(self.log, "recv_msg: receiving message via serial");
                 // SAFETY: We're treating MaybeUninit<u8> as u8 for the read operation
                 // The serial port will initialize the bytes it writes to
                 let buffer_slice = unsafe {
@@ -829,195 +845,105 @@ impl IpDltMsgReceiver {
             &src_addr_buffer[..]
         };
 
-        // Parse the DltMessage from the buffer
+        // Parse the DltMessage(s) from the buffer
         let data_len = data.len();
 
-        match parse_dlt_with_std_header(data, self.index, DltChar4::from_buf(b"RECV")) {
-            Ok((mut to_consume, msg)) => {
-                debug_assert_eq!(
-                    msg.standard_header.len as usize, to_consume,
-                    "The DLT message length should match the consumed data length"
-                );
-                /* todo add test-pattern checks
-                // check that msg payload is counting from 1 to 0xff continously except for the last byte:
-                if msg.payload.len() > 4 + 8 + 6 {
-                    for i in 4 + 8 + 6..msg.payload.len() - 1 {
-                        assert_eq!(
-                        msg.payload[i],
-                        (i -(4+8+6)) as u8,
-                        "The DLT message payload should be counting from 0 to 0xff, but got {} at index {} for msg {:?}",
-                        msg.payload[i],
-                        i, msg
+        let mut msg_to_ret = None;
+        let mut did_consume = 0;
+        loop {
+            let rem_data = &data[did_consume..];
+            match match self.expected_header {
+                ExpectedHeader::Std => {
+                    parse_dlt_with_std_header(rem_data, self.index, self.storage_header_ecu)
+                }
+                ExpectedHeader::Serial => parse_dlt_with_serial_header(
+                    self.index,
+                    rem_data,
+                    self.storage_header_ecu,
+                    true,
+                ),
+            } {
+                Ok((to_consume, msg)) => {
+                    debug_assert_eq!(
+                        match self.expected_header {
+                            ExpectedHeader::Std => msg.standard_header.len as usize,
+                            ExpectedHeader::Serial => {
+                                (msg.standard_header.len as usize) + DLT_SERIAL_HEADER_SIZE
+                            }
+                        },
+                        to_consume,
+                        "The DLT message length should match the consumed data length"
                     );
+                    self.index += 1; // increment index for next message
+                    did_consume += to_consume;
+                    if msg_to_ret.is_none() {
+                        msg_to_ret = Some(msg);
+                    } else {
+                        self.buffered_msgs
+                            .push_back((msg, src_addr.as_socket().unwrap()));
                     }
                 }
-                assert_eq!(
-                    0xff,
-                    data[msg.standard_header.len as usize - 1],
-                    "The msg buffer should end with 0xff for test msgs {:?} {:?} with payload.len: {} index: {}, src_addr_buffer.len: {}, {:?} {:?}",
-                    msg.standard_header,
-                    msg.extended_header,
-                    msg.payload.len(),
-                    self.index,
-                    src_addr_buffer.len(),
-                    data,
-                    src_addr_buffer
-                );*/
-                let remaining = data_len - to_consume;
-                self.index += 1; // increment index for next message
-                if remaining > 0 {
-                    // keep the remaining bytes in the buffer -> needed for TCP (and UDP might bundle few msgs into one dgram as well!
-                    // Currently dlt-daemon does not bundle msgs via UDP (dgram) but via TCP (stream) it is expected
-
-                    // parse the remaining bytes as a new message and put them into a queue
-                    // once NotEnoughData is returned, keep that buffer part
-                    while to_consume < data_len {
-                        let rem_data = &data[to_consume..];
-                        match parse_dlt_with_std_header(
-                            rem_data,
-                            self.index,
-                            DltChar4::from_buf(b"RECV"),
-                        ) {
-                            Ok((new_to_consume, new_msg)) => {
-                                debug_assert_eq!(
-                                    new_msg.standard_header.len as usize, new_to_consume,
-                                    "The inner DLT message length should match the consumed data length"
-                                );
-                                /*
-                                // check that msg payload is counting from 1 to 0xff continously except for the last byte:
-                                if new_msg.payload.len() > 4 + 8 + 6 {
-                                    for i in 4 + 8 + 6..new_msg.payload.len() - 1 {
-                                        assert_eq!(
-                                            new_msg.payload[i],
-                                            (i -(4+8+6)) as u8,
-                                            "The inner DLT message payload should be counting from 0 to 0xff, but got {} at index {} for msg {:?}",
-                                            new_msg.payload[i],
-                                            i, new_msg
-                                        );
-                                    }
-                                }
-                                assert_eq!(
-                                        0xff,
-                                        rem_data[new_msg.standard_header.len as usize - 1],
-                                        "The inner send buffer should end with 0xff for test msgs {:?} {:?} with payload.len: {}",
-                                        new_msg.standard_header,
-                                        new_msg.extended_header,
-                                        new_msg.payload.len()
-                                );*/
-
-                                self.index += 1; // increment index for next message
-                                to_consume += new_to_consume;
-                                self.buffered_msgs
-                                    .push_back((new_msg, src_addr.as_socket().unwrap()));
-                            }
-                            Err(Error {
-                                kind: ErrorKind::NotEnoughData(_),
-                            }) => {
-                                // todo: use that number for next read to get the buffers aligned again
-                                // otherwise it can happen that constantly 2 read calls are needed
-                                // to get a message (well, only if the messages are so large that the fragment
-                                // plus the new dont fit into the 64kb)
-                                break;
-                            }
-                            Err(e) => {
-                                warn!(
-                                    self.log,
-                                    "recv_msg inner: error parsing DLT message: {} at index {}, buffered msgs: {}, data_len:{}, to_consume:{}, rem_data.len:{} outer msg: {:?}",
-                                    e,
-                                    self.index, self.buffered_msgs.len(),data_len, to_consume, rem_data.len(),
-                                     &msg.standard_header
-                                );
-
-                                // invalid message, so we cannot really trust the remaining data
-                                // consume all data until the next valid DLT standard header
-                                let idx_first_pos_header = rem_data[1..].iter().position(|&b| {
-                                    (((b >> 5) & 0x07) == 1) || (((b >> 5) & 0x07) == 2)
-                                });
-                                if let Some(idx) = idx_first_pos_header {
-                                    warn!(
-                                        self.log,
-                                        "recv_msg inner: found next possible header start at idx={idx}",
-                                    );
-                                    to_consume += 1 + idx; // consume just the current byte till the next valid header
-                                } else {
-                                    warn!(
-                                        self.log,
-                                        "recv_msg inner: found no next possible header start. draining {data_len} bytes",
-                                    );
-                                    to_consume += data_len;
-                                }
-                                break;
-                            }
-                        }
-                    }
+                Err(Error {
+                    kind: ErrorKind::NotEnoughData(_missing),
+                }) => {
+                    break;
                 }
-                if src_addr_buffer.is_empty() {
-                    let to_keep = &recvd_data[to_consume..];
-                    if !to_keep.is_empty() {
-                        src_addr_buffer.extend_from_slice(to_keep);
-                    }
-                } else {
-                    let max_to_consume = std::cmp::min(to_consume, src_addr_buffer.len());
-                    src_addr_buffer.drain(..max_to_consume);
-                }
-                Ok((msg, src_addr.as_socket().unwrap()))
-            }
-            Err(Error {
-                kind: ErrorKind::NotEnoughData(missing),
-            }) => {
-                // this is not a valid DLT message, so we need to handle it as a fragmented message
-                // or an invalid message
-                let recvd_data_len = recvd_data.len();
-                if src_addr_buffer.is_empty() {
-                    src_addr_buffer.extend_from_slice(recvd_data);
-                } // else we already extended the buffer above
-                  //src_addr_buffer.extend_from_slice(recvd_data);
-                  // it's expected for a tcp stream to receive fragments
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("not enough data (missing {missing} recvd={recvd_data_len}), storing fragment"),
-                ))
-            }
-            Err(e) => {
-                warn!(
-                    self.log,
-                    "recv_msg: error parsing DLT message: {} at index {} data.len={}",
-                    e,
-                    self.index,
-                    data.len()
-                );
-
-                // now we prune data from start of the buffer to the first byte that could be a valid DLT standard header:
-                // we check at least the first byte to be htyp with DLT version 1 or 2
-
-                // remove from src_addr_buffer until we find a byte with 0x1<<5 or 0x2<<5 being set:
-                let idx_first_pos_header = data[1..]
-                    .iter()
-                    .position(|&b| (((b >> 5) & 0x07) == 1) || (((b >> 5) & 0x07) == 2));
-                if let Some(idx) = idx_first_pos_header {
+                Err(e) => {
                     warn!(
                         self.log,
-                        "recv_msg: found next possible header start at idx={idx}",
+                        "recv_msg: error parsing DLT message: {} at index {} rem_data.len={}",
+                        e,
+                        self.index,
+                        rem_data.len()
                     );
-                    if src_addr_buffer.is_empty() {
-                        src_addr_buffer.extend_from_slice(recvd_data);
-                    }
-                    src_addr_buffer.drain(0..idx + 1);
-                    // we could optimize the extend_from_slice&drain
-                } else {
-                    warn!(
-                        self.log,
-                        "recv_msg: found no possible header start. draining {} bytes",
-                        data.len()
-                    );
-                    src_addr_buffer.clear(); // if any
-                }
 
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "stdh.len too small",
-                ))
+                    // now we prune data from start of the buffer to the first byte that could be a valid DLT standard header:
+                    // we check at least the first byte to be htyp with DLT version 1 or 2
+
+                    // remove from src_addr_buffer until we find a byte with 0x1<<5 or 0x2<<5 being set:
+                    let idx_first_pos_header = match self.expected_header {
+                        ExpectedHeader::Std => rem_data[1..]
+                            .iter()
+                            .position(|&b| (((b >> 5) & 0x07) == 1) || (((b >> 5) & 0x07) == 2)),
+                        ExpectedHeader::Serial => first_idx_of_serial_pattern(&rem_data[1..]),
+                    };
+                    if let Some(idx) = idx_first_pos_header {
+                        warn!(
+                            self.log,
+                            "recv_msg: found next possible header start at idx={idx}",
+                        );
+                        did_consume += 1 + idx;
+                    } else {
+                        warn!(
+                            self.log,
+                            "recv_msg: found no possible header start. draining {} bytes",
+                            rem_data.len()
+                        );
+                        did_consume += rem_data.len();
+                    }
+                }
             }
+            if did_consume >= data_len {
+                break;
+            }
+        }
+        if did_consume < data_len {
+            if src_addr_buffer.is_empty() {
+                src_addr_buffer.extend_from_slice(&recvd_data[did_consume..]);
+            } else {
+                let max_to_consume = std::cmp::min(did_consume, src_addr_buffer.len());
+                src_addr_buffer.drain(..max_to_consume);
+            }
+        } else {
+            src_addr_buffer.clear();
+        }
+        if let Some(msg) = msg_to_ret {
+            Ok((msg, src_addr.as_socket().unwrap()))
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "not enough data",
+            ))
         }
     }
 
@@ -1394,17 +1320,108 @@ impl Iterator for IpDltMsgReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dlt::DltStandardHeader;
+    use crate::dlt::{DltStandardHeader, DLT_SERIAL_HEADER_PATTERN, DLT_SERIAL_HEADER_SIZE};
     use crate::dlt_args;
     use portpicker::pick_unused_port;
     use slog::{o, Drain, Logger};
     use std::io::IoSlice;
     use std::net::Ipv4Addr;
+    use std::os::fd::{AsRawFd, FromRawFd};
 
     fn new_logger() -> Logger {
         let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         Logger::root(drain, o!())
+    }
+
+    fn get_test_msg(arg: u32) -> (Vec<u8>, Vec<u8>) {
+        let (noar, payload) = dlt_args!(arg).unwrap();
+        let msg = DltMessage::get_testmsg_with_payload(cfg!(target_endian = "big"), noar, &payload);
+        let mut buf = Vec::with_capacity(u16::MAX as usize);
+        let mut buf_writer = std::io::Cursor::new(&mut buf);
+        DltStandardHeader::to_write(
+            &mut buf_writer,
+            &msg.standard_header,
+            &msg.extended_header,
+            Some(msg.ecu),
+            None,              // session_id = None, todo
+            Some(noar as u32), // use message count as timestamp
+            &payload,
+        )
+        .expect("Failed to write DLT message");
+        (buf, payload)
+    }
+
+    // MARK: serial tests
+    #[test]
+    fn serial_recv_simple_dls_msg() {
+        let logger = new_logger();
+        // create a pipe and use the read end as serial port for the receiver
+        let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+        let read_end = std::mem::ManuallyDrop::new(read_end);
+        let read_fd = read_end.as_raw_fd();
+
+        let mut receiver = IpDltMsgReceiver {
+            log: logger.clone(),
+            recv_mode: RecvMode::Serial(SerialParams {
+                device_name: "test".to_string(),
+                baudrate: 0,
+            }),
+            recv_method: RecvMethod::Serial(unsafe { serial2::SerialPort::from_raw_fd(read_fd) }),
+            expected_header: ExpectedHeader::Serial,
+            interface: InterfaceIndexOrAddress::Index(0),
+            addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 0),
+            recv_buffer: Vec::with_capacity(65536),
+            storage_header_ecu: DltChar4::from_buf(b"EcuS"),
+            buffered_msgs: std::collections::VecDeque::new(),
+            recv_buffer_list: Vec::new(),
+            #[cfg(feature = "pcap")]
+            plp_stats: None,
+            #[cfg(feature = "pcap")]
+            fragment_cache: HashMap::new(),
+            index: 0,
+        };
+
+        // 1. check default timeout:
+        let r = receiver.recv_msg();
+        assert!(r.is_err());
+        assert_eq!(r.err().unwrap().kind(), std::io::ErrorKind::WouldBlock);
+
+        // 2. write a simple valid DLT message with serial header:
+        let (buf, payload) = get_test_msg(0);
+        let dls_bytes = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
+        let dls = std::io::IoSlice::new(&dls_bytes);
+        use std::io::Write;
+        let n = write_end
+            .write_vectored(&mut [dls, std::io::IoSlice::new(&buf)])
+            .expect("write to serial pipe");
+        assert_eq!(n, DLT_SERIAL_HEADER_SIZE + buf.len());
+        // now receive the message:
+        let r = receiver.recv_msg();
+        assert!(r.is_ok());
+        let (rcvd_msg, _src_addr) = r.unwrap();
+        assert_eq!(rcvd_msg.payload, payload);
+        assert_eq!(rcvd_msg.ecu, DltChar4::from_buf(b"ECU1")); // the msg ext header contains "ECU1"
+                                                               // 3. write a partial DLS message and then a complete one and expect the 2nd complete one to be received:
+        let (buf, _payload) = get_test_msg(1);
+        for partial_len in 1..buf.len() {
+            let n = write_end
+                .write_vectored(&mut [dls, std::io::IoSlice::new(&buf[..partial_len])])
+                .expect("write partial to serial pipe");
+            assert_eq!(n, DLT_SERIAL_HEADER_SIZE + partial_len);
+            // now write a complete message:
+            let (buf2, payload2) = get_test_msg(2);
+            let n = write_end
+                .write_vectored(&mut [dls, std::io::IoSlice::new(&buf2)])
+                .expect("write complete to serial pipe");
+            assert_eq!(n, DLT_SERIAL_HEADER_SIZE + buf2.len());
+            // now receive the message:
+            let r = receiver.recv_msg();
+            assert!(r.is_ok());
+            let (rcvd_msg, _src_addr) = r.unwrap();
+            assert_eq!(rcvd_msg.payload, payload2);
+            assert_eq!(rcvd_msg.ecu, DltChar4::from_buf(b"ECU1")); // the msg ext header contains "ECU1"
+        }
     }
 
     #[test]
@@ -1449,8 +1466,14 @@ mod tests {
     fn test_ip_dlt_msg_receiver_creation_udp_m() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1)), 12345);
         let interface = InterfaceIndexOrAddress::Address("127.0.0.1".parse().unwrap());
-        let receiver =
-            IpDltMsgReceiver::new(new_logger(), 42, RecvMode::UdpMulticast, interface, addr);
+        let receiver = IpDltMsgReceiver::new(
+            new_logger(),
+            42,
+            RecvMode::UdpMulticast,
+            interface,
+            addr,
+            DltChar4::from_buf(b"EcuU"),
+        );
         assert!(receiver.is_ok());
     }
 
@@ -1458,7 +1481,14 @@ mod tests {
     fn test_ip_dlt_msg_receiver_creation_udp() {
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), 12345);
         let interface = InterfaceIndexOrAddress::Address("127.0.0.1".parse().unwrap());
-        let receiver = IpDltMsgReceiver::new(new_logger(), 42, RecvMode::Udp, interface, addr);
+        let receiver = IpDltMsgReceiver::new(
+            new_logger(),
+            42,
+            RecvMode::Udp,
+            interface,
+            addr,
+            DltChar4::from_buf(b"EcuU"),
+        );
         assert!(receiver.is_ok());
     }
 
@@ -1468,7 +1498,14 @@ mod tests {
         let logger = new_logger();
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
         let interface = InterfaceIndexOrAddress::Address("127.0.0.1".parse().unwrap());
-        let receiver = IpDltMsgReceiver::new(logger.clone(), 1, RecvMode::Udp, interface, addr);
+        let receiver = IpDltMsgReceiver::new(
+            logger.clone(),
+            1,
+            RecvMode::Udp,
+            interface,
+            addr,
+            DltChar4::from_buf(b"EcuU"),
+        );
         let mut receiver = receiver.unwrap();
         std::thread::scope(|s| {
             let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1586,7 +1623,14 @@ mod tests {
         let logger = new_logger();
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
         let interface = InterfaceIndexOrAddress::Address("127.0.0.1".parse().unwrap());
-        let receiver = IpDltMsgReceiver::new(logger.clone(), 1, RecvMode::Tcp, interface, addr);
+        let receiver = IpDltMsgReceiver::new(
+            logger.clone(),
+            1,
+            RecvMode::Tcp,
+            interface,
+            addr,
+            DltChar4::from_buf(b"EcuT"),
+        );
         let mut receiver = receiver.unwrap();
         std::thread::scope(|s| {
             let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1724,7 +1768,14 @@ mod tests {
     fn test_recv_msg() {
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), 12345);
         let interface = InterfaceIndexOrAddress::Address("127.0.0.1".parse().unwrap());
-        let receiver = IpDltMsgReceiver::new(new_logger(), 1, RecvMode::Udp, interface, addr);
+        let receiver = IpDltMsgReceiver::new(
+            new_logger(),
+            1,
+            RecvMode::Udp,
+            interface,
+            addr,
+            DltChar4::from_buf(b"EcuU"),
+        );
         let mut receiver = receiver.unwrap();
         let mut nr_msgs = 0;
         loop {

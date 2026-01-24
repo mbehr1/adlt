@@ -1685,6 +1685,36 @@ pub fn is_serial_header_pattern(buf: &[u8]) -> bool {
     pat == DLT_SERIAL_HEADER_PATTERN
 }
 
+/// return the first index with DLT_SERIAL_HEADER_PATTERN
+///
+/// At the end of the buffer partial matches are also considered
+/// e.g. if the buffer ends with "DLS" the index of 'D' is returned
+///
+pub fn first_idx_of_serial_pattern(buf: &[u8]) -> Option<usize> {
+    if buf.is_empty() {
+        return None;
+    }
+    // find idx of start of the DLS header DLT_SERIAL_HEADER_PATTERN as le bytes
+    let dlt_pat = DLT_SERIAL_HEADER_PATTERN.to_le_bytes();
+    // Check full windows first
+    if let Some(pos) = buf
+        .windows(DLT_SERIAL_HEADER_SIZE)
+        .position(|window| window == dlt_pat)
+    {
+        Some(pos)
+    } else {
+        // Check for partial match at the end of buffer
+        // Try progressively shorter patterns starting from the end
+        for pattern_len in (1..std::cmp::min(DLT_SERIAL_HEADER_SIZE, buf.len() + 1)).rev() {
+            let start_pos = buf.len().saturating_sub(pattern_len);
+            if buf[start_pos..] == dlt_pat[..pattern_len] {
+                return Some(start_pos);
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug)]
 pub enum ErrorKind {
     InvalidData(String),
@@ -1773,6 +1803,8 @@ pub fn parse_dlt_with_storage_header(
 pub fn parse_dlt_with_serial_header(
     index: DltMessageIndexType,
     data: &[u8],
+    storage_header_ecu: DltChar4, // ecu to use for storage header
+    use_current_time_for_storage_header: bool,
 ) -> Result<(usize, DltMessage), Error> {
     let mut remaining = data.len();
 
@@ -1815,13 +1847,22 @@ pub fn parse_dlt_with_serial_header(
 
                     let payload =
                         Vec::from(&data[payload_offset..payload_offset + payload_size as usize]);
-                    let sh = DltStorageHeader {
-                        // todo... use start time? and header via config/parameter?
-                        secs: (2023 - 1970) * 365 * 24 * 60 * 60,
-                        micros: 0,
-                        ecu: DltChar4 {
-                            char4: [b'D', b'L', b'S', 0],
-                        },
+                    let sh = if use_current_time_for_storage_header {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .expect("Time went backwards");
+                        DltStorageHeader {
+                            secs: now.as_secs() as u32,
+                            micros: now.subsec_micros(),
+                            ecu: storage_header_ecu,
+                        }
+                    } else {
+                        DltStorageHeader {
+                            // todo... use start time? and header via config/parameter?
+                            secs: (2023 - 1970) * 365 * 24 * 60 * 60,
+                            micros: 0,
+                            ecu: storage_header_ecu,
+                        }
                     };
                     let msg = DltMessage::from_headers(
                         index,
@@ -3270,12 +3311,21 @@ mod tests {
             .flatten()
             .collect();
 
-        let (parsed, m1) = parse_dlt_with_serial_header(1, &file).unwrap();
+        let time_before = chrono::Utc::now().naive_utc();
+
+        let (parsed, m1) =
+            parse_dlt_with_serial_header(1, &file, DltChar4::from_buf(b"DLS\0"), false).unwrap();
         assert_eq!(parsed, vec_m1.len());
         assert_eq!(m1.mcnt(), 1);
-        let (parsed, m2) = parse_dlt_with_serial_header(1, &file[parsed..]).unwrap();
+        assert_eq!(m1.ecu, DltChar4::from_buf(b"DLS\0"));
+        let (parsed, m2) =
+            parse_dlt_with_serial_header(1, &file[parsed..], DltChar4::from_buf(b"EcuS"), true)
+                .unwrap();
         assert_eq!(parsed, vec_m2.len());
         assert_eq!(m2.mcnt(), 2);
+        assert_eq!(m2.ecu, DltChar4::from_buf(b"EcuS"));
+        assert!(m2.reception_time() >= time_before);
+        assert!(m2.reception_time() <= chrono::Utc::now().naive_utc());
     }
 
     #[test]
@@ -3291,9 +3341,17 @@ mod tests {
         file.write_all(&vec_m2).unwrap();
 
         // we expect an error on the first message:
-        assert!(parse_dlt_with_serial_header(1, &file).is_err());
+        assert!(
+            parse_dlt_with_serial_header(1, &file, DltChar4::from_buf(b"DLS\0"), false).is_err()
+        );
         // so we do expect the 2nd message:
-        let (parsed, m2) = parse_dlt_with_serial_header(1, &file[vec_m1.len() - 1..]).unwrap();
+        let (parsed, m2) = parse_dlt_with_serial_header(
+            1,
+            &file[vec_m1.len() - 1..],
+            DltChar4::from_buf(b"DLS\0"),
+            false,
+        )
+        .unwrap();
         assert_eq!(parsed, vec_m2.len());
         assert_eq!(m2.mcnt(), 2);
     }
@@ -3379,6 +3437,103 @@ mod tests {
                 .unwrap(),
             );
             m.to_write(&mut fi).unwrap();
+        }
+    }
+
+    mod first_idx_of_serial_pattern {
+        use super::*;
+
+        #[test]
+        fn empty_buffer() {
+            assert_eq!(first_idx_of_serial_pattern(&[]), None);
+        }
+
+        #[test]
+        fn buffer_small_but_with_pattern() {
+            // Buffer with less than 4 bytes
+            assert_eq!(first_idx_of_serial_pattern(&[b'D']), Some(0));
+            assert_eq!(first_idx_of_serial_pattern(&[b'L']), None);
+            assert_eq!(first_idx_of_serial_pattern(&[b'D', b'L']), Some(0));
+            assert_eq!(first_idx_of_serial_pattern(&[b'D', b'L', b'S']), Some(0));
+        }
+
+        #[test]
+        fn full_pattern_at_start() {
+            // DLT_SERIAL_HEADER_PATTERN = 0x01534c44 = "DLS\01" in little endian
+            let buf = [b'D', b'L', b'S', 0x01, b'x', b'y', b'z'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(0));
+        }
+
+        #[test]
+        fn full_pattern_in_middle() {
+            let buf = [b'a', b'b', b'c', b'D', b'L', b'S', 0x01, b'x', b'y'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(3));
+        }
+
+        #[test]
+        fn full_pattern_at_end() {
+            let buf = [b'a', b'b', b'c', b'D', b'L', b'S', 0x01];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(3));
+        }
+
+        #[test]
+        fn no_pattern_found() {
+            let buf = [b'a', b'b', b'c', b'd', b'e', b'f'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), None);
+        }
+
+        #[test]
+        fn partial_pattern_3_bytes_at_end() {
+            // Buffer ends with "DLS" (3 bytes of the pattern)
+            let buf = [b'a', b'b', b'c', b'D', b'L', b'S'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(3));
+        }
+
+        #[test]
+        fn partial_pattern_2_bytes_at_end() {
+            // Buffer ends with "DL" (2 bytes of the pattern)
+            let buf = [b'D', b'L', b'c', b'D', b'L'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(3));
+
+            // Buffer ends with "DL" (2 bytes of the pattern)
+            let buf = [b'D', b'L', b'S', b'D', b'L'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(3));
+        }
+
+        #[test]
+        fn partial_pattern_1_byte_at_end() {
+            // Buffer ends with "D" (1 byte of the pattern)
+            let buf = [b'a', b'D', b'c', b'D'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(3));
+        }
+
+        #[test]
+        fn multiple_patterns_returns_first() {
+            // Should return the first occurrence
+            let buf = [b'D', b'L', b'S', 0x01, b'x', b'D', b'L', b'S', 0x01];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(0));
+        }
+
+        #[test]
+        fn full_pattern_takes_precedence_over_partial() {
+            // If there's a full pattern in the middle, it should be found
+            // even if there's a partial at the end
+            let buf = [b'a', b'D', b'L', b'S', 0x01, b'x', b'D', b'L'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(1));
+        }
+
+        #[test]
+        fn wrong_partial_at_end() {
+            // Buffer ends with something that looks like start but isn't
+            let buf = [b'a', b'b', b'c', b'X', b'L', b'S'];
+            assert_eq!(first_idx_of_serial_pattern(&buf), None);
+        }
+
+        #[test]
+        fn exact_pattern_size() {
+            // Buffer is exactly the pattern
+            let buf = [b'D', b'L', b'S', 0x01];
+            assert_eq!(first_idx_of_serial_pattern(&buf), Some(0));
         }
     }
 }
