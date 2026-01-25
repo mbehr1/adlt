@@ -201,6 +201,10 @@ pub fn get_apid_for_tag(namespace: u32, tag: &str) -> DltChar4 {
 ///  - `log` uses the GenLog2DltMsgIterator
 ///  - others use the DltMessageIterator
 ///
+/// For text formats (asc, txt, log) an encoding_rs_io::DecodeReaderBytes
+/// is used to handle UTF-16LE/BE and UTF-8 encoded files.
+/// Files should be in UTF-8 if possible.
+///
 /// ### Arguments
 /// * `file_ext` - the file extension used to determine the iterator
 /// * `start_index` - the start_index to use for the messages generated
@@ -224,7 +228,7 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead + Seek>(
     match file_ext.to_lowercase().as_str() {
         "asc" => Box::new(Asc2DltMsgIterator::new(
             start_index,
-            reader,
+            BufReader::new(encoding_rs_io::DecodeReaderBytes::new(reader)),
             namespace,
             first_reception_time_us,
             log,
@@ -238,7 +242,7 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead + Seek>(
         )),
         "txt" => Box::new(LogCat2DltMsgIterator::new(
             start_index,
-            reader,
+            BufReader::new(encoding_rs_io::DecodeReaderBytes::new(reader)),
             namespace,
             first_reception_time_us,
             modified_time_us,
@@ -246,7 +250,7 @@ pub fn get_dlt_message_iterator<'a, R: 'a + BufRead + Seek>(
         )),
         "log" => Box::new(GenLog2DltMsgIterator::new(
             start_index,
-            reader,
+            BufReader::new(encoding_rs_io::DecodeReaderBytes::new(reader)),
             namespace,
             first_reception_time_us,
             modified_time_us,

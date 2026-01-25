@@ -31,8 +31,11 @@ pub struct LogCat2DltMsgIterator<'a, R> {
     pub lines_skipped: usize,
     pub log: Option<&'a slog::Logger>,
 
+    /// initialized file_modified_time_us or current time
     ref_date: NaiveDate, // reference date used to determine year from mm-dd
+    /// initialized with 1.1.(year of ref_date) 12:00:00
     max_threadtime_treat_as_timestamp: NaiveDateTime, // points to e.g. 1.1.2023 12:00:00
+    /// initialized with 1.1.(year of ref_date) 0:00:00
     max_threadtime_treat_as_timestamp_start: NaiveDateTime, // points to e.g. 1.1.2023 0:00:00
     threadtime_timestamp_reference: Option<u64>, // first time is used as reference for initial monotonic timestamp value
     threadtime_last_monotonic_timestamp: u64,
@@ -320,6 +323,11 @@ where
 
                         let loc_tag = self.capture_locations_monotonic.get(5).unwrap();
                         let tag = &cap_str[loc_tag.0..loc_tag.1];
+                        let tag = if tag.chars().all(char::is_whitespace) {
+                            "empty tag" // will be mapped to "empt"
+                        } else {
+                            tag
+                        };
 
                         let (new_apid, apid) = self.get_apid(tag);
 
@@ -379,11 +387,12 @@ where
 
                         if let Some(threadtime) = threadtime {
                             // we determine the monotonic_timestamp by two ways:
-                            // a) if the threadtime was < 1.1. 12:00:00 (so assuming 1.1.70, not true at start of each year!)
+                            // a) if 1.1. 0:00:01 <= threadtime < 1.1. 12:00:00 (so assuming 1.1., not true at wrap/start of each year!)
                             //    we do use as monotonic timestamp the time since 1.1.1970
                             // b) otherwise we do use for the first message 10_000s and use the distance from first message to cur message as timestamp
                             let (timestamp_us, reception_time_us) = if threadtime
                                 < self.max_threadtime_treat_as_timestamp
+                                && threadtime >= self.max_threadtime_treat_as_timestamp_start
                             {
                                 // case a
                                 // as reception time we use the recorded_start_time_us +timestamp
@@ -395,7 +404,10 @@ where
                                     .unwrap_or_default()
                                     as u64;
                                 self.threadtime_last_monotonic_timestamp = timestamp_us;
-                                (timestamp_us, self.recorded_start_time_us + timestamp_us)
+                                (
+                                    timestamp_us,
+                                    self.recorded_start_time_us.saturating_add(timestamp_us),
+                                )
                             } else {
                                 // here we'd need to use the max timestamp_us from the case a) as first timestamp
                                 let recorded_time_us =
@@ -405,8 +417,8 @@ where
                                 {
                                     recorded_time_us.saturating_sub(timestamp_reference)
                                 } else {
-                                    let timestamp_reference =
-                                        recorded_time_us - self.threadtime_last_monotonic_timestamp;
+                                    let timestamp_reference = recorded_time_us
+                                        .saturating_sub(self.threadtime_last_monotonic_timestamp);
                                     self.threadtime_timestamp_reference = Some(timestamp_reference);
                                     self.threadtime_last_monotonic_timestamp
                                 };
@@ -421,6 +433,11 @@ where
 
                             let loc_tag = self.capture_locations_threadtime.get(5).unwrap();
                             let tag = &cap_str[loc_tag.0..loc_tag.1];
+                            let tag = if tag.chars().all(char::is_whitespace) {
+                                "empty tag" // will be mapped to "empt"
+                            } else {
+                                tag
+                            };
 
                             let (new_apid, apid) = self.get_apid(tag);
 
@@ -758,5 +775,87 @@ mod tests {
             }
         }
         assert_eq!(iterated_msgs, 8 + 5 /*for the apid infos */);
+    }
+
+    #[test]
+    fn logcat_threadtime_utf16le() {
+        // this example contains multiple issues:
+        // - UTF16-LE encoding
+        // - threadtime format
+        // - timestamps jumping from 01-01 00:00:xx to real dates
+
+        use super::RE_THREADTIME;
+        // towards RE_THREADTIME:
+        // Regex::new(r"^(\d\d\-\d\d \d\d:\d\d:\d\d\.\d+)\s+(\d+)\s+(\d+) ([A-Za-z]) (.*?)\s*: (.*)$").unwrap();
+        // captures: threadtime pid tid level tag msg
+
+        let test_line = "08-29 17:41:04.949  1391  1474 D AdapterProperties: Scan Mode:20";
+        let captures = super::RE_THREADTIME
+            .captures(test_line)
+            .expect("Should match RE_THREADTIME");
+        assert_eq!(captures.get(1).unwrap().as_str(), "08-29 17:41:04.949");
+        assert_eq!(captures.get(2).unwrap().as_str(), "1391");
+        assert_eq!(captures.get(3).unwrap().as_str(), "1474");
+        assert_eq!(captures.get(4).unwrap().as_str(), "D");
+        assert_eq!(captures.get(5).unwrap().as_str(), "AdapterProperties");
+        assert_eq!(captures.get(6).unwrap().as_str(), "Scan Mode:20");
+
+        let mut capture_locations_threadtime = RE_THREADTIME.capture_locations();
+
+        if let Some(_captures) =
+            RE_THREADTIME.captures_read(&mut capture_locations_threadtime, test_line)
+        {
+        } else {
+            assert!(false, "Should match RE_THREADTIME");
+        }
+
+        // now parse the actual file:
+        let mut test_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_dir.push("tests");
+        test_dir.push("logcat_example5.txt");
+        let fi = File::open(&test_dir).unwrap();
+
+        // the file is in UTF16-LE format...
+        let transcoded = encoding_rs_io::DecodeReaderBytesBuilder::new()
+            // let it autodetect based on BOM bytes if avail. .encoding(Some(encoding_rs::UTF_16LE))
+            .build(fi);
+
+        let start_index = 0;
+        let log = new_logger();
+        let mut it = LogCat2DltMsgIterator::new(
+            start_index,
+            LowMarkBufReader::new(transcoded, 512 * 1024, DLT_MAX_STORAGE_MSG_SIZE),
+            get_new_namespace(),
+            None,
+            Some(FILE_MODIFIED_TIME),
+            Some(&log),
+        );
+        let mut iterated_msgs = 0;
+        for m in &mut it {
+            assert_eq!(m.index, start_index + iterated_msgs);
+            assert_eq!(m.mcnt(), (m.index & 0xff) as u8);
+            match m.index {
+                0 => assert_eq!(
+                    m.mstp(),
+                    DltMessageType::Control(DltMessageControlType::Response)
+                ),
+                1 => assert_eq!(
+                    m.mstp(),
+                    DltMessageType::Log(DltMessageLogType::Info),
+                    "m.index={}",
+                    m.index
+                ),
+                _ => {}
+            }
+            iterated_msgs += 1;
+            if m.index == start_index + 1 {
+                // check some static data from example:
+                assert_eq!(m.timestamp_dms, 0); // first timestamp as 0secs
+                assert_eq!(m.noar(), 0);
+            } else if m.index == start_index + 10 {
+                assert_eq!(m.timestamp_dms, 19850); // next relative +1.9850s
+            }
+        }
+        assert!(iterated_msgs >= 3509 - 3 /* --- ... + apid infos */);
     }
 }
