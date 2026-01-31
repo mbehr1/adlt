@@ -110,7 +110,7 @@ pub fn add_subcommand(app: Command) -> Command {
                 Arg::new("baudrate")
                     .short('b')
                     .num_args(1)
-                    .help("baudrate to use. E.g. 115200. If provided the hostname/serial arg needs to be a serial device name")
+                    .help("baudrate to use. E.g. 115200. If provided the hostname/serial arg needs to be a serial device name. Use 0 to open the device as a file without serial settings.")
                     .value_parser(clap::value_parser!(u32)),
             )
             .arg(

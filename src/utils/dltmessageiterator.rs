@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn test_dls_iterator() {
         let logger = new_logger();
-        // create a test file with 1M DLT messages:
+        // create a test file with 1000 DLT messages:
         let mut file = NamedTempFile::new().unwrap();
         let file_path = String::from(file.path().to_str().unwrap());
 
