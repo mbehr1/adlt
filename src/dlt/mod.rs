@@ -1833,8 +1833,8 @@ pub fn parse_dlt_with_serial_header(
 
                     if remaining >= 4 && !is_serial_header_pattern(&data[to_consume..]) {
                         // the new msg would be from [0..to_consume]
-                        // is a 2nd storage header within data[5]..data[to_consume+3]?
-                        for i in 5..to_consume {
+                        // is a 2nd serial header within data[4]..data[to_consume+3]?
+                        for i in 4..to_consume {
                             if is_serial_header_pattern(&data[i..]) {
                                 // yes, lets use that.
                                 // we simply return an error here and let the usual skip logic apply
@@ -1877,9 +1877,27 @@ pub fn parse_dlt_with_serial_header(
                     // and we better search in the remaining data for a new serial header
                     // than skipping the full range
                     // todo consider this for DLT storage header as well?
-                    Err(Error::new(ErrorKind::InvalidData(String::from(
-                        "not enough data",
-                    ))))
+
+                    // use the heuristic:
+                    // if there is a new serial_pattern within the remaining data -> return InvalidData
+                    // else return NotEnoughData
+                    let data_after_first_serial = &data[DLT_SERIAL_HEADER_SIZE..];
+                    if let Some(idx) = first_idx_of_serial_pattern(data_after_first_serial) {
+                        if idx
+                            <= data_after_first_serial
+                                .len()
+                                .saturating_sub(DLT_SERIAL_HEADER_SIZE)
+                        {
+                            // found a full (non partial) new serial header within the remaining data
+                            return Err(Error::new(ErrorKind::InvalidData(String::from(
+                                "skipped probably corrupt msg due to serial header pattern heuristic",
+                            ))));
+                        }
+                    }
+
+                    Err(Error::new(ErrorKind::NotEnoughData(
+                        (stdh.len as usize).saturating_sub(remaining),
+                    )))
                 }
             } else {
                 Err(Error::new(ErrorKind::InvalidData(String::from(

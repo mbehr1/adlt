@@ -9,6 +9,7 @@ use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, Socket, Type}
 use std::{
     collections::VecDeque,
     net::{IpAddr, SocketAddr},
+    os::fd::OwnedFd,
 };
 
 #[cfg(feature = "pcap")]
@@ -354,25 +355,30 @@ impl IpDltMsgReceiver {
                 available_interfaces.iter().for_each(|iface| {
                     info!(log, " {:?}", iface);
                 });
-
-                let mut serial_port = serial2::SerialPort::open(
-                    &params.device_name,
-                    |mut settings: serial2::Settings| {
-                        settings.set_raw();
-                        settings.set_baud_rate(params.baudrate)?;
-                        settings.set_char_size(serial2::CharSize::Bits8);
-                        settings.set_parity(serial2::Parity::None);
-                        settings.set_stop_bits(serial2::StopBits::One);
-                        settings.set_flow_control(serial2::FlowControl::None);
-                        Ok(settings)
-                    },
-                )
-                .map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("Failed to open serial port {}: {}", params.device_name, e),
+                let mut serial_port = if params.baudrate == 0 {
+                    let file = std::fs::File::open(&params.device_name)?;
+                    let owned_fd: OwnedFd = file.into();
+                    serial2::SerialPort::from(owned_fd)
+                } else {
+                    serial2::SerialPort::open(
+                        &params.device_name,
+                        |mut settings: serial2::Settings| {
+                            settings.set_raw();
+                            settings.set_baud_rate(params.baudrate)?;
+                            settings.set_char_size(serial2::CharSize::Bits8);
+                            settings.set_parity(serial2::Parity::None);
+                            settings.set_stop_bits(serial2::StopBits::One);
+                            settings.set_flow_control(serial2::FlowControl::None);
+                            Ok(settings)
+                        },
                     )
-                })?;
+                    .map_err(|e| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Failed to open serial port {}: {}", params.device_name, e),
+                        )
+                    })?
+                };
                 serial_port.discard_buffers()?;
                 serial_port.set_read_timeout(std::time::Duration::from_millis(500))?; // TODO which timeout to choose to get a good accurate timing?
                 RecvMethod::Serial(serial_port)
@@ -931,6 +937,7 @@ impl IpDltMsgReceiver {
             if src_addr_buffer.is_empty() {
                 src_addr_buffer.extend_from_slice(&recvd_data[did_consume..]);
             } else {
+                debug_assert!(did_consume <= src_addr_buffer.len());
                 let max_to_consume = std::cmp::min(did_consume, src_addr_buffer.len());
                 src_addr_buffer.drain(..max_to_consume);
             }
@@ -1353,6 +1360,7 @@ mod tests {
     }
 
     // MARK: serial tests
+    #[cfg(not(windows))] // the pipe is blocking (not supporting the timeout) on windows
     #[test]
     fn serial_recv_simple_dls_msg() {
         let logger = new_logger();
@@ -1424,6 +1432,55 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))] // the pipe is blocking (not supporting the timeout) on windows
+    #[test]
+    fn serial_recv_real_example() {
+        let logger = new_logger();
+        // create a pipe and use the read end as serial port for the receiver
+        let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+        let read_end = std::mem::ManuallyDrop::new(read_end);
+        let read_fd = read_end.as_raw_fd();
+
+        let mut receiver = IpDltMsgReceiver {
+            log: logger.clone(),
+            recv_mode: RecvMode::Serial(SerialParams {
+                device_name: "test".to_string(),
+                baudrate: 0,
+            }),
+            recv_method: RecvMethod::Serial(unsafe { serial2::SerialPort::from_raw_fd(read_fd) }),
+            expected_header: ExpectedHeader::Serial,
+            interface: InterfaceIndexOrAddress::Index(0),
+            addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 0),
+            recv_buffer: Vec::with_capacity(65536),
+            storage_header_ecu: DltChar4::from_buf(b"EcuS"),
+            buffered_msgs: std::collections::VecDeque::new(),
+            recv_buffer_list: Vec::new(),
+            #[cfg(feature = "pcap")]
+            plp_stats: None,
+            #[cfg(feature = "pcap")]
+            fragment_cache: HashMap::new(),
+            index: 0,
+        };
+        // example serial dlt capture with messages with mcnt 173..201 (and two leading bytes before the first msg)
+        let hex = "0000444c530130ad001000a7fa083528000008000803444c530130ae001000a7faa83528000008030800444c530130af001000a7fc883528000008000802444c530130b0001000a7fe683528000008020709444c530130b1001000a7ff58c227000002100000444c530130b2001000a7ff58a62700004e000000444c530130b3001000a7ffa83528000007090801444c530130b4001000a8000c042b000032008700444c530130b5001000a8000c192b00001e000d00444c530130b6001000a8000c932a000001000000444c530130b7001000a8000c942a000001010000444c530130b8001000a8000c9c2a000000000100444c530130b9001000a800483528000008010800444c530130ba001000a800e83528000008000802444c530130bb001000a801883528000008020800444c530130bc001000a803683528000008000802444c530130bd001000a804083528000008020709444c530130be001000a804a83528000007090801444c530130bf001000a806883528000008010800444c530130c0001000a807283528000008000802444c530130c1001000a807c83528000008020800444c530130c2001000a808683528000008000802444c530130c3001000a809083528000008020800444c530130c4001000a80c824c2b00000dce9500444c530130c5002200a80c824d2b00001400476974205348413a203432333032323334623000444c530130c6001000a80c8c7129000019000000444c530130c7001000a80c8c6929000088130000444c530130c8001000a80cc83528000008000801444c530130c9001000a80e083528000008010800";
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("invalid hex"))
+            .collect();
+        use std::io::Write;
+        write_end
+            .write_all(&bytes)
+            .expect("write real example to serial pipe");
+
+        for mcnt in 173..=201 {
+            let (rcvd_msg, _src_addr) = receiver.recv_msg().expect(&format!("msg mcnt={}", mcnt));
+            assert_eq!(rcvd_msg.mcnt(), mcnt, "Received msg: {:?}", rcvd_msg);
+        }
+        let r = receiver.recv_msg();
+        assert!(r.is_err(), "Expecting no more messages, got: {:?}", r);
+    }
+
+    /// MARK: UDP tests
     #[test]
     fn test_create_send_socket_udp() {
         let port = pick_unused_port().expect("no ports free");
