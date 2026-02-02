@@ -9,8 +9,10 @@ use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, Socket, Type}
 use std::{
     collections::VecDeque,
     net::{IpAddr, SocketAddr},
-    os::fd::OwnedFd,
 };
+
+#[cfg(not(windows))]
+use std::os::fd::OwnedFd;
 
 #[cfg(feature = "pcap")]
 use crate::utils::plp_packet::PlpPacket;
@@ -355,16 +357,23 @@ impl IpDltMsgReceiver {
                 available_interfaces.iter().for_each(|iface| {
                     info!(log, " {:?}", iface);
                 });
-                let mut serial_port = if params.baudrate == 0 {
-                    let file = std::fs::File::open(&params.device_name)?;
-                    let owned_fd: OwnedFd = file.into();
-                    serial2::SerialPort::from(owned_fd)
+                let mut serial_port = if cfg!(not(windows)) && params.baudrate == 0 {
+                    #[cfg(not(windows))]
+                    {
+                        let file = std::fs::File::open(&params.device_name)?;
+                        let owned_fd: OwnedFd = file.into();
+                        serial2::SerialPort::from(owned_fd)
+                    }
+                    #[cfg(windows)]
+                    unreachable!()
                 } else {
                     serial2::SerialPort::open(
                         &params.device_name,
                         |mut settings: serial2::Settings| {
                             settings.set_raw();
-                            settings.set_baud_rate(params.baudrate)?;
+                            if params.baudrate > 0 {
+                                settings.set_baud_rate(params.baudrate)?;
+                            }
                             settings.set_char_size(serial2::CharSize::Bits8);
                             settings.set_parity(serial2::Parity::None);
                             settings.set_stop_bits(serial2::StopBits::One);
@@ -1327,12 +1336,15 @@ impl Iterator for IpDltMsgReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dlt::{DltStandardHeader, DLT_SERIAL_HEADER_PATTERN, DLT_SERIAL_HEADER_SIZE};
+    use crate::dlt::DltStandardHeader;
+    #[cfg(not(windows))]
+    use crate::dlt::{DLT_SERIAL_HEADER_PATTERN, DLT_SERIAL_HEADER_SIZE};
     use crate::dlt_args;
     use portpicker::pick_unused_port;
     use slog::{o, Drain, Logger};
     use std::io::IoSlice;
     use std::net::Ipv4Addr;
+    #[cfg(not(windows))]
     use std::os::fd::{AsRawFd, FromRawFd};
 
     fn new_logger() -> Logger {
@@ -1341,6 +1353,7 @@ mod tests {
         Logger::root(drain, o!())
     }
 
+    #[cfg(not(windows))]
     fn get_test_msg(arg: u32) -> (Vec<u8>, Vec<u8>) {
         let (noar, payload) = dlt_args!(arg).unwrap();
         let msg = DltMessage::get_testmsg_with_payload(cfg!(target_endian = "big"), noar, &payload);
