@@ -1171,6 +1171,7 @@ mod tests {
                     recv.err()
                 );
                 let mut recv = recv.unwrap();
+                info!(logger, "tr: trying to receive via port {}", forward_port);
                 let mut nr_msgs_received = 0usize;
                 while !stop_receive.load(std::sync::atomic::Ordering::SeqCst) {
                     match recv.recv_msg() {
@@ -1180,17 +1181,18 @@ mod tests {
                         Err(e) => {
                             if e.kind() == std::io::ErrorKind::WouldBlock
                                 || e.kind() == std::io::ErrorKind::ConnectionRefused
+                                || e.kind() == std::io::ErrorKind::TimedOut
                             {
                                 // no data available, continue
                                 std::thread::sleep(std::time::Duration::from_millis(1));
                             } else {
-                                error!(logger, "Error receiving message: {}", e);
+                                error!(logger, "tr: Error receiving message: {}", e);
                                 break;
                             }
                         }
                     }
                 }
-                info!(logger, "received {} messages via TCP", nr_msgs_received);
+                info!(logger, "tr: received {} messages via TCP", nr_msgs_received);
                 nr_msgs_received
             });
 
@@ -1256,8 +1258,8 @@ mod tests {
             // let full_msg_len = buf_writer.position() as usize;
             let buf = buf_writer.into_inner();
 
-            // wait 100ms (to give the receiver time to start)
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            // wait 1000ms (to give the receiver time to start, 500ms seems to be too little on windows)
+            std::thread::sleep(std::time::Duration::from_millis(1000));
 
             socket.send_to(buf, &send_to_addr).unwrap();
             info!(
