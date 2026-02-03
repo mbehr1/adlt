@@ -1304,7 +1304,7 @@ impl Drop for IpDltMsgReceiver {
                     }
                 }
 
-                info!(self.log, "Dropping receiver socket: {:?}", socket);
+                info!(self.log, "Dropping receiver socket: {:?} recv_mode: {:?}", socket, self.recv_mode);
             }
             RecvMethod::Serial(serial_port) => {
                 info!(self.log, "Closing serial port: {:?}", serial_port);
