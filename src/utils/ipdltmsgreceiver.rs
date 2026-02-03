@@ -436,9 +436,9 @@ impl IpDltMsgReceiver {
                 let socket = Self::new_tcp_client_socket(addr)?;
                 info!(
                     log,
-                    "created receiver socket: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
-                    socket.local_addr().unwrap().as_socket_ipv4(),
-                    socket.local_addr().unwrap().as_socket_ipv6(),
+                    "created TCP receiver socket for Recv: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
+                    socket.local_addr().map(|s|s.as_socket_ipv4()),
+                    socket.local_addr().map(|s|s.as_socket_ipv6()),
                     socket.recv_buffer_size().unwrap_or(0),
                     socket.read_timeout()
                 );
@@ -483,9 +483,9 @@ impl IpDltMsgReceiver {
                 set_max_buffer_size(&socket, false, 26214400).expect("set recv buffer size error");
                 info!(
                     log,
-                    "created receiver socket: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
-                    socket.local_addr().unwrap().as_socket_ipv4(),
-                    socket.local_addr().unwrap().as_socket_ipv6(),
+                    "created UDP receiver socket for RecvFrom: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
+                    socket.local_addr().map(|s|s.as_socket_ipv4()),
+                    socket.local_addr().map(|s|s.as_socket_ipv6()),
                     socket.recv_buffer_size().unwrap_or(0),
                     socket.read_timeout()
                 );
@@ -570,9 +570,9 @@ impl IpDltMsgReceiver {
                 set_max_buffer_size(&socket, false, 26214400).expect("set recv buffer size error");
                 info!(
                     log,
-                    "created receiver socket: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
-                    socket.local_addr().unwrap().as_socket_ipv4(),
-                    socket.local_addr().unwrap().as_socket_ipv6(),
+                    "created UDP multicast receiver socket for RecvFrom: {:?}/{:?} with receiver buffer size: {} and read timeout: {:?}",
+                    socket.local_addr().map(|s|s.as_socket_ipv4()),
+                    socket.local_addr().map(|s|s.as_socket_ipv6()),
                     socket.recv_buffer_size().unwrap_or(0),
                     socket.read_timeout()
                 );
