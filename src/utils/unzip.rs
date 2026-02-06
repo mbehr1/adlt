@@ -560,7 +560,10 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                 if let Some(file_name) = file.enclosed_name() {
                     let orig_file_name = file.name();
                     if let Some(files) = &files_filter {
-                        if !files.iter().any(|f| *f == file_name.to_string_lossy() || *f == orig_file_name) {
+                        if !files
+                            .iter()
+                            .any(|f| *f == file_name.to_string_lossy() || *f == orig_file_name)
+                        {
                             continue;
                         }
                     }

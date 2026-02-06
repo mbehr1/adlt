@@ -35,6 +35,24 @@ use crate::dlt::{
     DltMessage, DltMessageIndexType, Error, ErrorKind, DLT_SERIAL_HEADER_SIZE,
 };
 
+#[cfg(not(windows))]
+fn open_serial_port_from_file(path: &str) -> Result<serial2::SerialPort, std::io::Error> {
+    let file = std::fs::File::open(path)?;
+    let owned_fd: OwnedFd = file.into();
+    Ok(serial2::SerialPort::from(owned_fd))
+}
+
+#[cfg(windows)]
+fn open_serial_port_from_file(path: &str) -> Result<serial2::SerialPort, std::io::Error> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "Opening serial device as file is not supported on Windows: {}",
+            path
+        ),
+    ))
+}
+
 #[cfg(feature = "pcap")]
 struct UdpPacketOwned {
     buffer: Vec<u8>,
@@ -357,15 +375,8 @@ impl IpDltMsgReceiver {
                 available_interfaces.iter().for_each(|iface| {
                     info!(log, " {:?}", iface);
                 });
-                let mut serial_port = if cfg!(not(windows)) && params.baudrate == 0 {
-                    #[cfg(not(windows))]
-                    {
-                        let file = std::fs::File::open(&params.device_name)?;
-                        let owned_fd: OwnedFd = file.into();
-                        serial2::SerialPort::from(owned_fd)
-                    }
-                    #[cfg(windows)]
-                    unreachable!()
+                let mut serial_port = if params.baudrate == 0 {
+                    open_serial_port_from_file(&params.device_name)?
                 } else {
                     serial2::SerialPort::open(
                         &params.device_name,
@@ -1304,7 +1315,10 @@ impl Drop for IpDltMsgReceiver {
                     }
                 }
 
-                info!(self.log, "Dropping receiver socket: {:?} recv_mode: {:?}", socket, self.recv_mode);
+                info!(
+                    self.log,
+                    "Dropping receiver socket: {:?} recv_mode: {:?}", socket, self.recv_mode
+                );
             }
             RecvMethod::Serial(serial_port) => {
                 info!(self.log, "Closing serial port: {:?}", serial_port);
