@@ -1225,12 +1225,40 @@ mod tests {
     use portpicker::pick_unused_port;
     use slog::{o, Drain, Logger};
     use socket2::SockAddr;
+    use std::sync::{Arc, Mutex};
     use tempfile::NamedTempFile;
 
     fn new_logger() -> Logger {
         let decorator = slog_term::PlainSyncDecorator::new(slog_term::TestStdoutWriter);
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         Logger::root(drain, o!())
+    }
+
+    #[derive(Clone, Default)]
+    struct TestWriter {
+        storage: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl TestWriter {
+        fn new() -> Self {
+            Self {
+                storage: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn into_string(self) -> String {
+            String::from_utf8(self.storage.lock().unwrap().to_vec()).unwrap()
+        }
+    }
+
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.storage.lock().unwrap().write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.storage.lock().unwrap().flush()
+        }
     }
 
     #[test]
@@ -1431,5 +1459,104 @@ mod tests {
 
         // check if the file exists and is not empty
         // TODO
+    }
+
+    #[test]
+    fn recv_udp_nonverbose_ascii() {
+        const DLT_STD_HDR_VERSION: u8 = 0x1 << 5;
+
+        let port = pick_unused_port().expect("no ports free");
+        let port_str = port.to_string();
+
+        let mut fibex_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        fibex_dir.push("tests");
+        let fibex_dir = fibex_dir.to_str().unwrap().to_string();
+
+        let logger = new_logger();
+        let writer = TestWriter::new();
+        let writer_for_read = writer.clone();
+
+        let arg_vec = vec![
+            "t",
+            "receive",
+            "127.0.0.1",
+            "-u",
+            "-p",
+            &port_str,
+            "-a",
+            "--nonverbose_path",
+            &fibex_dir,
+        ];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
+
+        std::thread::scope(|s| {
+            let stop_receive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop_receive_t = stop_receive.clone();
+
+            let logger_t = logger.clone();
+            let t = s.spawn(move || {
+                let logger = logger_t;
+                let r = receive(&logger, sub_m, writer, Some(stop_receive_t));
+                assert!(r.is_ok());
+                r.unwrap()
+            });
+
+            let send_addr = std::net::SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port).into();
+            let socket = create_send_socket(
+                RecvMode::Udp,
+                send_addr,
+                socket2::InterfaceIndexOrAddress::Index(0),
+            )
+            .unwrap();
+
+            let send_to_addr = SockAddr::from(send_addr);
+
+            let ecu = DltChar4::from_buf(b"Ecu1");
+            let exth = Some(DltExtendedHeader {
+                verb_mstp_mtin: 0x40,
+                noar: 0,
+                apid: DltChar4::from_buf(b"TEST"),
+                ctid: DltChar4::from_buf(b"MAIN"),
+            });
+            let std_hdr = adlt::dlt::DltStandardHeader {
+                htyp: DLT_STD_HDR_VERSION,
+                mcnt: 0,
+                len: 0,
+            };
+
+            let payload = 805312382u32.to_le_bytes().to_vec();
+            let mut buf = Vec::with_capacity(128);
+            let mut buf_writer = std::io::Cursor::new(&mut buf);
+            adlt::dlt::DltStandardHeader::to_write(
+                &mut buf_writer,
+                &std_hdr,
+                &exth,
+                Some(ecu),
+                None,
+                Some(1),
+                &payload,
+            )
+            .expect("Failed to write DLT message");
+
+            let buf = buf_writer.into_inner();
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            socket.send_to(buf, &send_to_addr).unwrap();
+
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            stop_receive.store(true, std::sync::atomic::Ordering::SeqCst);
+
+            let r = t.join();
+            assert!(r.is_ok());
+            let nr_msg_received = r.unwrap();
+            assert_eq!(nr_msg_received, 1);
+        });
+
+        let output = writer_for_read.into_string();
+        assert!(
+            output.contains("FooStateMachine, Enter ON State"),
+            "output was: {}",
+            output
+        );
     }
 }
