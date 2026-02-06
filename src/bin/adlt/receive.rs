@@ -177,12 +177,6 @@ pub fn add_subcommand(app: Command) -> Command {
                 .long("rewrite_path")
                 .num_args(1)
                 .help("Path to json config with the Rewrite plugin config with '{name, rewrites:[...]}'. If not provided the Rewrite plugin is deactivated.")
-            )
-            .arg(
-                Arg::new("can_path")
-                .long("can_path")
-                .num_args(1)
-                .help("Path to directory with the FIBEX files for the CAN plugin. If not provided the CAN plugin is deactivated.")
             );
     #[cfg(feature = "pcap")]
     let subcmd = subcmd.arg(
@@ -271,7 +265,6 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     let rewrite_path = sub_m
         .get_one::<String>("rewrite_path")
         .map(|s| s.to_owned());
-    let can_path = sub_m.get_one::<String>("can_path").map(|s| s.to_owned());
 
     let (recv_mode, recv_addr) = if let (Some(baudrate), Some(hostname)) = (baudrate, hostname) {
         let serial_params = SerialParams {
@@ -408,17 +401,6 @@ pub fn receive<W: std::io::Write + Send + 'static>(
             ),
         }
     }
-    if let Some(can_path) = &can_path {
-        if let Some(sp_config) = serde_json::json!({"name":"CAN","fibexDir":can_path}).as_object() {
-            match CanPlugin::from_json(sp_config) {
-                Ok(plugin) => {
-                    debug!(log, "CAN plugin used: {}", plugin.name());
-                    plugins_active.push(Box::new(plugin));
-                }
-                Err(e) => warn!(log, "CAN plugin failed with err: {:?}", e),
-            }
-        }
-    }
 
     let new_file_writer = |path: &str, limit_idx: &Option<(usize, u32)>| {
         let do_zip = path.ends_with(".zip");
@@ -513,10 +495,8 @@ pub fn receive<W: std::io::Write + Send + 'static>(
                                     break;
                                 }
                             }
-                            if forward_msg {
-                                if tx_for_plugin_thread.send((msg, msg_from)).is_err() {
-                                    break;
-                                }
+                            if forward_msg && tx_for_plugin_thread.send((msg, msg_from)).is_err() {
+                                break;
                             }
                         }
                         plugins_active.iter_mut().for_each(|p| p.sync_all());
