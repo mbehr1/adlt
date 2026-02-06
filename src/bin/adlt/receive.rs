@@ -24,8 +24,13 @@ use adlt::{
         SERVICE_ID_SET_DEFAULT_TRACE_STATUS, SERVICE_ID_SET_LOG_LEVEL,
         SERVICE_ID_SET_TIMING_PACKETS, SERVICE_ID_SET_VERBOSE_MODE,
     },
+    plugins::{
+        can::CanPlugin, non_verbose::NonVerbosePlugin, plugin::Plugin, rewrite::RewritePlugin,
+        someip::SomeipPlugin,
+    },
     utils::{
-        buf_as_hex_to_io_write, set_max_buffer_size, IpDltMsgReceiver, RecvMode, SerialParams,
+        buf_as_hex_to_io_write, eac_stats::EacStats, set_max_buffer_size, IpDltMsgReceiver,
+        RecvMode, SerialParams,
     },
 };
 use clap::{Arg, ArgMatches, Command};
@@ -154,6 +159,30 @@ pub fn add_subcommand(app: Command) -> Command {
                 .default_value("RECV")
                 .value_parser(|s: &str|DltChar4::from_str(s).map_err(|_|"ecu contains non ascii characters"))
                 .help("Set ECU ID for received messages if they have no extended header (default: RECV)")
+            )
+            .arg(
+                Arg::new("nonverbose_path")
+                .long("nonverbose_path")
+                .num_args(1)
+                .help("Path to directory with the FIBEX files for the Non-Verbose plugin. If not provided the Non-Verbose plugin is deactivated.")
+            )
+            .arg(
+                Arg::new("someip_path")
+                .long("someip_path")
+                .num_args(1)
+                .help("Path to directory with the FIBEX files for the SOME/IP plugin. If not provided the SOME/IP plugin is deactivated.")
+            )
+            .arg(
+                Arg::new("rewrite_path")
+                .long("rewrite_path")
+                .num_args(1)
+                .help("Path to json config with the Rewrite plugin config with '{name, rewrites:[...]}'. If not provided the Rewrite plugin is deactivated.")
+            )
+            .arg(
+                Arg::new("can_path")
+                .long("can_path")
+                .num_args(1)
+                .help("Path to directory with the FIBEX files for the CAN plugin. If not provided the CAN plugin is deactivated.")
             );
     #[cfg(feature = "pcap")]
     let subcmd = subcmd.arg(
@@ -235,6 +264,14 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .get_one::<DltChar4>("ecu_id")
         .map(|s| s.to_owned())
         .unwrap();
+    let someip_path = sub_m.get_one::<String>("someip_path").map(|s| s.to_owned());
+    let nonverbose_path = sub_m
+        .get_one::<String>("nonverbose_path")
+        .map(|s| s.to_owned());
+    let rewrite_path = sub_m
+        .get_one::<String>("rewrite_path")
+        .map(|s| s.to_owned());
+    let can_path = sub_m.get_one::<String>("can_path").map(|s| s.to_owned());
 
     let (recv_mode, recv_addr) = if let (Some(baudrate), Some(hostname)) = (baudrate, hostname) {
         let serial_params = SerialParams {
@@ -312,6 +349,77 @@ pub fn receive<W: std::io::Write + Send + 'static>(
 
     let forward_tcp_port = sub_m.get_one::<u16>("forward_tcp");
 
+    let mut plugins_active: Vec<Box<dyn Plugin + Send>> = vec![];
+    if let Some(nonverbose_path) = &nonverbose_path {
+        if let Some(np_config) =
+            serde_json::json!({"name":"NonVerbose","fibexDir":nonverbose_path}).as_object()
+        {
+            let mut eac_stats = EacStats::new();
+            match NonVerbosePlugin::from_json(np_config, &mut eac_stats) {
+                Ok(plugin) => {
+                    debug!(log, "Non-Verbose plugin used: {}", plugin.name());
+                    plugins_active.push(Box::new(plugin));
+                }
+                Err(e) => warn!(log, "Non-Verbose plugin failed with err: {:?}", e),
+            }
+        }
+    }
+    if let Some(someip_path) = &someip_path {
+        if let Some(sp_config) =
+            serde_json::json!({"name":"SomeIp","fibexDir":someip_path}).as_object()
+        {
+            match SomeipPlugin::from_json(sp_config) {
+                Ok(plugin) => {
+                    debug!(log, "SomeIp plugin used: {}", plugin.name());
+                    plugins_active.push(Box::new(plugin));
+                }
+                Err(e) => warn!(log, "SomeIp plugin failed with err: {:?}", e),
+            }
+        }
+    }
+    if let Some(rewrite_path) = &rewrite_path {
+        match std::fs::read_to_string(rewrite_path) {
+            Ok(rewrite_config_str) => {
+                match serde_json::from_str::<serde_json::Value>(&rewrite_config_str) {
+                    Ok(json) => {
+                        if let Some(sp_config) = json.as_object() {
+                            match RewritePlugin::from_json(sp_config) {
+                                Ok(plugin) => {
+                                    debug!(log, "Rewrite plugin used: {}", plugin.name());
+                                    plugins_active.push(Box::new(plugin));
+                                }
+                                Err(e) => warn!(log, "Rewrite plugin failed with err: {:?}", e),
+                            }
+                        }
+                    }
+                    Err(e) => warn!(
+                        log,
+                        "Failed to parse config file {} for Rewrite plugin with err: {:?}",
+                        rewrite_path,
+                        e
+                    ),
+                }
+            }
+            Err(e) => warn!(
+                log,
+                "Failed to to read config file {} for Rewrite plugin with err: {:?}",
+                rewrite_path,
+                e
+            ),
+        }
+    }
+    if let Some(can_path) = &can_path {
+        if let Some(sp_config) = serde_json::json!({"name":"CAN","fibexDir":can_path}).as_object() {
+            match CanPlugin::from_json(sp_config) {
+                Ok(plugin) => {
+                    debug!(log, "CAN plugin used: {}", plugin.name());
+                    plugins_active.push(Box::new(plugin));
+                }
+                Err(e) => warn!(log, "CAN plugin failed with err: {:?}", e),
+            }
+        }
+    }
+
     let new_file_writer = |path: &str, limit_idx: &Option<(usize, u32)>| {
         let do_zip = path.ends_with(".zip");
         let path_to_use = if let Some((_limit, next_idx)) = limit_idx {
@@ -385,9 +493,41 @@ pub fn receive<W: std::io::Write + Send + 'static>(
 
     // channels used:
     // tx_for_recv_thread -> receiver thread will put messages into this channel/end (and they will end at rx_from_recv_thread)
-    // forward_thread -> forward thread will receive messages from rx_from_recv_thread and put back to tx_for_forward_thread
+    // plugin_thread -> optional plugin processing before forwarding/output
+    // forward_thread -> forward thread will receive messages from rx_from_plugin_thread and put back to tx_for_forward_thread
 
     let (tx_for_recv_thread, rx_from_recv_thread) = std::sync::mpsc::channel();
+
+    let (plugin_thread, rx_from_plugin_thread) = if !plugins_active.is_empty() {
+        let (tx_for_plugin_thread, rx_from_plugin_thread) = std::sync::mpsc::channel();
+        (
+            Some(
+                std::thread::Builder::new()
+                    .name("plugin_thread".to_string())
+                    .spawn(move || {
+                        for (mut msg, msg_from) in rx_from_recv_thread {
+                            let mut forward_msg = true;
+                            for plugin in &mut plugins_active {
+                                if !plugin.process_msg(&mut msg) {
+                                    forward_msg = false;
+                                    break;
+                                }
+                            }
+                            if forward_msg {
+                                if tx_for_plugin_thread.send((msg, msg_from)).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        plugins_active.iter_mut().for_each(|p| p.sync_all());
+                    })
+                    .unwrap(),
+            ),
+            rx_from_plugin_thread,
+        )
+    } else {
+        (None, rx_from_recv_thread)
+    };
 
     // forward_tcp thread?
     let (forward_tcp_thread, rx_from_forward_thread) = if let Some(port) = forward_tcp_port {
@@ -406,14 +546,14 @@ pub fn receive<W: std::io::Write + Send + 'static>(
                     stop_forward,
                     port,
                     ecu_id,
-                    rx_from_recv_thread,
+                    rx_from_plugin_thread,
                     tx_for_forward_thread,
                 )
             })
             .unwrap();
         (Some(forward_thread), rx_from_forward_thread)
     } else {
-        (None, rx_from_recv_thread)
+        (None, rx_from_plugin_thread)
     };
 
     // install ctrl+c handler
@@ -567,6 +707,12 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         match thread.join() {
             Err(s) => error!(log, "forward_tcp_thread join got Error {:?}", s),
             Ok(s) => debug!(log, "forward_tcp_thread join was Ok {:?}", s),
+        };
+    }
+    if let Some(thread) = plugin_thread {
+        match thread.join() {
+            Err(s) => error!(log, "plugin_thread join got Error {:?}", s),
+            Ok(_) => debug!(log, "plugin_thread join was Ok"),
         };
     }
 
