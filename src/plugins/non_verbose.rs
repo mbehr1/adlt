@@ -370,6 +370,20 @@ impl Plugin for NonVerbosePlugin {
 }
 
 impl NonVerbosePlugin {
+    pub fn from_fibex_dir(
+        fibex_dir: &str,
+        eac_stats: Option<&mut EacStats>,
+    ) -> Result<NonVerbosePlugin, Box<dyn Error>> {
+        let eac_stats = if let Some(eac_stats) = eac_stats {
+            eac_stats
+        } else {
+            &mut EacStats::new()
+        };
+        let config =
+            serde_json::json!({"name":"NonVerbosePlugin", "enabled": true, "fibexDir":fibex_dir});
+        NonVerbosePlugin::from_json(config.as_object().unwrap(), eac_stats)
+    }
+
     pub fn from_json(
         config: &serde_json::Map<String, serde_json::Value>,
         eac_stats: &mut EacStats,
