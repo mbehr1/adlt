@@ -85,7 +85,7 @@ jobs:
             rust: stable
             target: aarch64-unknown-linux-gnu
           - build: macos
-            os: macos-13 # Intel based
+            os: macos-15-intel # Intel based
             rust: stable
             target: x86_64-apple-darwin
           - build: macos-arm
@@ -121,7 +121,7 @@ jobs:
           ci/macos-install-packages
 
       - name: Install packages (macOS Intel)
-        if: matrix.os == 'macos-13'
+        if: matrix.os == 'macos-15-intel'
         run: |
           ci/macos-install-packages
 
