@@ -524,37 +524,14 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         }
     }
     if let Some(rewrite_path) = &rewrite_path {
-        match std::fs::read_to_string(rewrite_path) {
-            Ok(rewrite_config_str) => {
-                match serde_json::from_str::<serde_json::Value>(&rewrite_config_str) {
-                    Ok(json) => {
-                        if let Some(sp_config) = json.as_object() {
-                            match RewritePlugin::from_json(sp_config) {
-                                Ok(plugin) => {
-                                    debug!(log, "Rewrite plugin used: {}", plugin.name());
-                                    plugins_active.push(Box::new(plugin));
-                                }
-                                Err(e) => warn!(log, "Rewrite plugin failed with err: {:?}", e),
-                            }
-                        }
-                    }
-                    Err(e) => warn!(
-                        log,
-                        "Failed to parse config file {} for Rewrite plugin with err: {:?}",
-                        rewrite_path,
-                        e
-                    ),
-                }
+        match RewritePlugin::from_conf_file(rewrite_path) {
+            Ok(plugin) => {
+                debug!(log, "Rewrite plugin used: {}", plugin.name());
+                plugins_active.push(Box::new(plugin));
             }
-            Err(e) => warn!(
-                log,
-                "Failed to to read config file {} for Rewrite plugin with err: {:?}",
-                rewrite_path,
-                e
-            ),
+            Err(e) => warn!(log, "Rewrite plugin failed with err: {:?}", e),
         }
     }
-
     if let Some(can_path) = &can_path {
         if let Some(sp_config) = serde_json::json!({"name":"CAN","fibexDir":can_path}).as_object() {
             match CanPlugin::from_json(sp_config) {

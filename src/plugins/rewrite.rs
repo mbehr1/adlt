@@ -167,6 +167,16 @@ impl Plugin for RewritePlugin {
 }
 
 impl RewritePlugin {
+    pub fn from_conf_file(conf_file: &str) -> Result<RewritePlugin, Box<dyn Error>> {
+        let conf_str = std::fs::read_to_string(conf_file)?;
+        let conf_json: serde_json::Value = serde_json::from_str(&conf_str)?;
+        if let Some(conf_obj) = conf_json.as_object() {
+            RewritePlugin::from_json(conf_obj)
+        } else {
+            Err(RewritePluginError::from("config file root not an object").into())
+        }
+    }
+
     pub fn from_json(
         config: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<RewritePlugin, Box<dyn Error>> {
