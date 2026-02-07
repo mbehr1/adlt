@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.64.1 - 2026-02-07
+#### Bug Fixes
+- **(ci)** use macos-15-intel instead of deprecated macos-13 - (3a8a1ee) - Matthias Behr
+
+- - -
+
 ## v0.64.0 - 2026-02-07
 #### Bug Fixes
 - **(receive)** add ip fragmentation support - (74cc3fd) - Matthias Behr
