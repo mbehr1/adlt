@@ -25,12 +25,10 @@ use adlt::{
         SERVICE_ID_SET_TIMING_PACKETS, SERVICE_ID_SET_VERBOSE_MODE,
     },
     plugins::{
-        can::CanPlugin, non_verbose::NonVerbosePlugin, plugin::Plugin, rewrite::RewritePlugin,
-        someip::SomeipPlugin,
+        non_verbose::NonVerbosePlugin, plugin::Plugin, rewrite::RewritePlugin, someip::SomeipPlugin,
     },
     utils::{
-        buf_as_hex_to_io_write, eac_stats::EacStats, set_max_buffer_size, IpDltMsgReceiver,
-        RecvMode, SerialParams,
+        buf_as_hex_to_io_write, set_max_buffer_size, IpDltMsgReceiver, RecvMode, SerialParams,
     },
 };
 use clap::{Arg, ArgMatches, Command};
@@ -344,17 +342,12 @@ pub fn receive<W: std::io::Write + Send + 'static>(
 
     let mut plugins_active: Vec<Box<dyn Plugin + Send>> = vec![];
     if let Some(nonverbose_path) = &nonverbose_path {
-        if let Some(np_config) =
-            serde_json::json!({"name":"NonVerbose","fibexDir":nonverbose_path}).as_object()
-        {
-            let mut eac_stats = EacStats::new();
-            match NonVerbosePlugin::from_json(np_config, &mut eac_stats) {
-                Ok(plugin) => {
-                    debug!(log, "Non-Verbose plugin used: {}", plugin.name());
-                    plugins_active.push(Box::new(plugin));
-                }
-                Err(e) => warn!(log, "Non-Verbose plugin failed with err: {:?}", e),
+        match NonVerbosePlugin::from_fibex_dir(nonverbose_path, None) {
+            Ok(plugin) => {
+                debug!(log, "Non-Verbose plugin used: {}", plugin.name());
+                plugins_active.push(Box::new(plugin));
             }
+            Err(e) => warn!(log, "Non-Verbose plugin failed with err: {:?}", e),
         }
     }
     if let Some(someip_path) = &someip_path {

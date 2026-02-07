@@ -22,9 +22,7 @@ use adlt::{
         rewrite::RewritePlugin, someip::SomeipPlugin,
     },
     utils::{
-        buf_as_hex_to_io_write, contains_regex_chars,
-        eac_stats::EacStats,
-        get_dlt_message_iterator, get_new_namespace,
+        buf_as_hex_to_io_write, contains_regex_chars, get_dlt_message_iterator, get_new_namespace,
         sorting_multi_readeriterator::{SequentialMultiIterator, SortingMultiReaderIterator},
         sync_sender_send_delay_if_full,
         unzip::extract_archives,
@@ -504,17 +502,12 @@ pub fn convert<W: std::io::Write + Send + 'static>(
         }
     }
     if let Some(nonverbose_path) = &nonverbose_path {
-        if let Some(np_config) =
-            serde_json::json!({"name":"NonVerbose","fibexDir":nonverbose_path}).as_object()
-        {
-            let mut eac_stats = EacStats::new(); // we dont use them now. todo!
-            match NonVerbosePlugin::from_json(np_config, &mut eac_stats) {
-                Ok(plugin) => {
-                    debug!(log, "Non-Verbose plugin used: {}", plugin.name());
-                    plugins_active.push(Box::new(plugin));
-                }
-                Err(e) => warn!(log, "Non-Verbose plugin failed with err: {:?}", e),
+        match NonVerbosePlugin::from_fibex_dir(nonverbose_path, None) {
+            Ok(plugin) => {
+                debug!(log, "Non-Verbose plugin used: {}", plugin.name());
+                plugins_active.push(Box::new(plugin));
             }
+            Err(e) => warn!(log, "Non-Verbose plugin failed with err: {:?}", e),
         }
     }
     if let Some(someip_path) = &someip_path {
