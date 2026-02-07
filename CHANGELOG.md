@@ -2,6 +2,31 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.64.0 - 2026-02-07
+#### Bug Fixes
+- **(receive)** add ip fragmentation support - (74cc3fd) - Matthias Behr
+- **(serial)** dont skip msgs at buffer boundaries - (f8da8c2) - Matthias Behr
+- **(serial)** support msgs starting with DLT_SERIAL_HEADER - (d220860) - Matthias Behr
+- **(unzip)** regression by updated zip crate - (31685b9) - Matthias Behr
+- remove receive can_plugin - (5b39655) - Matthias Behr
+- unwrap panic on windows - (2d9c6ea) - Matthias Behr
+- handle utf-16 formats for .asc,.txt,.log files - (cb3e9bb) - Matthias Behr
+#### Continuous Integration
+- run build&test for windows as well - (6c189db) - Matthias Behr
+#### Features
+- **(receive)** add plugin support for receive cmd - (fcb9ca8) - Matthias Behr
+- **(serial)** add serial support for receive command - (942e58a) - Matthias Behr
+#### Miscellaneous Chores
+- refactor rewrite plugin creation from file - (7311b84) - Matthias Behr
+- refactor non-verbose plugin creation from dir - (7fde4c0) - Matthias Behr
+- make recv_udp test more reliable - (5003924) - Matthias Behr
+- fix windows build - (50a4a4a) - Matthias Behr
+- package updates, tungstenite... - (97b65e6) - Matthias Behr
+#### Tests
+- add unit test for receive with non_verbose plugin - (aa4d796) - Matthias Behr
+
+- - -
+
 ## v0.63.0 - 2025-10-12
 #### Features
 - **(pcap)** Add tecmp/plp support from full capture via libpcap - (c7f5f97) - Matthias Behr
