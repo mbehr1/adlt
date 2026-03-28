@@ -113,6 +113,7 @@ pub fn remote(
                 .name("server".to_string())
                 .spawn(move || {
                     let log = logc;
+                    #[allow(clippy::result_large_err)]
                     let callback = |req: &Request, mut response: Response| {
                         info!(log, "Received a new ws handshake");
                         info!(log, "The request's path is: {}", req.uri().path());
