@@ -109,7 +109,7 @@ fn parse_dlt_without_header(
             len: (std_hdr_len + payload.len()).try_into().unwrap_or(u16::MAX),
         },
         extended_header: Some(DltExtendedHeader {
-            verb_mstp_mtin: 1,
+            verb_mstp_mtin: 0x41, // verbose=1, mstp=0 (Log), mtin=4 (Info)
             noar,
             apid: DltChar4::from_buf(b"SER\0"),
             ctid: DltChar4::from_buf(b"ASC\0"),
