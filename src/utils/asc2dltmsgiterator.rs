@@ -504,10 +504,10 @@ where
                                     payload.extend(
                                         [7u8]
                                             .into_iter()
-                                            .chain(1u16.to_ne_bytes().into_iter()) // 1 app id, CAN plugin expects == 1
+                                            .chain(1u16.to_ne_bytes()) // 1 app id, CAN plugin expects == 1
                                             .chain(apid_buf.iter().copied())
-                                            .chain(0u16.to_ne_bytes().into_iter()) // 0 ctx ids
-                                            .chain((name.len() as u16).to_ne_bytes().into_iter()) // len of apid desc
+                                            .chain(0u16.to_ne_bytes()) // 0 ctx ids
+                                            .chain((name.len() as u16).to_ne_bytes()) // len of apid desc
                                             .chain(name.as_bytes().iter().copied()),
                                     );
                                     // return a DltMessage with the LOG INFO APID incl. the BusMapping name

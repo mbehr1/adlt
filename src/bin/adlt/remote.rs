@@ -584,7 +584,7 @@ fn file_names_to_file_streams(
     let input_file_streams: Vec<StreamEntry> = input_file_streams
         .into_iter()
         .map(|(hashset, mut time_files)| {
-            time_files.sort_by(|a, b| a.0.cmp(&b.0));
+            time_files.sort_by_key(|a| a.0);
             // time_files.dedup(); // remove duplicates (not needed here)
             (hashset, time_files)
         })
@@ -1855,7 +1855,7 @@ fn process_file_context<T: Read + Write>(
             fc.last_lcs_w_refresh_index = new_lcs_w_refresh_index;
             if !lcs.is_empty() {
                 // we do send them sorted (even in case only updates are sent)
-                lcs.sort_unstable_by(|a, b| a.start_time.cmp(&b.start_time));
+                lcs.sort_unstable_by_key(|a| a.start_time);
                 let encoded: Vec<u8> =
                     bincode::encode_to_vec(remote_types::BinType::Lifecycles(lcs), BINCODE_CONFIG)
                         .unwrap(); // todo

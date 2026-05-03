@@ -155,18 +155,14 @@ impl Plugin for CanPlugin {
             let mut args = msg.into_iter();
             let message_id_arg = args.next();
             let message_id = match message_id_arg {
-                Some(a) => {
-                    if a.payload_raw.len() == 4 {
-                        if a.is_big_endian {
-                            u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
-                        } else {
-                            u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
-                        }
+                Some(a) if a.payload_raw.len() == 4 => {
+                    if a.is_big_endian {
+                        u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
                     } else {
-                        0
+                        u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
                     }
                 }
-                None => 0,
+                _ => 0,
             };
             if message_id == SERVICE_ID_GET_LOG_INFO {
                 let payload_arg = args.next();
@@ -480,7 +476,7 @@ fn md_for_compu_methods(compu_methods: &Vec<CompuMethod>) -> String {
                     })
                     .map(|cs| (cs.mask.unwrap(), &cs.lower_limit.as_ref().unwrap().0, cs))
                     .collect::<Vec<_>>();
-                masks.sort_by(|a, b| a.0.cmp(&b.0));
+                masks.sort_by_key(|a| a.0);
                 let def_v = XsDouble::I64(0);
                 r += &masks
                     .iter()
@@ -549,61 +545,57 @@ fn js_for_compu_methods(compu_methods: &Vec<CompuMethod>) -> String {
     let mut closing_str = String::with_capacity(2);
     for cm in compu_methods {
         match cm.category {
-            CompuCategory::TextTable => {
-                if r.len() == initial_r_len {
-                    // we support only either a TextTable or  Bitfield
-                    r += "new Map(["; // texttable uses a Map
-                    closing_str += "])";
-                    r += &cm
-                        .internal_to_phys_scales
-                        .iter()
-                        .filter(|cs| cs.get_single_value().is_some() && cs.compu_const.is_some())
-                        .map(|cs| {
-                            format!(
-                                "[{},{:?}]",
-                                cs.get_single_value().unwrap(),
-                                if let Some(afibex::fibex::VvT::VT(en)) = &cs.compu_const {
-                                    en // todo needs escaping of "!
-                                } else {
-                                    ""
-                                }
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(",");
-                }
+            CompuCategory::TextTable if r.len() == initial_r_len => {
+                // we support only either a TextTable or  Bitfield
+                r += "new Map(["; // texttable uses a Map
+                closing_str += "])";
+                r += &cm
+                    .internal_to_phys_scales
+                    .iter()
+                    .filter(|cs| cs.get_single_value().is_some() && cs.compu_const.is_some())
+                    .map(|cs| {
+                        format!(
+                            "[{},{:?}]",
+                            cs.get_single_value().unwrap(),
+                            if let Some(afibex::fibex::VvT::VT(en)) = &cs.compu_const {
+                                en // todo needs escaping of "!
+                            } else {
+                                ""
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
             }
-            CompuCategory::BitfieldTextTable => {
-                if r.len() == initial_r_len {
-                    // we encode the bitfields as an array or tuple(array) with mask/value/text
-                    r += "[";
-                    r += &cm
-                        .internal_to_phys_scales
-                        .iter()
-                        .filter(|cs| {
-                            cs.get_single_value().is_some()
-                                && cs.mask.is_some()
-                                && cs.compu_const.is_some()
-                                && cs.get_single_value().unwrap() != &XsDouble::I64(0)
-                        })
-                        .map(|cs| {
-                            let v = cs.get_single_value().unwrap();
-                            let mask = cs.mask.unwrap();
-                            format!(
-                                "[{},{},{:?}]",
-                                mask,
-                                v,
-                                if let Some(afibex::fibex::VvT::VT(en)) = &cs.compu_const {
-                                    en // todo needs escaping of "!
-                                } else {
-                                    ""
-                                }
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    closing_str += "]";
-                }
+            CompuCategory::BitfieldTextTable if r.len() == initial_r_len => {
+                // we encode the bitfields as an array or tuple(array) with mask/value/text
+                r += "[";
+                r += &cm
+                    .internal_to_phys_scales
+                    .iter()
+                    .filter(|cs| {
+                        cs.get_single_value().is_some()
+                            && cs.mask.is_some()
+                            && cs.compu_const.is_some()
+                            && cs.get_single_value().unwrap() != &XsDouble::I64(0)
+                    })
+                    .map(|cs| {
+                        let v = cs.get_single_value().unwrap();
+                        let mask = cs.mask.unwrap();
+                        format!(
+                            "[{},{},{:?}]",
+                            mask,
+                            v,
+                            if let Some(afibex::fibex::VvT::VT(en)) = &cs.compu_const {
+                                en // todo needs escaping of "!
+                            } else {
+                                ""
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                closing_str += "]";
             }
             _ => {}
         }
