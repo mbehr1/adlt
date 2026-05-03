@@ -32,8 +32,101 @@ type Ipv4FragmentKey = (Ipv4Addr, Ipv4Addr, IpNextHeaderProtocol, u16);
 
 use crate::dlt::{
     first_idx_of_serial_pattern, parse_dlt_with_serial_header, parse_dlt_with_std_header, DltChar4,
-    DltMessage, DltMessageIndexType, Error, ErrorKind, DLT_SERIAL_HEADER_SIZE,
+    DltExtendedHeader, DltMessage, DltMessageIndexType, DltStandardHeader, Error, ErrorKind,
+    DLT_EXT_HEADER_SIZE, DLT_SERIAL_HEADER_SIZE, DLT_STD_HDR_BIG_ENDIAN, DLT_STD_HDR_HAS_EXT_HDR,
+    DLT_STD_HDR_VERSION,
 };
+
+/// parse a DLT message from the given data as ASCII/UTF-8 text, skipping leading and trailing line separators (\r, \n)
+/// and using the given ECU as storage header ECU.
+///
+/// APID, CTID are set to SER/ASC
+fn parse_dlt_without_header(
+    data: &[u8],
+    index: DltMessageIndexType,
+    storage_header_ecu: DltChar4,
+) -> Result<(usize, DltMessage), Error> {
+    if data.is_empty() {
+        return Err(Error::new(ErrorKind::NotEnoughData(1)));
+    }
+
+    let is_sep = |b: u8| b == b'\r' || b == b'\n';
+
+    let leading_separators = data.iter().take_while(|&&b| is_sep(b)).count();
+    if leading_separators >= data.len() {
+        return Err(Error::new(ErrorKind::InvalidData(
+            "line separators only".to_string(),
+        )));
+    }
+
+    let payload_start = leading_separators;
+    // position() is relative to data[payload_start..], so convert to absolute index in data.
+    let payload_end = data[payload_start..]
+        .iter()
+        .position(|&b| is_sep(b))
+        .map_or(data.len(), |idx| payload_start + idx);
+    let payload = &data[payload_start..payload_end];
+    if payload.is_empty() {
+        return Err(Error::new(ErrorKind::InvalidData(
+            "empty payload".to_string(),
+        )));
+    }
+
+    let now_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0);
+
+    let payload_text = std::str::from_utf8(payload).ok();
+    let (noar, payload) = if let Some(text) = payload_text {
+        crate::dlt_args!(text).map_err(|e| {
+            Error::new(ErrorKind::InvalidData(format!(
+                "failed to serialize UTF-8 payload as verbose DLT argument: {e}"
+            )))
+        })?
+    } else {
+        crate::dlt_args!(serde_bytes::Bytes::new(payload)).map_err(|e| {
+            Error::new(ErrorKind::InvalidData(format!(
+                "failed to serialize RAW payload as verbose DLT argument: {e}"
+            )))
+        })?
+    };
+
+    let std_hdr_len = DLT_EXT_HEADER_SIZE + 4;
+    let htyp = if cfg!(target_endian = "big") {
+        DLT_STD_HDR_VERSION | DLT_STD_HDR_HAS_EXT_HDR | DLT_STD_HDR_BIG_ENDIAN
+    } else {
+        DLT_STD_HDR_VERSION | DLT_STD_HDR_HAS_EXT_HDR
+    };
+    let msg = DltMessage {
+        index,
+        reception_time_us: now_us,
+        ecu: storage_header_ecu,
+        timestamp_dms: 0,
+        standard_header: DltStandardHeader {
+            htyp,
+            mcnt: (index & 0xff) as u8,
+            len: (std_hdr_len + payload.len()).try_into().unwrap_or(u16::MAX),
+        },
+        extended_header: Some(DltExtendedHeader {
+            verb_mstp_mtin: 1,
+            noar,
+            apid: DltChar4::from_buf(b"SER\0"),
+            ctid: DltChar4::from_buf(b"ASC\0"),
+        }),
+        payload,
+        payload_text: None,
+        lifecycle: 0,
+    };
+
+    let trailing_separators = data[payload_end..]
+        .iter()
+        .take_while(|&&b| is_sep(b))
+        .count();
+    let to_consume = payload_end + trailing_separators;
+
+    Ok((to_consume, msg))
+}
 
 #[cfg(not(windows))]
 fn open_serial_port_from_file(path: &str) -> Result<serial2::SerialPort, std::io::Error> {
@@ -251,6 +344,7 @@ pub enum PcapParam {
 pub struct SerialParams {
     pub device_name: String,
     pub baudrate: u32,
+    pub expect_serial_header: bool,
 }
 
 #[derive(PartialEq, Debug)]
@@ -298,6 +392,7 @@ impl std::fmt::Display for RecvMode {
 enum ExpectedHeader {
     Serial, // expect DLT_SERIAL_HEADER
     Std,    // expect no header but directly the DLT standard header
+    None,   // expect no DLT header at all
 }
 
 pub struct IpDltMsgReceiver {
@@ -602,7 +697,14 @@ impl IpDltMsgReceiver {
         };
 
         let expected_header = match recv_mode {
-            RecvMode::Serial(_) => ExpectedHeader::Serial,
+            RecvMode::Serial(SerialParams {
+                expect_serial_header: true,
+                ..
+            }) => ExpectedHeader::Serial,
+            RecvMode::Serial(SerialParams {
+                expect_serial_header: false,
+                ..
+            }) => ExpectedHeader::None,
             _ => ExpectedHeader::Std,
         };
 
@@ -888,6 +990,9 @@ impl IpDltMsgReceiver {
                     self.storage_header_ecu,
                     true,
                 ),
+                ExpectedHeader::None => {
+                    parse_dlt_without_header(rem_data, self.index, self.storage_header_ecu)
+                }
             } {
                 Ok((to_consume, msg)) => {
                     debug_assert_eq!(
@@ -896,6 +1001,7 @@ impl IpDltMsgReceiver {
                             ExpectedHeader::Serial => {
                                 (msg.standard_header.len as usize) + DLT_SERIAL_HEADER_SIZE
                             }
+                            ExpectedHeader::None => to_consume, // no check as e.g. sep are skipped
                         },
                         to_consume,
                         "The DLT message length should match the consumed data length"
@@ -932,6 +1038,9 @@ impl IpDltMsgReceiver {
                             .iter()
                             .position(|&b| (((b >> 5) & 0x07) == 1) || (((b >> 5) & 0x07) == 2)),
                         ExpectedHeader::Serial => first_idx_of_serial_pattern(&rem_data[1..]),
+                        ExpectedHeader::None => {
+                            rem_data[1..].iter().position(|&b| b != b'\r' && b != b'\n')
+                        }
                     };
                     if let Some(idx) = idx_first_pos_header {
                         warn!(
@@ -1386,6 +1495,69 @@ mod tests {
         (buf, payload)
     }
 
+    #[test]
+    fn parse_without_header_utf8_strips_line_separators_and_empties() {
+        let input = b"\r\nhello\n\nworld\r\n";
+        let ecu = DltChar4::from_buf(b"EcuS");
+        let mut idx = 100;
+        let mut offset = 0usize;
+        let mut parsed: Vec<DltMessage> = Vec::new();
+
+        while offset < input.len() {
+            match parse_dlt_without_header(&input[offset..], idx, ecu) {
+                Ok((consumed, msg)) => {
+                    offset += consumed;
+                    idx += 1;
+                    parsed.push(msg);
+                }
+                Err(Error {
+                    kind: ErrorKind::NotEnoughData(_),
+                }) => break,
+                Err(_) => {
+                    let rem = &input[offset..];
+                    let consume = rem
+                        .iter()
+                        .take_while(|&&b| b == b'\r' || b == b'\n')
+                        .count()
+                        .max(1);
+                    offset += consume;
+                }
+            }
+        }
+
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].payload_as_text().as_deref(), Ok("hello"));
+        assert_eq!(parsed[1].payload_as_text().as_deref(), Ok("world"));
+        assert_eq!(
+            parsed[0].apid().map(|a| a.to_string()).as_deref(),
+            Some("SER")
+        );
+        assert_eq!(
+            parsed[0].ctid().map(|c| c.to_string()).as_deref(),
+            Some("ASC")
+        );
+    }
+
+    #[test]
+    fn parse_without_header_raw_bytes_if_not_utf8() {
+        let input = [0xff, 0x80, 0x01, 0x02];
+        let ecu = DltChar4::from_buf(b"EcuS");
+
+        match parse_dlt_without_header(&input, 7, ecu) {
+            Ok((consumed, msg)) => {
+                assert_eq!(consumed, input.len());
+                assert!(msg.payload_text.is_none());
+                assert_eq!(msg.payload_as_text().as_deref(), Ok("ff 80 01 02"));
+                assert_eq!(msg.payload.len(), 4 + 2 + input.len());
+                // check that msg.payload type is indeed RawBytes and contains the original bytes via the dlt arg iterator:
+                let args_iter = msg.into_iter();
+                let arg = args_iter.into_iter().next().unwrap();
+                assert_eq!(arg.type_info, crate::dlt::DLT_TYPE_INFO_RAWD);
+            }
+            _ => panic!("Expected parsed raw-bytes message"),
+        }
+    }
+
     // MARK: serial tests
     #[cfg(not(windows))] // the pipe is blocking (not supporting the timeout) on windows
     #[test]
@@ -1401,6 +1573,7 @@ mod tests {
             recv_mode: RecvMode::Serial(SerialParams {
                 device_name: "test".to_string(),
                 baudrate: 0,
+                expect_serial_header: true,
             }),
             recv_method: RecvMethod::Serial(unsafe { serial2::SerialPort::from_raw_fd(read_fd) }),
             expected_header: ExpectedHeader::Serial,
@@ -1473,6 +1646,7 @@ mod tests {
             recv_mode: RecvMode::Serial(SerialParams {
                 device_name: "test".to_string(),
                 baudrate: 0,
+                expect_serial_header: true,
             }),
             recv_method: RecvMethod::Serial(unsafe { serial2::SerialPort::from_raw_fd(read_fd) }),
             expected_header: ExpectedHeader::Serial,
@@ -1505,6 +1679,83 @@ mod tests {
         }
         let r = receiver.recv_msg();
         assert!(r.is_err(), "Expecting no more messages, got: {:?}", r);
+    }
+
+    #[cfg(not(windows))] // the pipe is blocking (not supporting the timeout) on windows
+    #[test]
+    fn serial_recv_non_dlt_header_split_by_timeout() {
+        let logger = new_logger();
+        // create a pipe and use the read end as serial port for the receiver
+        let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+        let read_end = std::mem::ManuallyDrop::new(read_end);
+        let read_fd = read_end.as_raw_fd();
+
+        let mut serial_port = unsafe { serial2::SerialPort::from_raw_fd(read_fd) };
+        serial_port
+            .set_read_timeout(std::time::Duration::from_millis(500))
+            .expect("set read timeout");
+
+        let receiver = IpDltMsgReceiver {
+            log: logger,
+            recv_mode: RecvMode::Serial(SerialParams {
+                device_name: "test".to_string(),
+                baudrate: 0,
+                expect_serial_header: false,
+            }),
+            recv_method: RecvMethod::Serial(serial_port),
+            expected_header: ExpectedHeader::None,
+            interface: InterfaceIndexOrAddress::Index(0),
+            addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 0),
+            recv_buffer: Vec::with_capacity(65536),
+            storage_header_ecu: DltChar4::from_buf(b"EcuS"),
+            buffered_msgs: std::collections::VecDeque::new(),
+            recv_buffer_list: Vec::new(),
+            #[cfg(feature = "pcap")]
+            plp_stats: None,
+            #[cfg(feature = "pcap")]
+            fragment_cache: HashMap::new(),
+            index: 0,
+        };
+
+        use std::io::Write;
+        let recv_thread = std::thread::spawn(move || {
+            let mut receiver = receiver;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            let mut msgs = Vec::with_capacity(2);
+            while std::time::Instant::now() < deadline && msgs.len() < 2 {
+                match receiver.recv_msg() {
+                    Ok((msg, _src_addr)) => msgs.push(msg),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(e) => panic!("recv_msg failed: {e}"),
+                }
+            }
+            assert_eq!(msgs.len(), 2, "Expected 2 messages within deadline");
+            (msgs.remove(0), msgs.remove(0))
+        });
+
+        let first_chunk = "first chunk with Ċ without line separator"; // lets test a UTF8 char as well
+        write_end
+            .write_all(first_chunk.as_bytes())
+            .expect("write first chunk to serial pipe");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        write_end
+            .write_all(b"second chunk with line separator\n")
+            .expect("write second chunk to serial pipe");
+
+        let (msg1, msg2) = recv_thread.join().expect("join recv thread");
+
+        assert_eq!(msg1.payload_as_text().as_deref(), Ok(first_chunk));
+        assert_eq!(
+            msg2.payload_as_text().as_deref(),
+            Ok("second chunk with line separator")
+        );
     }
 
     /// MARK: UDP tests
