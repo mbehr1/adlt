@@ -420,7 +420,7 @@ fn sorted_mids_by_type(methods: &'_ HashMap<u16, MethodIdType>) -> Vec<(u16, Met
             }
         }
     }
-    v.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    v.sort_unstable_by_key(|a| a.0);
     v
 }
 
@@ -772,7 +772,7 @@ impl SomeipPlugin {
         services_by_name.sort_unstable_by(|a, b| a.1[0].short_name.cmp(&b.1[0].short_name));
 
         let mut services_by_id = services_by_name.clone();
-        services_by_id.sort_unstable_by(|a, b| a.0 .0.cmp(&b.0 .0));
+        services_by_id.sort_unstable_by_key(|a| a.0 .0);
 
         state.value = json!({"name":name, "treeItems":[
             if !warnings.is_empty() {

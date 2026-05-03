@@ -81,14 +81,9 @@ pub fn filters_from_dlf<B: std::io::BufRead>(reader: B) -> Result<Vec<Filter>, q
                     found_dltfilter_start = true;
                     found_dltfilter_end = false;
                 }
-                b"filter" => {
-                    if found_dltfilter_start && !found_dltfilter_end {
-                        let filter = Filter::from_quick_xml_reader(&mut reader);
-                        filters.push(filter?);
-                    } else {
-                        // we ignore those
-                        //println!("ignoring filter as outside dltfilter!");
-                    }
+                b"filter" if found_dltfilter_start && !found_dltfilter_end => {
+                    let filter = Filter::from_quick_xml_reader(&mut reader);
+                    filters.push(filter?);
                 }
                 _ => {
                     // println!("ignoring start '{:?}'", e.local_name())

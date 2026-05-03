@@ -94,21 +94,20 @@ impl Plugin for MuniicPlugin {
                         let mut new_payload_text: Option<String> = None;
                         for (nr_arg, arg) in args.enumerate() {
                             match nr_arg {
-                                7 | 8 => {
-                                    // interface or method id
+                                7 | 8
                                     if (arg.type_info & DLT_TYPE_INFO_UINT) > 0
-                                        && arg.payload_raw.len() == 4
-                                    {
-                                        let val: u32 = if arg.is_big_endian {
-                                            u32::from_be_bytes(arg.payload_raw.try_into().unwrap())
-                                        } else {
-                                            u32::from_le_bytes(arg.payload_raw.try_into().unwrap())
-                                        };
-                                        match nr_arg {
-                                            7 => interface_id = Some(val),
-                                            8 => message_id = Some(val),
-                                            _ => {}
-                                        }
+                                        && arg.payload_raw.len() == 4 =>
+                                {
+                                    // interface or method id
+                                    let val: u32 = if arg.is_big_endian {
+                                        u32::from_be_bytes(arg.payload_raw.try_into().unwrap())
+                                    } else {
+                                        u32::from_le_bytes(arg.payload_raw.try_into().unwrap())
+                                    };
+                                    match nr_arg {
+                                        7 => interface_id = Some(val),
+                                        8 => message_id = Some(val),
+                                        _ => {}
                                     }
                                 }
                                 12 => {

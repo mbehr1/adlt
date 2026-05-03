@@ -454,7 +454,7 @@ pub fn convert<W: std::io::Write + Send + 'static>(
     let input_file_streams: Vec<StreamEntry> = input_file_streams
         .into_iter()
         .map(|(hashset, mut time_files)| {
-            time_files.sort_by(|a, b| a.0.cmp(&b.0));
+            time_files.sort_by_key(|a| a.0);
             time_files.dedup(); // remove duplicates
             (hashset, time_files)
         })

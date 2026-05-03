@@ -190,22 +190,14 @@ impl EacStats {
                 let mut args = msg.into_iter();
                 let message_id_arg = args.next();
                 let message_id = match message_id_arg {
-                    Some(a) => {
-                        if a.payload_raw.len() == 4 {
-                            if a.is_big_endian {
-                                u32::from_be_bytes(
-                                    a.payload_raw.get(0..4).unwrap().try_into().unwrap(),
-                                )
-                            } else {
-                                u32::from_le_bytes(
-                                    a.payload_raw.get(0..4).unwrap().try_into().unwrap(),
-                                )
-                            }
+                    Some(a) if a.payload_raw.len() == 4 => {
+                        if a.is_big_endian {
+                            u32::from_be_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
                         } else {
-                            0
+                            u32::from_le_bytes(a.payload_raw.get(0..4).unwrap().try_into().unwrap())
                         }
                     }
-                    None => 0,
+                    _ => 0,
                 };
                 if message_id == SERVICE_ID_GET_LOG_INFO {
                     let payload_arg = args.next();
