@@ -93,6 +93,12 @@ fn parse_dlt_without_header(
     };
 
     let std_hdr_len = DLT_EXT_HEADER_SIZE + 4;
+    let total_len = std_hdr_len + payload.len();
+    let msg_len: u16 = total_len.try_into().map_err(|_| {
+        Error::new(ErrorKind::InvalidData(format!(
+            "message too large: {total_len} bytes exceeds u16::MAX"
+        )))
+    })?;
     let htyp = if cfg!(target_endian = "big") {
         DLT_STD_HDR_VERSION | DLT_STD_HDR_HAS_EXT_HDR | DLT_STD_HDR_BIG_ENDIAN
     } else {
@@ -106,7 +112,7 @@ fn parse_dlt_without_header(
         standard_header: DltStandardHeader {
             htyp,
             mcnt: (index & 0xff) as u8,
-            len: (std_hdr_len + payload.len()).try_into().unwrap_or(u16::MAX),
+            len: msg_len,
         },
         extended_header: Some(DltExtendedHeader {
             verb_mstp_mtin: 0x41, // verbose=1, mstp=0 (Log), mtin=4 (Info)
