@@ -46,6 +46,8 @@ fn parse_dlt_without_header(
     index: DltMessageIndexType,
     storage_header_ecu: DltChar4,
 ) -> Result<(usize, DltMessage), Error> {
+    const MAX_CHUNK_LEN: usize = (64 * 1024) - 32;
+
     if data.is_empty() {
         return Err(Error::new(ErrorKind::NotEnoughData(1)));
     }
@@ -61,11 +63,11 @@ fn parse_dlt_without_header(
 
     let payload_start = leading_separators;
     // position() is relative to data[payload_start..], so convert to absolute index in data.
-    let payload_end = data[payload_start..]
+    let full_payload_end = data[payload_start..]
         .iter()
         .position(|&b| is_sep(b))
         .map_or(data.len(), |idx| payload_start + idx);
-    let payload = &data[payload_start..payload_end];
+    let payload = &data[payload_start..full_payload_end];
     if payload.is_empty() {
         return Err(Error::new(ErrorKind::InvalidData(
             "empty payload".to_string(),
@@ -77,7 +79,14 @@ fn parse_dlt_without_header(
         .map(|d| d.as_micros() as u64)
         .unwrap_or(0);
 
-    let payload_text = std::str::from_utf8(payload).ok();
+    let mut payload_end = payload_start + payload.len().min(MAX_CHUNK_LEN);
+    if payload_end < full_payload_end && std::str::from_utf8(payload).is_ok() {
+        while payload_end > payload_start && (data[payload_end] & 0b1100_0000) == 0b1000_0000 {
+            payload_end -= 1;
+        }
+    }
+    let candidate = &data[payload_start..payload_end];
+    let payload_text = std::str::from_utf8(candidate).ok();
     let (noar, payload) = if let Some(text) = payload_text {
         crate::dlt_args!(text).map_err(|e| {
             Error::new(ErrorKind::InvalidData(format!(
@@ -85,7 +94,7 @@ fn parse_dlt_without_header(
             )))
         })?
     } else {
-        crate::dlt_args!(serde_bytes::Bytes::new(payload)).map_err(|e| {
+        crate::dlt_args!(serde_bytes::Bytes::new(candidate)).map_err(|e| {
             Error::new(ErrorKind::InvalidData(format!(
                 "failed to serialize RAW payload as verbose DLT argument: {e}"
             )))
@@ -125,10 +134,14 @@ fn parse_dlt_without_header(
         lifecycle: 0,
     };
 
-    let trailing_separators = data[payload_end..]
-        .iter()
-        .take_while(|&&b| is_sep(b))
-        .count();
+    let trailing_separators = if payload_end == full_payload_end {
+        data[payload_end..]
+            .iter()
+            .take_while(|&&b| is_sep(b))
+            .count()
+    } else {
+        0
+    };
     let to_consume = payload_end + trailing_separators;
 
     Ok((to_consume, msg))
@@ -1465,7 +1478,7 @@ impl Iterator for IpDltMsgReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dlt::DltStandardHeader;
+    use crate::dlt::{DltMessageLogType, DltStandardHeader};
     #[cfg(not(windows))]
     use crate::dlt::{DLT_SERIAL_HEADER_PATTERN, DLT_SERIAL_HEADER_SIZE};
     use crate::dlt_args;
@@ -1532,6 +1545,11 @@ mod tests {
         }
 
         assert_eq!(parsed.len(), 2);
+        // assert that the log level is info:
+        assert_eq!(
+            parsed[0].mstp(),
+            crate::dlt::DltMessageType::Log(DltMessageLogType::Info)
+        );
         assert_eq!(parsed[0].payload_as_text().as_deref(), Ok("hello"));
         assert_eq!(parsed[1].payload_as_text().as_deref(), Ok("world"));
         assert_eq!(
@@ -1562,6 +1580,77 @@ mod tests {
             }
             _ => panic!("Expected parsed raw-bytes message"),
         }
+    }
+
+    #[test]
+    fn parse_without_header_large_raw_bytes_are_split_without_data_loss() {
+        let input = vec![0xffu8; (u16::MAX as usize) * 2 + 1234];
+        let ecu = DltChar4::from_buf(b"EcuS");
+
+        let mut idx = 42;
+        let mut offset = 0usize;
+        let mut parsed_msgs = 0usize;
+        let mut reconstructed = Vec::with_capacity(input.len());
+
+        while offset < input.len() {
+            match parse_dlt_without_header(&input[offset..], idx, ecu) {
+                Ok((consumed, msg)) => {
+                    assert!(consumed > 0);
+                    offset += consumed;
+                    idx += 1;
+                    parsed_msgs += 1;
+
+                    let mut args = (&msg).into_iter();
+                    let arg = args.next().expect("expected one raw argument");
+                    assert_eq!(arg.type_info, crate::dlt::DLT_TYPE_INFO_RAWD);
+                    reconstructed.extend_from_slice(arg.payload_raw);
+                    assert!(args.next().is_none());
+                }
+                Err(e) => panic!("unexpected parse error at offset {offset}: {e}"),
+            }
+        }
+
+        assert!(
+            parsed_msgs >= 2,
+            "expected payload to be split into messages"
+        );
+        assert_eq!(reconstructed.len(), input.len());
+        assert_eq!(reconstructed, input);
+    }
+
+    #[test]
+    fn parse_without_header_utf8_split_does_not_cut_multibyte_char() {
+        const MAX_CHUNK_LEN: usize = (64 * 1024) - 32;
+
+        let mut text = "a".repeat(MAX_CHUNK_LEN - 1);
+        text.push('€');
+        text.push_str("tail");
+        let input = text.as_bytes();
+        let ecu = DltChar4::from_buf(b"EcuS");
+
+        let mut idx = 123;
+        let mut offset = 0usize;
+        let mut parsed_text = String::new();
+        let mut parsed_msgs = 0usize;
+
+        while offset < input.len() {
+            match parse_dlt_without_header(&input[offset..], idx, ecu) {
+                Ok((consumed, msg)) => {
+                    assert!(consumed > 0);
+                    offset += consumed;
+                    idx += 1;
+                    parsed_msgs += 1;
+                    parsed_text.push_str(msg.payload_as_text().as_deref().unwrap());
+                }
+                Err(e) => panic!("unexpected parse error at offset {offset}: {e}"),
+            }
+        }
+
+        assert!(
+            parsed_msgs >= 2,
+            "expected payload to be split into messages"
+        );
+        assert_eq!(parsed_text, text);
     }
 
     // MARK: serial tests
