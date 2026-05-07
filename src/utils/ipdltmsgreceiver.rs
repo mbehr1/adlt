@@ -755,6 +755,7 @@ impl IpDltMsgReceiver {
 
         let recv_buffer = &mut self.recv_buffer.spare_capacity_mut();
 
+        let recv_capacity = recv_buffer.len();
         let (size, src_addr) = match &mut self.recv_method {
             RecvMethod::Serial(ref serial_port) => {
                 // debug!(self.log, "recv_msg: receiving message via serial");
@@ -971,6 +972,8 @@ impl IpDltMsgReceiver {
             self.recv_buffer_list.push((src_addr.clone(), data));
             &mut self.recv_buffer_list.last_mut().unwrap().1
         };
+        let had_buffered_before = !src_addr_buffer.is_empty();
+        let read_filled_capacity = size >= recv_capacity;
 
         // Safety: `recv_from` guarantees that `size` bytes are initialized in the buffer.
         // We are upholding the safety contract to only view these initialized bytes as `&[u8]`.
@@ -999,6 +1002,16 @@ impl IpDltMsgReceiver {
         let mut did_consume = 0;
         loop {
             let rem_data = &data[did_consume..];
+            if did_consume > 0 // if we filled the full buffer we do need to proceed i.e. trunk in the middle of the text anyhow
+                && matches!(self.expected_header, ExpectedHeader::None)
+                && !had_buffered_before
+                && read_filled_capacity
+                && !rem_data.iter().any(|&b| b == b'\r' || b == b'\n')
+            {
+                // A full serial read without separators can end in the middle of a text chunk.
+                // Keep the tail buffered so the next read can complete it.
+                break;
+            }
             match match self.expected_header {
                 ExpectedHeader::Std => {
                     parse_dlt_with_std_header(rem_data, self.index, self.storage_header_ecu)
@@ -1851,6 +1864,206 @@ mod tests {
             msg2.payload_as_text().as_deref(),
             Ok("second chunk with line separator")
         );
+    }
+
+    #[cfg(not(windows))] // the pipe is blocking (not supporting the timeout) on windows
+    #[test]
+    fn serial_recv_non_dlt_chunk_and_timeout_three_messages() {
+        const CHUNK_SIZE: usize = 0x10000;
+        const FIRST_TOTAL_LEN: usize = CHUNK_SIZE - 40; // includes trailing '\n'
+
+        let logger = new_logger();
+        // create a pipe and use the read end as serial port for the receiver
+        let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+        let read_end = std::mem::ManuallyDrop::new(read_end);
+        let read_fd = read_end.as_raw_fd();
+
+        let mut serial_port = unsafe { serial2::SerialPort::from_raw_fd(read_fd) };
+        serial_port
+            .set_read_timeout(std::time::Duration::from_millis(500))
+            .expect("set read timeout");
+
+        let receiver = IpDltMsgReceiver {
+            log: logger,
+            recv_mode: RecvMode::Serial(SerialParams {
+                device_name: "test".to_string(),
+                baudrate: 0,
+                expect_serial_header: false,
+            }),
+            recv_method: RecvMethod::Serial(serial_port),
+            expected_header: ExpectedHeader::None,
+            interface: InterfaceIndexOrAddress::Index(0),
+            addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 0),
+            recv_buffer: Vec::with_capacity(CHUNK_SIZE),
+            storage_header_ecu: DltChar4::from_buf(b"EcuS"),
+            buffered_msgs: std::collections::VecDeque::new(),
+            recv_buffer_list: Vec::new(),
+            #[cfg(feature = "pcap")]
+            plp_stats: None,
+            #[cfg(feature = "pcap")]
+            fragment_cache: HashMap::new(),
+            index: 0,
+        };
+
+        let first_payload = "A".repeat(FIRST_TOTAL_LEN - 1);
+        let first_with_newline = format!("{first_payload}\n");
+        assert_eq!(first_with_newline.len(), FIRST_TOTAL_LEN);
+
+        let second_payload = "B".repeat(100);
+        let third_payload = "C".repeat(50);
+        let third_with_newline = format!("{third_payload}\n");
+
+        use std::io::Write;
+        let recv_thread = std::thread::spawn(move || {
+            let mut receiver = receiver;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut msgs = Vec::with_capacity(3);
+            while std::time::Instant::now() < deadline && msgs.len() < 3 {
+                match receiver.recv_msg() {
+                    Ok((msg, _src_addr)) => msgs.push(msg),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(e) => panic!("recv_msg failed: {e}"),
+                }
+            }
+            assert_eq!(msgs.len(), 3, "Expected 3 messages within deadline");
+            (msgs.remove(0), msgs.remove(0), msgs.remove(0))
+        });
+
+        write_end
+            .write_vectored(&[
+                IoSlice::new(first_with_newline.as_bytes()),
+                IoSlice::new(second_payload.as_bytes()),
+            ])
+            .expect("write first two chunks failed");
+
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        write_end
+            .write_all(third_with_newline.as_bytes())
+            .expect("write third chunk to serial pipe");
+
+        let (msg1, msg2, msg3) = recv_thread.join().expect("join recv thread");
+
+        assert_eq!(
+            msg1.payload_as_text().as_deref(),
+            Ok(first_payload.as_str())
+        );
+        assert_eq!(
+            msg2.payload_as_text().as_deref(),
+            Ok(second_payload.as_str())
+        );
+        assert_eq!(
+            msg3.payload_as_text().as_deref(),
+            Ok(third_payload.as_str())
+        );
+    }
+
+    #[cfg(not(windows))] // the pipe is blocking (not supporting the timeout) on windows
+    #[test]
+    fn serial_recv_non_dlt_100kb_no_separators_split_into_two_messages() {
+        const CHUNK_SIZE: usize = 0x10000;
+        const PAYLOAD_LEN: usize = 100 * 1024;
+
+        let logger = new_logger();
+        // create a pipe and use the read end as serial port for the receiver
+        let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+        let read_end = std::mem::ManuallyDrop::new(read_end);
+        let read_fd = read_end.as_raw_fd();
+
+        let mut serial_port = unsafe { serial2::SerialPort::from_raw_fd(read_fd) };
+        serial_port
+            .set_read_timeout(std::time::Duration::from_millis(500))
+            .expect("set read timeout");
+
+        let receiver = IpDltMsgReceiver {
+            log: logger,
+            recv_mode: RecvMode::Serial(SerialParams {
+                device_name: "test".to_string(),
+                baudrate: 0,
+                expect_serial_header: false,
+            }),
+            recv_method: RecvMethod::Serial(serial_port),
+            expected_header: ExpectedHeader::None,
+            interface: InterfaceIndexOrAddress::Index(0),
+            addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 0),
+            recv_buffer: Vec::with_capacity(CHUNK_SIZE),
+            storage_header_ecu: DltChar4::from_buf(b"EcuS"),
+            buffered_msgs: std::collections::VecDeque::new(),
+            recv_buffer_list: Vec::new(),
+            #[cfg(feature = "pcap")]
+            plp_stats: None,
+            #[cfg(feature = "pcap")]
+            fragment_cache: HashMap::new(),
+            index: 0,
+        };
+
+        let payload = "Z".repeat(PAYLOAD_LEN);
+
+        use std::io::Write;
+        let recv_thread = std::thread::spawn(move || {
+            let mut receiver = receiver;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut msgs = Vec::with_capacity(2);
+
+            while std::time::Instant::now() < deadline && msgs.len() < 2 {
+                match receiver.recv_msg() {
+                    Ok((msg, _src_addr)) => msgs.push(msg),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(e) => panic!("recv_msg failed: {e}"),
+                }
+            }
+
+            assert_eq!(
+                msgs.len(),
+                2,
+                "Expected exactly 2 messages for 100KB payload"
+            );
+
+            match receiver.recv_msg() {
+                Ok((msg, _src_addr)) => panic!(
+                    "Unexpected extra message with payload {:?}",
+                    msg.payload_as_text()
+                ),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::InvalidInput
+                            | std::io::ErrorKind::UnexpectedEof
+                    ) => {}
+                Err(e) => panic!("recv_msg failed while checking for extra messages: {e}"),
+            }
+
+            (msgs.remove(0), msgs.remove(0))
+        });
+
+        write_end
+            .write_all(payload.as_bytes())
+            .expect("write 100KB payload to serial pipe");
+        drop(write_end);
+
+        let (msg1, msg2) = recv_thread.join().expect("join recv thread");
+        let reconstructed = format!(
+            "{}{}",
+            msg1.payload_as_text().expect("msg1 payload as text"),
+            msg2.payload_as_text().expect("msg2 payload as text")
+        );
+        assert_eq!(reconstructed.len(), PAYLOAD_LEN);
+        assert_eq!(reconstructed, payload);
     }
 
     /// MARK: UDP tests
