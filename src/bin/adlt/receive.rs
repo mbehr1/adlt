@@ -14,6 +14,7 @@ use std::{
     mem::MaybeUninit,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str::FromStr,
+    time::{Duration, Instant},
 };
 use thread_priority::{set_current_thread_priority, ThreadPriority};
 
@@ -115,6 +116,12 @@ pub fn add_subcommand(app: Command) -> Command {
                     .num_args(1)
                     .help("baudrate to use. E.g. 115200. If provided the hostname/serial arg needs to be a serial device name. Use 0 to open the device as a file without serial settings.")
                     .value_parser(clap::value_parser!(u32)),
+            )
+            .arg(
+                Arg::new("no_dlt_headers")
+                    .long("no_dlt_headers")
+                    .num_args(0)
+                    .help("Record ASCII/UTF8 data as text messages SER/ASC. Usable with serial port recording only. Msgs are split by newlines or by 500ms timeout."),
             )
             .arg(
                 Arg::new("port")
@@ -241,6 +248,7 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         None
     };
     let baudrate = sub_m.get_one::<u32>("baudrate");
+    let no_dlt_headers = sub_m.get_flag("no_dlt_headers");
     let port = sub_m.get_one::<u16>("port").unwrap_or(&3490);
     let udp_multicast = sub_m.get_flag("udp_multicast");
     let output_style: OutputStyle = if sub_m.get_flag("hex") {
@@ -264,10 +272,18 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .get_one::<String>("rewrite_path")
         .map(|s| s.to_owned());
 
+    if no_dlt_headers && baudrate.is_none() {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "--no_dlt_headers can only be used with serial mode (-b/--baudrate)",
+        )));
+    }
+
     let (recv_mode, recv_addr) = if let (Some(baudrate), Some(hostname)) = (baudrate, hostname) {
         let serial_params = SerialParams {
             device_name: hostname.to_owned(),
             baudrate: *baudrate,
+            expect_serial_header: !no_dlt_headers,
         };
         let recv_mode = RecvMode::Serial(serial_params);
         (
@@ -565,6 +581,8 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .unwrap();
 
     let mut nr_msg_received = 0usize;
+    let mut last_screen_flush = Instant::now();
+    let flush_interval = Duration::from_millis(500);
     for (msg, _msg_from) in rx_from_forward_thread {
         // verify the consistency of the message TODO for test purposes only. define via parameter!
         nr_msg_received += 1;
@@ -641,7 +659,12 @@ pub fn receive<W: std::io::Write + Send + 'static>(
 
             msg.to_write(file)?;
         }
-        /* TODO how to flush the writer_screen frequently? */
+
+        // Flush writer_screen at least once per 500ms
+        if last_screen_flush.elapsed() >= flush_interval {
+            writer_screen.flush()?;
+            last_screen_flush = Instant::now();
+        }
     }
 
     writer_screen.flush()?;
@@ -1232,6 +1255,22 @@ mod tests {
             Some(String::from("127.0.0.1"))
         );
         //let r = receive(&logger, sub_m, std::io::stdout());
+    }
+
+    #[test]
+    fn params_no_dlt_headers_requires_serial() {
+        let logger = new_logger();
+        let arg_vec = vec!["t", "receive", "127.0.0.1", "--no_dlt_headers"];
+        let sub_c = add_subcommand(Command::new("t")).get_matches_from(arg_vec);
+        let (_c, sub_m) = sub_c.subcommand().unwrap();
+
+        let result = receive(&logger, sub_m, std::io::sink(), None);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("--no_dlt_headers can only be used with serial mode"),
+            "unexpected error message: {err_msg}"
+        );
     }
 
     #[test]
