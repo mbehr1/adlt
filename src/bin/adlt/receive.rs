@@ -14,6 +14,7 @@ use std::{
     mem::MaybeUninit,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str::FromStr,
+    time::{Duration, Instant},
 };
 use thread_priority::{set_current_thread_priority, ThreadPriority};
 
@@ -580,6 +581,8 @@ pub fn receive<W: std::io::Write + Send + 'static>(
         .unwrap();
 
     let mut nr_msg_received = 0usize;
+    let mut last_screen_flush = Instant::now();
+    let flush_interval = Duration::from_millis(500);
     for (msg, _msg_from) in rx_from_forward_thread {
         // verify the consistency of the message TODO for test purposes only. define via parameter!
         nr_msg_received += 1;
@@ -656,7 +659,12 @@ pub fn receive<W: std::io::Write + Send + 'static>(
 
             msg.to_write(file)?;
         }
-        /* TODO how to flush the writer_screen frequently? */
+
+        // Flush writer_screen at least once per 500ms
+        if last_screen_flush.elapsed() >= flush_interval {
+            writer_screen.flush()?;
+            last_screen_flush = Instant::now();
+        }
     }
 
     writer_screen.flush()?;
