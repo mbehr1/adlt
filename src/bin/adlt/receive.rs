@@ -583,81 +583,96 @@ pub fn receive<W: std::io::Write + Send + 'static>(
     let mut nr_msg_received = 0usize;
     let mut last_screen_flush = Instant::now();
     let flush_interval = Duration::from_millis(500);
-    for (msg, _msg_from) in rx_from_forward_thread {
-        // verify the consistency of the message TODO for test purposes only. define via parameter!
-        nr_msg_received += 1;
-        #[cfg(debug_assertions)]
-        if msg.ecu == adlt {
-            if msg.timestamp_dms != next_adlt_timestamp {
-                info!(
-                    log,
-                    "received ADLT message with unexpected timestamp: {} vs expected {}",
-                    msg.timestamp_dms,
-                    next_adlt_timestamp
-                );
-                break;
-            }
-            next_adlt_timestamp = msg.timestamp_dms + 1;
-        }
-        // process the received message
-        //verbose!(log, "received message: {:?}", msg);
-
-        match output_style {
-            OutputStyle::HeaderOnly => {
-                msg.header_as_text_to_write(&mut writer_screen)?;
-                writer_screen.write_all(b"\n")?;
-                //did_output = true;
-            }
-            OutputStyle::Ascii => {
-                msg.header_as_text_to_write(&mut writer_screen)?;
-                writeln!(writer_screen, " [{}]", msg.payload_as_text()?)?;
-                //did_output = true;
-            }
-            OutputStyle::Hex => {
-                msg.header_as_text_to_write(&mut writer_screen)?;
-                writer_screen.write_all(b" [")?;
-                buf_as_hex_to_io_write(&mut writer_screen, &msg.payload)?;
-                writer_screen.write_all(b"]\n")?;
-                //did_output = true;
-            }
-            _ => {
-                // todo... mixed? (the dlt-convert output is not nicely readable...)
-                // info!(log, "received message: {:?}", msg); // TODO only for debugging
-            }
-        }
-
-        // if output to file:
-        if let Some((bytes_written, file)) = output_file.as_mut() {
-            // shall we split the file?
-            if let Some((limit, next_idx)) = &mut file_size_limit_idx {
-                // TODO change to see if with this msg plus an overhead for the zip file descriptors the limit is reached
-                if bytes_written.load(std::sync::atomic::Ordering::SeqCst) >= *limit {
-                    info!(
-                        log,
-                        "file size limit reached, closing file (idx: {}) and opening a new one",
-                        next_idx
-                    );
-                    *next_idx += 1;
-                    // close the current file and open a new one
-                    if let Err(e) = file.flush() {
-                        error!(log, "Error flushing file: {}", e);
+    loop {
+        // Try to receive a message with a 500ms timeout to allow periodic flushing
+        match rx_from_forward_thread.recv_timeout(flush_interval) {
+            Ok((msg, _msg_from)) => {
+                // verify the consistency of the message TODO for test purposes only. define via parameter!
+                nr_msg_received += 1;
+                debug!(log, "received message #{}", nr_msg_received);
+                #[cfg(debug_assertions)]
+                if msg.ecu == adlt {
+                    if msg.timestamp_dms != next_adlt_timestamp {
+                        info!(
+                            log,
+                            "received ADLT message with unexpected timestamp: {} vs expected {}",
+                            msg.timestamp_dms,
+                            next_adlt_timestamp
+                        );
+                        break;
                     }
+                    next_adlt_timestamp = msg.timestamp_dms + 1;
+                }
+                // process the received message
+                //verbose!(log, "received message: {:?}", msg);
 
-                    match new_file_writer(output_file_name.as_ref().unwrap(), &file_size_limit_idx)
-                    {
-                        Ok((new_bytes_written, new_file)) => {
-                            *file = new_file;
-                            *bytes_written = new_bytes_written;
-                        }
-                        Err(e) => {
-                            error!(log, "Error creating new file: {}", e);
-                            break; // exit on error
-                        }
+                match output_style {
+                    OutputStyle::HeaderOnly => {
+                        msg.header_as_text_to_write(&mut writer_screen)?;
+                        writer_screen.write_all(b"\n")?;
+                        //did_output = true;
+                    }
+                    OutputStyle::Ascii => {
+                        msg.header_as_text_to_write(&mut writer_screen)?;
+                        writeln!(writer_screen, " [{}]", msg.payload_as_text()?)?;
+                        //did_output = true;
+                    }
+                    OutputStyle::Hex => {
+                        msg.header_as_text_to_write(&mut writer_screen)?;
+                        writer_screen.write_all(b" [")?;
+                        buf_as_hex_to_io_write(&mut writer_screen, &msg.payload)?;
+                        writer_screen.write_all(b"]\n")?;
+                        //did_output = true;
+                    }
+                    _ => {
+                        // todo... mixed? (the dlt-convert output is not nicely readable...)
+                        // info!(log, "received message: {:?}", msg); // TODO only for debugging
                     }
                 }
-            }
 
-            msg.to_write(file)?;
+                // if output to file:
+                if let Some((bytes_written, file)) = output_file.as_mut() {
+                    // shall we split the file?
+                    if let Some((limit, next_idx)) = &mut file_size_limit_idx {
+                        // TODO change to see if with this msg plus an overhead for the zip file descriptors the limit is reached
+                        if bytes_written.load(std::sync::atomic::Ordering::SeqCst) >= *limit {
+                            info!(
+                                log,
+                                "file size limit reached, closing file (idx: {}) and opening a new one",
+                                next_idx
+                            );
+                            *next_idx += 1;
+                            // close the current file and open a new one
+                            if let Err(e) = file.flush() {
+                                error!(log, "Error flushing file: {}", e);
+                            }
+
+                            match new_file_writer(
+                                output_file_name.as_ref().unwrap(),
+                                &file_size_limit_idx,
+                            ) {
+                                Ok((new_bytes_written, new_file)) => {
+                                    *file = new_file;
+                                    *bytes_written = new_bytes_written;
+                                }
+                                Err(e) => {
+                                    error!(log, "Error creating new file: {}", e);
+                                    break; // exit on error
+                                }
+                            }
+                        }
+                    }
+
+                    msg.to_write(file)?;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Timeout occurred, no message available - will flush below
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // Channel closed, exit the loop
+                break;
+            }
         }
 
         // Flush writer_screen at least once per 500ms
