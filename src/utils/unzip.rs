@@ -621,7 +621,7 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
 
         let mut file_writer: Option<BufWriter<_>> = None;
         let mut cur_file_name = None;
-        let mut bytes_expected = 0;
+        let mut bytes_expected: i64 = 0;
         for content in archive {
             if shall_cancel.load(Ordering::Relaxed) {
                 return Err(std::io::Error::new(
@@ -645,7 +645,7 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                             // todo skip existing files!
                             std::fs::create_dir_all(target_dir)?;
                             let target_file = std::fs::File::create(target_file)?;
-                            bytes_expected = stat.st_size;
+                            bytes_expected = stat.st_size as i64;
                             file_writer = Some(std::io::BufWriter::new(target_file));
                             cur_file_name = Some(new_name);
                         } else {
