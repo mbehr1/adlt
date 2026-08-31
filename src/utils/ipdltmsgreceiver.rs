@@ -806,6 +806,7 @@ impl IpDltMsgReceiver {
                                             self.storage_header_ecu,
                                         ) {
                                             self.index += 1;
+                                            let to_consume = to_consume.min(buffer.len());
                                             buffer.drain(..to_consume);
                                             return Ok((msg, dummy_addr.as_socket().unwrap()));
                                         }
