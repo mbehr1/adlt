@@ -92,7 +92,7 @@ asomeip = "0.9.3"
 fancy-regex = "0.17.0"
 glob = "0.3.3"
 zip = "7.2"
-compress-tools = { version = "0.15.1", optional = true }
+compress-tools = { version = "0.16.1", optional = true }
 cached = "0.56.0"
 pcap = { version = "2.4.0", optional = true }
 pnet = { version = "0.35.0", optional = true }
