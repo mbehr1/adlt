@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.65.2 - 2026-08-31
+#### Bug Fixes
+- ensure bytes_expected is correctly typed as i64 in extract_to_dir function - (c569c7b) - Matthias Behr
+
+- - -
+
 ## v0.65.1 - 2026-08-31
 #### Bug Fixes
 - streamline archive file listing and extraction with ArchiveIteratorBuilder - (ef5731e) - Matthias Behr
