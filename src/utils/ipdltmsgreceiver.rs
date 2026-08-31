@@ -789,6 +789,33 @@ impl IpDltMsgReceiver {
                             e.kind(),
                             std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                         ) {
+                            // On an idle read timeout, flush any raw-text tail that is still
+                            // buffered (e.g. a full-capacity read without a line separator)
+                            // instead of stranding it until more data arrives.
+                            if matches!(self.expected_header, ExpectedHeader::None) {
+                                let dummy_addr = SockAddr::from(self.addr);
+                                if let Some((_, buffer)) = self
+                                    .recv_buffer_list
+                                    .iter_mut()
+                                    .find(|(addr, _)| addr == &dummy_addr)
+                                {
+                                    if !buffer.is_empty() {
+                                        if let Ok((to_consume, msg)) = parse_dlt_without_header(
+                                            buffer,
+                                            self.index,
+                                            self.storage_header_ecu,
+                                        ) {
+                                            self.index += 1;
+                                            if to_consume >= buffer.len() {
+                                                buffer.clear();
+                                            } else {
+                                                buffer.drain(..to_consume);
+                                            }
+                                            return Ok((msg, dummy_addr.as_socket().unwrap()));
+                                        }
+                                    }
+                                }
+                            }
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::WouldBlock,
                                 "No data available to read from serial",
@@ -2064,6 +2091,95 @@ mod tests {
         );
         assert_eq!(reconstructed.len(), PAYLOAD_LEN);
         assert_eq!(reconstructed, payload);
+    }
+
+    #[cfg(not(windows))] // the pipe is blocking (not supporting the timeout) on windows
+    #[test]
+    fn serial_recv_non_dlt_stranded_tail_flushed_on_timeout() {
+        // A separator-free read that exactly fills the receive buffer only yields
+        // MAX_CHUNK_LEN (CHUNK_SIZE - 32) bytes as a message, leaving a short tail
+        // buffered. If no more data ever arrives, that tail must still be flushed
+        // once the serial read times out, instead of being stranded forever.
+        const CHUNK_SIZE: usize = 0x10000;
+        const TAIL_LEN: usize = 32;
+
+        let logger = new_logger();
+        let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+        let read_end = std::mem::ManuallyDrop::new(read_end);
+        let read_fd = read_end.as_raw_fd();
+
+        let mut serial_port = unsafe { serial2::SerialPort::from_raw_fd(read_fd) };
+        serial_port
+            .set_read_timeout(std::time::Duration::from_millis(500))
+            .expect("set read timeout");
+
+        let receiver = IpDltMsgReceiver {
+            log: logger,
+            recv_mode: RecvMode::Serial(SerialParams {
+                device_name: "test".to_string(),
+                baudrate: 0,
+                expect_serial_header: false,
+            }),
+            recv_method: RecvMethod::Serial(serial_port),
+            expected_header: ExpectedHeader::None,
+            interface: InterfaceIndexOrAddress::Index(0),
+            addr: SocketAddr::new("127.0.0.1".parse().unwrap(), 0),
+            recv_buffer: Vec::with_capacity(CHUNK_SIZE),
+            storage_header_ecu: DltChar4::from_buf(b"EcuS"),
+            buffered_msgs: std::collections::VecDeque::new(),
+            recv_buffer_list: Vec::new(),
+            #[cfg(feature = "pcap")]
+            plp_stats: None,
+            #[cfg(feature = "pcap")]
+            fragment_cache: HashMap::new(),
+            index: 0,
+        };
+
+        let payload = "A".repeat(CHUNK_SIZE);
+
+        use std::io::Write;
+        let recv_thread = std::thread::spawn(move || {
+            let mut receiver = receiver;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut msgs = Vec::with_capacity(2);
+
+            while std::time::Instant::now() < deadline && msgs.len() < 2 {
+                match receiver.recv_msg() {
+                    Ok((msg, _src_addr)) => msgs.push(msg),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(e) => panic!("recv_msg failed: {e}"),
+                }
+            }
+
+            assert_eq!(
+                msgs.len(),
+                2,
+                "Expected the stranded tail to be flushed as a second message"
+            );
+            (msgs.remove(0), msgs.remove(0))
+        });
+
+        write_end
+            .write_all(payload.as_bytes())
+            .expect("write full-capacity payload to serial pipe");
+        // keep write_end open (no EOF) so the receiver must rely on the read timeout
+        // to flush the stranded tail; drop it only after the assertions ran.
+
+        let (msg1, msg2) = recv_thread.join().expect("join recv thread");
+        drop(write_end);
+
+        let msg1_text = msg1.payload_as_text().expect("msg1 payload as text");
+        let msg2_text = msg2.payload_as_text().expect("msg2 payload as text");
+        assert_eq!(msg2_text.len(), TAIL_LEN);
+        assert_eq!(msg1_text.len() + msg2_text.len(), CHUNK_SIZE);
+        assert_eq!(format!("{msg1_text}{msg2_text}"), payload);
     }
 
     /// MARK: UDP tests
