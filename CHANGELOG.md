@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.65.1 - 2026-08-31
+#### Bug Fixes
+- streamline archive file listing and extraction with ArchiveIteratorBuilder - (ef5731e) - Matthias Behr
+- win release build compress-tools upd - (41883a5) - Matthias Behr
+#### Tests
+- add unit test for extracting bz2 files to directory without filter - (b4bfe9b) - Matthias Behr
+
+- - -
+
 ## v0.65.0 - 2026-08-31
 #### Bug Fixes
 - **(receive)** implement periodic flushing of writer_screen every 500ms - (f882c3d) - Matthias Behr
