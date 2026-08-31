@@ -806,11 +806,7 @@ impl IpDltMsgReceiver {
                                             self.storage_header_ecu,
                                         ) {
                                             self.index += 1;
-                                            if to_consume >= buffer.len() {
-                                                buffer.clear();
-                                            } else {
-                                                buffer.drain(..to_consume);
-                                            }
+                                            buffer.drain(..to_consume);
                                             return Ok((msg, dummy_addr.as_socket().unwrap()));
                                         }
                                     }
