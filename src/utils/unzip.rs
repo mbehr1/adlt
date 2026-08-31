@@ -24,9 +24,7 @@ use crate::utils::seekablechain::SeekableChain;
 use super::cloneable_seekable_reader::{CloneableSeekableReader, HasLength};
 
 #[cfg(feature = "libarchive")]
-use compress_tools::{
-    list_archive_files, ArchiveContents, ArchiveIterator, ArchiveIteratorBuilder,
-};
+use compress_tools::{ArchiveContents, ArchiveIterator, ArchiveIteratorBuilder};
 #[cfg(all(feature = "libarchive", target_os = "windows"))]
 const S_IFDIR: u16 = 16384;
 
@@ -257,7 +255,16 @@ pub fn list_archive_contents<RS: Read + Seek + super::cloneable_seekable_reader:
     {
         // println!("list_archive_contents: fallback to libarchive");
         // fallback to libarchive:
-        let contents = list_archive_files(source).map_err(std::io::Error::other)?;
+        let contents = ArchiveIteratorBuilder::new(source)
+            .raw_format(true)
+            .build()
+            .map_err(std::io::Error::other)?
+            .filter_map(|content| match content {
+                ArchiveContents::StartOfEntry(name, _) => Some(Ok(name)),
+                ArchiveContents::Err(error) => Some(Err(std::io::Error::other(error))),
+                _ => None,
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(contents)
     }
     #[cfg(not(feature = "libarchive"))]
@@ -602,11 +609,14 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
         let archive = if let Some(files) = files_filter {
             ArchiveIteratorBuilder::new(source)
                 .filter(move |str, _stat| files.iter().any(|f| f == str))
+                .raw_format(true)
                 .build()
                 .map_err(std::io::Error::other)?
         } else {
-            // todo use uncompress_archive !
-            ArchiveIterator::from_read(source).map_err(std::io::Error::other)?
+            ArchiveIteratorBuilder::new(source)
+                .raw_format(true)
+                .build()
+                .map_err(std::io::Error::other)?
         };
 
         let mut file_writer: Option<BufWriter<_>> = None;
