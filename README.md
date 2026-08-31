@@ -1,12 +1,10 @@
 # adlt README
 
-[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC_BY--NC--SA_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+![License](https://img.shields.io/badge/license-Mozilla%20Public%20License%202.0-blue.svg)
 [![codecov](https://codecov.io/gh/mbehr1/adlt/branch/main/graph/badge.svg?[token=IXSFCJO277)](https://codecov.io/gh/mbehr1/adlt)
 [![Build&Test](https://github.com/mbehr1/adlt/actions/workflows/rust.yml/badge.svg)](https://github.com/mbehr1/adlt/actions?query=workflow%3ARust)
 
 This Rust crate provides a library and tools to help you to handle automotive DLT (diagnostic log and trace, see [GENIVI](https://at.projects.genivi.org/wiki/display/PROJ/Diagnostic+Log+and+Trace) or [AUTOSAR](https://www.autosar.org/fileadmin/user_upload/standards/foundation/1-0/AUTOSAR_PRS_DiagnosticLogAndTraceProtocol.pdf)) files.
-
-**Note:** This is a very early version and it's my first Rust project. There might be lots of bugs or restrictions/partial implementations yet. The interfaces will most likely change frequently!
 
 ## Features
 
@@ -245,7 +243,7 @@ cog check -l
 Any and all test, code or feedback contributions are welcome.
 Open an [issue](https://github.com/mbehr1/adlt/issues) or create a pull request to make this library work better for everybody.
 
-[![Donations](https://www.paypalobjects.com/en_US/DK/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=2ZNMJP5P43QQN&source=url) Donations are welcome! (Contact me for commercial use or different [license](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode)).
+[![Donations](https://www.paypalobjects.com/en_US/DK/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=2ZNMJP5P43QQN&source=url) Donations are welcome!
 
 [GitHub ♥︎ Sponsors are welcome!](https://github.com/sponsors/mbehr1)
 
