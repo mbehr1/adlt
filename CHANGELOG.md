@@ -2,6 +2,28 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.65.0 - 2026-08-31
+#### Bug Fixes
+- **(receive)** implement periodic flushing of writer_screen every 500ms - (f882c3d) - Matthias Behr
+- **(receive)** enhance serial message handling for non-DLT chunks and add tests - (9dfe51b) - Matthias Behr
+- **(serial)** flush stranded no-header buffer tail on read timeout - (1c6a06b) - copilot-swe-agent[bot]
+- clamp to_consume to buffer length before drain to avoid potential panic - (024b123) - copilot-swe-agent[bot]
+- flush console every 500ms even if no msgs arrive - (a89a48a) - Matthias Behr
+- avoid split in between a UTF8 char - (40fb658) - Matthias Behr
+- return error instead of silently saturating len to u16::MAX in parse_dlt_without_header - (0a91075) - copilot-swe-agent[bot]
+- set verb_mstp_mtin to 0x41 for verbose Log/Info messages in serial headerless mode - (64ed14a) - copilot-swe-agent[bot]
+#### Features
+- **(receive)** add --no_dlt_headers option for serial mode - (2df551f) - Matthias Behr
+#### Miscellaneous Chores
+- update license to MPL-2.0 and reflect in README - (ed9c595) - Matthias Behr
+- clippy fixes - (229b81c) - Matthias Behr
+- update ablf to fix clippy warnings - (b11723a) - Matthias Behr
+- suppress clippy warning - (e25febb) - Matthias Behr
+#### Refactoring
+- simplify buffer drain after flush per review feedback - (ec24fd2) - copilot-swe-agent[bot]
+
+- - -
+
 ## v0.64.1 - 2026-02-07
 #### Bug Fixes
 - **(ci)** use macos-15-intel instead of deprecated macos-13 - (3a8a1ee) - Matthias Behr
