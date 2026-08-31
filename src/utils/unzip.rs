@@ -1427,6 +1427,24 @@ mod tests {
 
     #[cfg(feature = "libarchive")]
     #[test]
+    fn unzip_extract_to_dir_bz2_without_filter() {
+        let source = std::fs::File::open("tests/lc_ex005.dlt.bz2").unwrap();
+        let tmp_dir = tempdir().unwrap();
+        let shall_cancel = Arc::new(AtomicBool::new(false));
+
+        let extracted =
+            extract_to_dir(source, tmp_dir.path(), None, &HashMap::new(), &shall_cancel)
+                .expect("extract_to_dir failed");
+
+        assert_eq!(extracted, vec![PathBuf::from("data")]);
+        assert_eq!(
+            std::fs::read(tmp_dir.path().join("data")).unwrap(),
+            std::fs::read("tests/lc_ex005.dlt").unwrap()
+        );
+    }
+
+    #[cfg(feature = "libarchive")]
+    #[test]
     fn unzip_extract_to_reader() {
         let start_time = Instant::now();
         let source = std::fs::File::open("tests/unzip_ex001.7z").unwrap();
