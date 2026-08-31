@@ -656,7 +656,7 @@ pub fn extract_to_dir<RS: Read + Seek + HasLength>(
                 ArchiveContents::DataChunk(data) => {
                     if let Some(writer) = &mut file_writer {
                         writer.write_all(&data)?;
-                        bytes_expected -= data.len() as i64;
+                        bytes_expected -= data.len() as _;
                     } else {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
